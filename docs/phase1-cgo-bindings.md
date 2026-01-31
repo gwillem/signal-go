@@ -260,22 +260,74 @@ func DecryptMessage(
 9. Alice decrypts → "world"
 ```
 
-## Implementation order (TDD — test first)
+## Implementation order (TDD — test first, tiny steps)
+
+Each step is independently testable and committable. Steps marked ✅ are done.
+
+### A. Build system + CGO foundation
 
 | Step | Files | Test proves |
 |---|---|---|
-| 1 | `Makefile` | `libsignal_ffi.a` + `.h` exist (done) |
-| 2 | `libsignal.go`, `error.go`, `buffer.go` | CGO links, trivial FFI call works |
-| 3 | `privatekey.go` | Generate key, serialize round-trip |
-| 4 | `publickey.go` | Derive from private, serialize round-trip |
-| 5 | `identitykey.go` | Generate identity key pair |
-| 6 | `address.go` | Create address, get name/device |
-| 7 | `prekey.go` | Generate pre-key and signed pre-key |
-| 8 | `kyberprekey.go` | Generate Kyber pre-key |
-| 9 | `prekeybundle.go` | Create bundle from all components (incl Kyber) |
-| 10 | `session.go`, `message.go` | Serialize/deserialize |
-| 11 | `store.go`, `memstore.go` | Store callbacks work across FFI (all 5 stores) |
-| 12 | `protocol.go` | **Full encrypt/decrypt round-trip** |
+| A1 ✅ | `Makefile` | `libsignal_ffi.a` + `.h` build from source |
+| A2 ✅ | `libsignal.go`, `error.go` | CGO links, error wrapping works |
+| A3 ✅ | `privatekey.go` | Generate key, serialize, deserialize round-trip |
+
+### B. Key types
+
+| Step | Files | Test proves |
+|---|---|---|
+| B1 | `publickey.go` | Derive public from private key |
+| B2 | `publickey.go` | Public key serialize/deserialize round-trip |
+| B3 | `publickey.go` | Two different private keys produce different public keys |
+| B4 | `identitykey.go` | Serialize identity key pair (pub+priv), deserialize back |
+| B5 | `privatekey.go` | `PrivateKey.Sign(msg)` returns 64 bytes |
+| B6 | `publickey.go` | `PublicKey.Verify(msg, sig)` returns true for matching signature |
+| B7 | `privatekey.go` | `PrivateKey.Agree(publicKey)` produces 32-byte shared secret |
+
+### C. Protocol address + record types
+
+| Step | Files | Test proves |
+|---|---|---|
+| C1 | `address.go` | `NewAddress("+31612345678", 1)` → get name, get device ID |
+| C2 | `prekey.go` | Create `PreKeyRecord(id, pub, priv)`, serialize/deserialize |
+| C3 | `prekey.go` | Create `SignedPreKeyRecord(id, ts, pub, priv, sig)`, serialize/deserialize |
+| C4 | `kyberprekey.go` | Generate Kyber key pair via `signal_kyber_pre_key_record_new` |
+| C5 | `kyberprekey.go` | Kyber pre-key serialize/deserialize round-trip |
+| C6 | `prekeybundle.go` | Build `PreKeyBundle` from all components (EC + Kyber) |
+| C7 | `session.go` | `SessionRecord` serialize/deserialize (empty session) |
+| C8 | `message.go` | `CiphertextMessage` type query + serialize (used later) |
+
+### D. Store interfaces + in-memory implementation
+
+| Step | Files | Test proves |
+|---|---|---|
+| D1 | `store.go` | Define `SessionStore` interface + CGO callback wiring |
+| D2 | `memstore.go` | In-memory `SessionStore`: store and load a session record |
+| D3 | `store.go` | Define `IdentityKeyStore` interface + CGO callback wiring |
+| D4 | `memstore.go` | In-memory `IdentityKeyStore`: save/get identity, trust check |
+| D5 | `store.go` | Define `PreKeyStore` interface + CGO callback wiring |
+| D6 | `memstore.go` | In-memory `PreKeyStore`: store, load, remove pre-key |
+| D7 | `store.go` | Define `SignedPreKeyStore` interface + CGO callback wiring |
+| D8 | `memstore.go` | In-memory `SignedPreKeyStore`: store, load signed pre-key |
+| D9 | `store.go` | Define `KyberPreKeyStore` interface + CGO callback wiring |
+| D10 | `memstore.go` | In-memory `KyberPreKeyStore`: store, load, mark-used Kyber pre-key |
+
+### E. Session establishment
+
+| Step | Files | Test proves |
+|---|---|---|
+| E1 | `protocol.go` | `ProcessPreKeyBundle` runs without error (Alice processes Bob's bundle) |
+| E2 | `protocol.go` | After processing bundle, session store contains a session for Bob |
+
+### F. Encrypt / decrypt
+
+| Step | Files | Test proves |
+|---|---|---|
+| F1 | `protocol.go` | `Encrypt("hello")` returns a `PreKeySignalMessage` (first message) |
+| F2 | `protocol.go` | `DecryptPreKeyMessage` recovers plaintext "hello" (all 5 stores) |
+| F3 | `protocol.go` | Bob replies: `Encrypt("world")` → `SignalMessage` (ratchet advanced) |
+| F4 | `protocol.go` | Alice `DecryptMessage("world")` succeeds |
+| F5 | `protocol.go` | **Full round-trip test:** Alice↔Bob multi-message exchange |
 
 ## Reference
 

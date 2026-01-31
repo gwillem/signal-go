@@ -4,6 +4,8 @@ Goal: link as secondary device, send text messages, receive text messages. Pure 
 
 **Primary reference:** `../Signal-Android/lib/libsignal-service/` (official, canonical).
 
+Note: Signal no longer publishes `libsignal-service-java` as a standalone library. It's embedded in Signal-Android, coupled to Android/GCM. Third-party clients like signal-cli depend on the Turasa fork which strips GCM and adds provisioning support. We avoid both problems by reimplementing the minimal protocol subset in pure Go, referencing Signal-Android's source directly.
+
 ## Protobuf definitions
 
 Source: `../Signal-Android/lib/libsignal-service/src/main/protowire/`
@@ -208,21 +210,94 @@ func main() {
 }
 ```
 
-## Implementation order (TDD)
+## Implementation order (TDD — tiny steps)
 
-| Step | What | Test |
+Each step is independently testable and committable.
+
+### G. Protobuf + wire format
+
+| Step | Files | Test proves |
 |---|---|---|
-| 1 | Protobuf setup | Parse known envelope bytes |
-| 2 | WebSocket framing | Encode/decode WebSocket protobuf messages |
-| 3 | Provisioning URI | Format matches `sgnl://linkdevice?...` |
-| 4 | Provisioning decrypt | Decrypt known test vector |
-| 5 | HTTP client | Mock server, verify auth headers and paths |
-| 6 | Full provisioning flow | Mock WebSocket, complete link |
-| 7 | Message sending | Encrypt + send via mock server |
-| 8 | Envelope decryption | Decrypt known ciphertext with test session |
-| 9 | Message receive loop | Mock WebSocket, receive and ACK |
-| 10 | SQLite stores | CRUD on all tables |
-| 11 | Integration test | Link real device, send + receive real message |
+| G1 | `pkg/proto/` | Copy proto files, `buf generate` compiles without error |
+| G2 | `pkg/proto/` | Construct a `DataMessage{body: "hi", timestamp: 123}`, marshal/unmarshal round-trip |
+| G3 | `pkg/proto/` | Construct `WebSocketMessage` wrapping a `WebSocketRequestMessage`, round-trip |
+| G4 | `pkg/proto/` | Construct `ProvisionEnvelope`, round-trip |
+
+### H. WebSocket framing
+
+| Step | Files | Test proves |
+|---|---|---|
+| H1 | `websocket.go` | Connect to local test server, send/receive raw bytes |
+| H2 | `websocket.go` | Send `WebSocketMessage` protobuf, receive decoded response |
+| H3 | `websocket.go` | Keep-alive ping/pong every 30s (mock server tracks timing) |
+| H4 | `websocket.go` | Reconnect on disconnect |
+
+### I. Provisioning (device linking)
+
+| Step | Files | Test proves |
+|---|---|---|
+| I1 | `provisioning.go` | Generate temp EC key pair + random password |
+| I2 | `provisioning.go` | Format `sgnl://linkdevice?uuid={uuid}&pub_key={b64}` URI correctly |
+| I3 | `provisioning.go` | ECDH shared secret: `PrivateKey.Agree(publicKey)` matches known test vector |
+| I4 | `provisioning.go` | HKDF derive AES+MAC keys from shared secret (pure Go, known test vector) |
+| I5 | `provisioning.go` | Verify HMAC-SHA256 of provisioning envelope |
+| I6 | `provisioning.go` | AES-256-CBC decrypt + PKCS7 unpad (known test vector) |
+| I7 | `provisioning.go` | Full provisioning decrypt: envelope → `ProvisionMessage` protobuf |
+| I8 | `provisioning.go` | Extract ACI/PNI identity keys, phone number, provisioning code from message |
+| I9 | `provisioning.go` | Encrypt device name (AES-256-GCM with HKDF from ACI private key) |
+| I10 | `provisioning.go` | Full provisioning flow against mock WebSocket (steps 1-8 end-to-end) |
+
+### J. HTTP client
+
+| Step | Files | Test proves |
+|---|---|---|
+| J1 | `client.go` | HTTP Basic auth header: `{aci}.{deviceId}:{password}` |
+| J2 | `client.go` | `PUT /v1/devices/{code}` → mock returns `{deviceId}` |
+| J3 | `client.go` | `PUT /v2/keys?identity=aci` → upload pre-keys (mock verifies JSON body) |
+| J4 | `client.go` | `GET /v2/keys/{dest}/{devId}` → parse pre-key bundle response |
+| J5 | `client.go` | `PUT /v1/messages/{dest}` → send encrypted message (mock verifies body) |
+
+### K. Message sending
+
+| Step | Files | Test proves |
+|---|---|---|
+| K1 | `sender.go` | Build `Content{dataMessage{body, timestamp}}` protobuf, serialize |
+| K2 | `sender.go` | Fetch pre-key bundle from mock server, parse into `PreKeyBundle` |
+| K3 | `sender.go` | Establish session from fetched bundle (uses Phase 1 `ProcessPreKeyBundle`) |
+| K4 | `sender.go` | Encrypt content via session cipher → `OutgoingPushMessage` |
+| K5 | `sender.go` | Full send: build, encrypt, PUT to mock server |
+
+### L. Message receiving
+
+| Step | Files | Test proves |
+|---|---|---|
+| L1 | `receiver.go` | Parse `Envelope` from raw bytes |
+| L2 | `receiver.go` | Decrypt `PREKEY_BUNDLE` envelope → `Content` (uses Phase 1 `DecryptPreKeyMessage`) |
+| L3 | `receiver.go` | Decrypt `CIPHERTEXT` envelope → `Content` (uses Phase 1 `DecryptMessage`) |
+| L4 | `receiver.go` | ACK: send `WebSocketResponseMessage{status: 200, id: request.id}` |
+| L5 | `receiver.go` | Full receive loop: mock WebSocket sends envelopes, receiver decrypts and ACKs |
+
+### M. Persistent storage
+
+| Step | Files | Test proves |
+|---|---|---|
+| M1 | `pkg/store/sqlite/` | Create database, run migrations, tables exist |
+| M2 | `pkg/store/sqlite/` | `SessionStore` CRUD: store, load, overwrite |
+| M3 | `pkg/store/sqlite/` | `IdentityKeyStore` CRUD: save, get, trust check |
+| M4 | `pkg/store/sqlite/` | `PreKeyStore` CRUD: store, load, remove |
+| M5 | `pkg/store/sqlite/` | `SignedPreKeyStore` CRUD: store, load |
+| M6 | `pkg/store/sqlite/` | `KyberPreKeyStore` CRUD: store, load, mark-used |
+| M7 | `pkg/store/sqlite/` | `Account` table: save and load credentials |
+| M8 | `pkg/store/sqlite/` | All SQLite stores pass same tests as in-memory stores (interface conformance) |
+
+### N. Integration
+
+| Step | Files | Test proves |
+|---|---|---|
+| N1 | `cmd/signal-link/` | CLI scaffolding: parse flags, print usage |
+| N2 | `cmd/signal-link/` | Link to real Signal account (manual test, QR code in terminal) |
+| N3 | `cmd/signal-link/` | Send a real text message |
+| N4 | `cmd/signal-link/` | Receive and print real text messages |
 
 ## Server endpoints
 

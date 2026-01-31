@@ -62,6 +62,12 @@ The C FFI does **not** cover server communication (HTTP, WebSocket, provisioning
 **Primary reference:** Signal-Android's `lib/libsignal-service/` module (official, canonical).
 **Pattern reference:** `sumnerevans/libsignalgo` (archived CGO bindings, proves the approach works). Clean-room implementation — use as pattern reference only, not fork.
 
+### Why Signal-Android as primary reference (not signal-cli)
+
+Signal no longer publishes `libsignal-service-java` as a standalone artifact. It lives inside Signal-Android's `lib/libsignal-service/`, tightly coupled to Android (GCM, etc). signal-cli works around this by depending on the **Turasa fork** (`com.github.turasa:signal-service-java`), which strips GCM, adds device provisioning support, and carries bug fixes for non-Android usage. That fork has been maintained since 2016 but is inherently a third-party derivative.
+
+Since we're writing the service layer in pure Go, we skip both problems: no GCM coupling, no need for a Java fork. We reference Signal-Android's `lib/libsignal-service/` directly as the canonical source of truth for the server protocol.
+
 ### Alternatives considered
 
 | Approach | Verdict |
@@ -70,6 +76,7 @@ The C FFI does **not** cover server communication (HTTP, WebSocket, provisioning
 | CGO to presage (Rust client) | No C FFI exposed |
 | Pure Go (go.mau.fi/libsignal) | Diverges from official crypto |
 | signal-cli subprocess/JSON-RPC | Requires JVM — exactly what we're replacing |
+| Use Turasa fork of libsignal-service-java | Still Java; third-party fork tracking Signal-Android |
 
 ## Package structure
 
