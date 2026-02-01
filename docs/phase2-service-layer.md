@@ -1,5 +1,7 @@
 # Phase 2: Signal Service Layer (Pure Go)
 
+**Status: NOT STARTED** — Phase 1 (CGO bindings) is complete.
+
 Goal: link as secondary device, send text messages, receive text messages. Pure Go implementation of the Signal server protocol, using Phase 1's CGO bindings for crypto.
 
 **Primary reference:** `../Signal-Android/lib/libsignal-service/` (official, canonical).
@@ -212,7 +214,14 @@ func main() {
 
 ## Implementation order (TDD — tiny steps)
 
-Each step is independently testable and committable.
+Each step is independently testable and committable. Phase 1 provides the following APIs used here:
+- `libsignal.GeneratePrivateKey()`, `PrivateKey.PublicKey()`, `PrivateKey.Sign()`, `PrivateKey.Agree()`
+- `libsignal.GenerateIdentityKeyPair()`, `SerializeIdentityKeyPair()`, `DeserializeIdentityKeyPair()`
+- `libsignal.GenerateKyberKeyPair()`
+- `libsignal.NewPreKeyRecord()`, `NewSignedPreKeyRecord()`, `NewKyberPreKeyRecord()`
+- `libsignal.NewPreKeyBundle()`, `ProcessPreKeyBundle()`
+- `libsignal.Encrypt()`, `DecryptPreKeyMessage()`, `DecryptMessage()`
+- Store interfaces: `SessionStore`, `IdentityKeyStore`, `PreKeyStore`, `SignedPreKeyStore`, `KyberPreKeyStore`
 
 ### G. Protobuf + wire format
 

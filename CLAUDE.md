@@ -1,6 +1,10 @@
 # signal-go
 
-Go library for Signal messenger, replacing the Java signal-cli dependency.
+Go library for Signal messenger, replacing the Java signal-cli dependency. Licensed under AGPL-3.0.
+
+## Housekeeping
+
+- Keep `docs/*.md` up to date when completing tasks, learning something new, or making architectural decisions. Update phase status markers, implementation notes, and reference information.
 
 ## Architecture
 

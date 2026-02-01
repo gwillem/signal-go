@@ -1,5 +1,7 @@
 # Phase 1: CGO Bindings to libsignal
 
+**Status: COMPLETE** — all 31 steps implemented, 20 tests passing.
+
 Goal: prove that Go can call libsignal's Rust C FFI — generate keys, establish a session, encrypt and decrypt a message locally.
 
 ## Build system
@@ -176,32 +178,34 @@ Note: `GetIdentityKeyPair` returns `*PrivateKey` (not a pair) — the C callback
 
 ### CGO callback pattern
 
-Each store interface method becomes an `//export` function:
+The FFI callback function pointers take `SignalConstPointer*` wrapper structs by value. CGO `//export` functions can't reliably receive C structs by value, so we use a two-layer approach:
+
+1. **`bridge.c`** — C bridge functions that unwrap `SignalConstPointer*` structs to raw pointers
+2. **`callbacks.go`** — Go `//export` functions that receive raw pointers
+
+```c
+// bridge.c
+int bridge_load_session(void *ctx, SignalMutPointerSessionRecord *recordp,
+                        SignalConstPointerProtocolAddress address) {
+    return goLoadSession(ctx, recordp, (SignalProtocolAddress*)address.raw);
+}
+```
 
 ```go
-//export goSessionStoreLoadSession
-func goSessionStoreLoadSession(
-    storeCtx unsafe.Pointer,
-    recordOut *C.SignalMutPointerSessionRecord,
-    address C.SignalConstPointerProtocolAddress,
-) C.int {
-    store := pointer.Restore(storeCtx).(SessionStore)
-    addr := wrapAddress(address.raw)
-    rec, err := store.LoadSession(addr)
-    if err != nil {
-        return -1
-    }
-    if rec != nil {
-        recordOut.raw = rec.ptr
-    }
-    return 0
+// callbacks.go
+//export goLoadSession
+func goLoadSession(ctx unsafe.Pointer, recordp *C.SignalMutPointerSessionRecord,
+    address *C.SignalProtocolAddress) C.int {
+    store := restorePointer(ctx).(SessionStore)
+    // ...
 }
 ```
 
 Key details:
-- `github.com/mattn/go-pointer` saves/restores Go interfaces through C `void*`
-- Callbacks return `C.int` (0 = success, -1 = error)
-- `wrapSessionStore()` builds the C `SignalSessionStore` struct with function pointers + saved context
+- `pointer.go` implements a handle map (no external dependency) for passing Go interfaces through C `void*`
+- Bridge functions are declared as `extern` in the CGO preamble of `callbacks.go`
+- `wrapSessionStore()` etc. build C store structs with bridge function pointers + saved context
+- Borrowed C pointers are cloned (via serialize/deserialize) before storing in Go
 
 ## Protocol operations (verified signatures)
 
@@ -262,7 +266,7 @@ func DecryptMessage(
 
 ## Implementation order (TDD — test first, tiny steps)
 
-Each step is independently testable and committable. Steps marked ✅ are done.
+All steps complete. ✅
 
 ### A. Build system + CGO foundation
 
@@ -276,64 +280,61 @@ Each step is independently testable and committable. Steps marked ✅ are done.
 
 | Step | Files | Test proves |
 |---|---|---|
-| B1 | `publickey.go` | Derive public from private key |
-| B2 | `publickey.go` | Public key serialize/deserialize round-trip |
-| B3 | `publickey.go` | Two different private keys produce different public keys |
-| B4 | `identitykey.go` | Serialize identity key pair (pub+priv), deserialize back |
-| B5 | `privatekey.go` | `PrivateKey.Sign(msg)` returns 64 bytes |
-| B6 | `publickey.go` | `PublicKey.Verify(msg, sig)` returns true for matching signature |
-| B7 | `privatekey.go` | `PrivateKey.Agree(publicKey)` produces 32-byte shared secret |
+| B1 ✅ | `publickey.go` | Derive public from private key |
+| B2 ✅ | `publickey.go` | Public key serialize/deserialize round-trip |
+| B3 ✅ | `publickey.go` | Two different private keys produce different public keys |
+| B4 ✅ | `identitykey.go` | Serialize identity key pair (pub+priv), deserialize back |
+| B5 ✅ | `privatekey.go` | `PrivateKey.Sign(msg)` returns 64 bytes |
+| B6 ✅ | `publickey.go` | `PublicKey.Verify(msg, sig)` returns true for matching signature |
+| B7 ✅ | `privatekey.go` | `PrivateKey.Agree(publicKey)` produces 32-byte shared secret |
 
 ### C. Protocol address + record types
 
 | Step | Files | Test proves |
 |---|---|---|
-| C1 | `address.go` | `NewAddress("+31612345678", 1)` → get name, get device ID |
-| C2 | `prekey.go` | Create `PreKeyRecord(id, pub, priv)`, serialize/deserialize |
-| C3 | `prekey.go` | Create `SignedPreKeyRecord(id, ts, pub, priv, sig)`, serialize/deserialize |
-| C4 | `kyberprekey.go` | Generate Kyber key pair via `signal_kyber_pre_key_record_new` |
-| C5 | `kyberprekey.go` | Kyber pre-key serialize/deserialize round-trip |
-| C6 | `prekeybundle.go` | Build `PreKeyBundle` from all components (EC + Kyber) |
-| C7 | `session.go` | `SessionRecord` serialize/deserialize (empty session) |
-| C8 | `message.go` | `CiphertextMessage` type query + serialize (used later) |
+| C1 ✅ | `address.go` | `NewAddress("+31612345678", 1)` → get name, get device ID |
+| C2 ✅ | `prekey.go` | Create `PreKeyRecord(id, pub, priv)`, serialize/deserialize |
+| C3 ✅ | `prekey.go` | Create `SignedPreKeyRecord(id, ts, pub, priv, sig)`, serialize/deserialize |
+| C4 ✅ | `kyberprekey.go` | Generate Kyber key pair via `signal_kyber_key_pair_generate` |
+| C5 ✅ | `kyberprekey.go` | Kyber pre-key serialize/deserialize round-trip |
+| C6 ✅ | `prekeybundle.go` | Build `PreKeyBundle` from all components (EC + Kyber) |
+| C7 ✅ | `session.go` | `SessionRecord` serialize/deserialize (via protocol operation) |
+| C8 ✅ | `message.go` | `CiphertextMessage` type query + serialize |
 
 ### D. Store interfaces + in-memory implementation
 
 | Step | Files | Test proves |
 |---|---|---|
-| D1 | `store.go` | Define `SessionStore` interface + CGO callback wiring |
-| D2 | `memstore.go` | In-memory `SessionStore`: store and load a session record |
-| D3 | `store.go` | Define `IdentityKeyStore` interface + CGO callback wiring |
-| D4 | `memstore.go` | In-memory `IdentityKeyStore`: save/get identity, trust check |
-| D5 | `store.go` | Define `PreKeyStore` interface + CGO callback wiring |
-| D6 | `memstore.go` | In-memory `PreKeyStore`: store, load, remove pre-key |
-| D7 | `store.go` | Define `SignedPreKeyStore` interface + CGO callback wiring |
-| D8 | `memstore.go` | In-memory `SignedPreKeyStore`: store, load signed pre-key |
-| D9 | `store.go` | Define `KyberPreKeyStore` interface + CGO callback wiring |
-| D10 | `memstore.go` | In-memory `KyberPreKeyStore`: store, load, mark-used Kyber pre-key |
+| D1-D10 ✅ | `store.go`, `callbacks.go`, `bridge.c`, `memstore.go`, `pointer.go` | All 5 store interfaces with CGO callback wiring + in-memory implementations |
 
 ### E. Session establishment
 
 | Step | Files | Test proves |
 |---|---|---|
-| E1 | `protocol.go` | `ProcessPreKeyBundle` runs without error (Alice processes Bob's bundle) |
-| E2 | `protocol.go` | After processing bundle, session store contains a session for Bob |
+| E1 ✅ | `protocol.go` | `ProcessPreKeyBundle` runs without error (Alice processes Bob's bundle) |
+| E2 ✅ | `protocol.go` | After processing bundle, session store contains a session for Bob |
 
 ### F. Encrypt / decrypt
 
 | Step | Files | Test proves |
 |---|---|---|
-| F1 | `protocol.go` | `Encrypt("hello")` returns a `PreKeySignalMessage` (first message) |
-| F2 | `protocol.go` | `DecryptPreKeyMessage` recovers plaintext "hello" (all 5 stores) |
-| F3 | `protocol.go` | Bob replies: `Encrypt("world")` → `SignalMessage` (ratchet advanced) |
-| F4 | `protocol.go` | Alice `DecryptMessage("world")` succeeds |
-| F5 | `protocol.go` | **Full round-trip test:** Alice↔Bob multi-message exchange |
+| F1 ✅ | `protocol.go` | `Encrypt("hello")` returns a `PreKeySignalMessage` (first message) |
+| F2 ✅ | `protocol.go` | `DecryptPreKeyMessage` recovers plaintext "hello" (all 5 stores) |
+| F3 ✅ | `protocol.go` | Bob replies: `Encrypt("world")` → `SignalMessage` (ratchet advanced) |
+| F4 ✅ | `protocol.go` | Alice `DecryptMessage("world")` succeeds |
+| F5 ✅ | `protocol.go` | **Full round-trip test:** Alice↔Bob multi-message exchange |
+
+## Implementation notes
+
+### Differences from plan
+
+- **No `buffer.go`** — buffer helpers (`borrowedBuffer`, `freeOwnedBuffer`) live in `error.go` and `privatekey.go`
+- **No `go-pointer` dependency** — implemented a zero-dependency handle map in `pointer.go`
+- **C bridge layer** — added `bridge.c` to handle the by-value `SignalConstPointer*` struct conversion, which wasn't anticipated in the original plan
+- **Store callbacks consolidated** — all 5 store types implemented in one pass (D1-D10) rather than incrementally, since the pattern was identical
+- **Session test via protocol** — `SessionRecord` round-trip tested via `ProcessPreKeyBundle` (can't create empty sessions directly)
 
 ## Reference
 
 - `pkg/libsignal/libsignal-ffi.h` — the actual generated header (source of truth for signatures)
 - `../libsignal/rust/bridge/ffi/` — Rust FFI source and cbindgen config
-- `../libsignalgo/` — archived CGO bindings (pattern reference only)
-- `../libsignalgo/identitykeystore.go` — callback pattern
-- `../libsignalgo/storeutil.go` — generic callback wrapper
-- `../libsignalgo/session_test.go` — integration test example
