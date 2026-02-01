@@ -16,8 +16,12 @@ func ProcessPreKeyBundle(
 ) error {
 	cBundle := C.SignalConstPointerPreKeyBundle{raw: bundle.ptr}
 	cAddr := C.SignalConstPointerProtocolAddress{raw: address.ptr}
-	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: wrapSessionStore(sessionStore)}
-	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: wrapIdentityKeyStore(identityStore)}
+	cSessionStore, cleanupSession := wrapSessionStore(sessionStore)
+	defer cleanupSession()
+	cIdentityStore, cleanupIdentity := wrapIdentityKeyStore(identityStore)
+	defer cleanupIdentity()
+	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: cSessionStore}
+	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: cIdentityStore}
 	nowMs := C.uint64_t(now.UnixMilli())
 
 	return wrapError(C.signal_process_prekey_bundle(cBundle, cAddr, cSession, cIdentity, nowMs))
@@ -33,8 +37,12 @@ func Encrypt(
 ) (*CiphertextMessage, error) {
 	var out C.SignalMutPointerCiphertextMessage
 	cAddr := C.SignalConstPointerProtocolAddress{raw: address.ptr}
-	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: wrapSessionStore(sessionStore)}
-	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: wrapIdentityKeyStore(identityStore)}
+	cSessionStore, cleanupSession := wrapSessionStore(sessionStore)
+	defer cleanupSession()
+	cIdentityStore, cleanupIdentity := wrapIdentityKeyStore(identityStore)
+	defer cleanupIdentity()
+	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: cSessionStore}
+	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: cIdentityStore}
 	nowMs := C.uint64_t(now.UnixMilli())
 
 	if err := wrapError(C.signal_encrypt_message(&out, borrowedBuffer(plaintext), cAddr, cSession, cIdentity, nowMs)); err != nil {
@@ -56,11 +64,21 @@ func DecryptPreKeyMessage(
 	var buf C.SignalOwnedBuffer
 	cMsg := C.SignalConstPointerPreKeySignalMessage{raw: message.ptr}
 	cAddr := C.SignalConstPointerProtocolAddress{raw: address.ptr}
-	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: wrapSessionStore(sessionStore)}
-	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: wrapIdentityKeyStore(identityStore)}
-	cPreKey := C.SignalConstPointerFfiPreKeyStoreStruct{raw: wrapPreKeyStore(preKeyStore)}
-	cSigned := C.SignalConstPointerFfiSignedPreKeyStoreStruct{raw: wrapSignedPreKeyStore(signedPreKeyStore)}
-	cKyber := C.SignalConstPointerFfiKyberPreKeyStoreStruct{raw: wrapKyberPreKeyStore(kyberPreKeyStore)}
+	cSessionStore, cleanupSession := wrapSessionStore(sessionStore)
+	defer cleanupSession()
+	cIdentityStore, cleanupIdentity := wrapIdentityKeyStore(identityStore)
+	defer cleanupIdentity()
+	cPreKeyStore, cleanupPreKey := wrapPreKeyStore(preKeyStore)
+	defer cleanupPreKey()
+	cSignedStore, cleanupSigned := wrapSignedPreKeyStore(signedPreKeyStore)
+	defer cleanupSigned()
+	cKyberStore, cleanupKyber := wrapKyberPreKeyStore(kyberPreKeyStore)
+	defer cleanupKyber()
+	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: cSessionStore}
+	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: cIdentityStore}
+	cPreKey := C.SignalConstPointerFfiPreKeyStoreStruct{raw: cPreKeyStore}
+	cSigned := C.SignalConstPointerFfiSignedPreKeyStoreStruct{raw: cSignedStore}
+	cKyber := C.SignalConstPointerFfiKyberPreKeyStoreStruct{raw: cKyberStore}
 
 	if err := wrapError(C.signal_decrypt_pre_key_message(&buf, cMsg, cAddr, cSession, cIdentity, cPreKey, cSigned, cKyber)); err != nil {
 		return nil, err
@@ -78,8 +96,12 @@ func DecryptMessage(
 	var buf C.SignalOwnedBuffer
 	cMsg := C.SignalConstPointerSignalMessage{raw: message.ptr}
 	cAddr := C.SignalConstPointerProtocolAddress{raw: address.ptr}
-	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: wrapSessionStore(sessionStore)}
-	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: wrapIdentityKeyStore(identityStore)}
+	cSessionStore, cleanupSession := wrapSessionStore(sessionStore)
+	defer cleanupSession()
+	cIdentityStore, cleanupIdentity := wrapIdentityKeyStore(identityStore)
+	defer cleanupIdentity()
+	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: cSessionStore}
+	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: cIdentityStore}
 
 	if err := wrapError(C.signal_decrypt_message(&buf, cMsg, cAddr, cSession, cIdentity)); err != nil {
 		return nil, err

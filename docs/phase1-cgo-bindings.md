@@ -1,6 +1,6 @@
 # Phase 1: CGO Bindings to libsignal
 
-**Status: COMPLETE** — all 31 steps implemented, 20 tests passing.
+**Status: COMPLETE** — all 31 steps implemented, 28 tests passing.
 
 Goal: prove that Go can call libsignal's Rust C FFI — generate keys, establish a session, encrypt and decrypt a message locally.
 
@@ -205,6 +205,7 @@ Key details:
 - `pointer.go` implements a handle map (no external dependency) for passing Go interfaces through C `void*`
 - Bridge functions are declared as `extern` in the CGO preamble of `callbacks.go`
 - `wrapSessionStore()` etc. build C store structs with bridge function pointers + saved context
+- Each `wrap*Store()` returns a cleanup function that must be deferred — this calls `deletePointer()` to remove the handle from the map after the FFI call completes. Without this, handles leak on every protocol operation.
 - Borrowed C pointers are cloned (via serialize/deserialize) before storing in Go
 
 ## Protocol operations (verified signatures)
@@ -325,6 +326,15 @@ All steps complete. ✅
 | F5 ✅ | `protocol.go` | **Full round-trip test:** Alice↔Bob multi-message exchange |
 
 ## Implementation notes
+
+### Memory management pitfalls
+
+- **Store overwrite leaks:** In-memory stores must `Destroy()` old C-allocated records before overwriting map entries. `MemorySessionStore.StoreSession` and `MemoryIdentityKeyStore.SaveIdentityKey` both hold C pointers that leak if simply overwritten. Any persistent store implementation must follow the same pattern.
+- **Protobuf deserialization accepts empty input:** Protobuf-backed types (`PreKeyRecord`, `SignedPreKeyRecord`, `KyberPreKeyRecord`, `SessionRecord`) successfully deserialize from nil or empty bytes (producing empty but valid protobuf messages). Only non-protobuf types (`PrivateKey`, `PublicKey`, `IdentityKeyPair`, `PreKeySignalMessage`, `SignalMessage`) reject nil/empty input with an error.
+
+### Ratchet state progression
+
+After `ProcessPreKeyBundle`, Alice's first encrypt produces a `PreKeySignalMessage`. Bob decrypts it and gains a session. Bob's reply is a `SignalMessage` (Whisper type). Alice must decrypt Bob's reply before her subsequent messages become `SignalMessage` type — until then, Alice's ratchet hasn't advanced and the message type check in deserialization will differ.
 
 ### Differences from plan
 

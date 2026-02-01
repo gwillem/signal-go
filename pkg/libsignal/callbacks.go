@@ -273,47 +273,52 @@ func goMarkKyberPreKeyUsed(ctx unsafe.Pointer, id C.uint32_t) C.int {
 
 // --- Store wrapper constructors ---
 
-func wrapSessionStore(store SessionStore) *C.SignalSessionStore {
+func wrapSessionStore(store SessionStore) (*C.SignalSessionStore, func()) {
+	ctx := savePointer(store)
 	return &C.SignalSessionStore{
-		ctx:           savePointer(store),
+		ctx:           ctx,
 		load_session:  C.SignalLoadSession(C.bridge_load_session),
 		store_session: C.SignalStoreSession(C.bridge_store_session),
-	}
+	}, func() { deletePointer(ctx) }
 }
 
-func wrapIdentityKeyStore(store IdentityKeyStore) *C.SignalIdentityKeyStore {
+func wrapIdentityKeyStore(store IdentityKeyStore) (*C.SignalIdentityKeyStore, func()) {
+	ctx := savePointer(store)
 	return &C.SignalIdentityKeyStore{
-		ctx:                       savePointer(store),
+		ctx:                       ctx,
 		get_identity_key_pair:     C.SignalGetIdentityKeyPair(C.bridge_get_identity_key_pair),
 		get_local_registration_id: C.SignalGetLocalRegistrationId(C.bridge_get_local_registration_id),
 		save_identity:             C.SignalSaveIdentityKey(C.bridge_save_identity_key),
 		get_identity:              C.SignalGetIdentityKey(C.bridge_get_identity_key),
 		is_trusted_identity:       C.SignalIsTrustedIdentity(C.bridge_is_trusted_identity),
-	}
+	}, func() { deletePointer(ctx) }
 }
 
-func wrapPreKeyStore(store PreKeyStore) *C.SignalPreKeyStore {
+func wrapPreKeyStore(store PreKeyStore) (*C.SignalPreKeyStore, func()) {
+	ctx := savePointer(store)
 	return &C.SignalPreKeyStore{
-		ctx:            savePointer(store),
+		ctx:            ctx,
 		load_pre_key:   C.SignalLoadPreKey(C.bridge_load_pre_key),
 		store_pre_key:  C.SignalStorePreKey(C.bridge_store_pre_key),
 		remove_pre_key: C.SignalRemovePreKey(C.bridge_remove_pre_key),
-	}
+	}, func() { deletePointer(ctx) }
 }
 
-func wrapSignedPreKeyStore(store SignedPreKeyStore) *C.SignalSignedPreKeyStore {
+func wrapSignedPreKeyStore(store SignedPreKeyStore) (*C.SignalSignedPreKeyStore, func()) {
+	ctx := savePointer(store)
 	return &C.SignalSignedPreKeyStore{
-		ctx:                  savePointer(store),
+		ctx:                  ctx,
 		load_signed_pre_key:  C.SignalLoadSignedPreKey(C.bridge_load_signed_pre_key),
 		store_signed_pre_key: C.SignalStoreSignedPreKey(C.bridge_store_signed_pre_key),
-	}
+	}, func() { deletePointer(ctx) }
 }
 
-func wrapKyberPreKeyStore(store KyberPreKeyStore) *C.SignalKyberPreKeyStore {
+func wrapKyberPreKeyStore(store KyberPreKeyStore) (*C.SignalKyberPreKeyStore, func()) {
+	ctx := savePointer(store)
 	return &C.SignalKyberPreKeyStore{
-		ctx:                     savePointer(store),
+		ctx:                     ctx,
 		load_kyber_pre_key:      C.SignalLoadKyberPreKey(C.bridge_load_kyber_pre_key),
 		store_kyber_pre_key:     C.SignalStoreKyberPreKey(C.bridge_store_kyber_pre_key),
 		mark_kyber_pre_key_used: C.SignalMarkKyberPreKeyUsed(C.bridge_mark_kyber_pre_key_used),
-	}
+	}, func() { deletePointer(ctx) }
 }

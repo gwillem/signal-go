@@ -32,7 +32,11 @@ func (s *MemorySessionStore) LoadSession(address *Address) (*SessionRecord, erro
 }
 
 func (s *MemorySessionStore) StoreSession(address *Address, record *SessionRecord) error {
-	s.sessions[addressKey(address)] = record
+	key := addressKey(address)
+	if old := s.sessions[key]; old != nil {
+		old.Destroy()
+	}
+	s.sessions[key] = record
 	return nil
 }
 
@@ -65,7 +69,11 @@ func (s *MemoryIdentityKeyStore) GetLocalRegistrationID() (uint32, error) {
 }
 
 func (s *MemoryIdentityKeyStore) SaveIdentityKey(address *Address, key *PublicKey) error {
-	s.identities[addressKey(address)] = key
+	k := addressKey(address)
+	if old := s.identities[k]; old != nil {
+		old.Destroy()
+	}
+	s.identities[k] = key
 	return nil
 }
 

@@ -146,11 +146,13 @@ The actual store structs from the header (e.g. `SignalSessionStore`) contain a `
 
 ### Memory management across FFI
 
-Every C-allocated object must be explicitly freed. Each Go wrapper has a `Destroy()` method calling `signal_*_destroy()`.
+Every C-allocated object must be explicitly freed. Each Go wrapper has a `Destroy()` method calling `signal_*_destroy()`. Double `Destroy()` is safe (nil-guarded).
 
 The FFI uses wrapper types (`SignalMutPointer*`, `SignalConstPointer*`) around raw pointers — each is a single-field struct containing `raw`.
 
 Borrowed C pointers in callbacks (e.g. session records, public keys passed by libsignal) are cloned via serialize/deserialize before storing in Go memory.
+
+Store wrappers (`wrapSessionStore()` etc.) register Go interfaces in the handle map via `savePointer()` and return a cleanup function. Callers must defer cleanup to avoid leaking handles. In-memory stores must `Destroy()` old records before overwriting map entries.
 
 ### Provisioning envelope crypto
 
