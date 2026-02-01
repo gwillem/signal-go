@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -47,6 +48,9 @@ func extractPubKeyFromURI(uri string) ([]byte, error) {
 }
 
 func TestRunProvisioningEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	// Primary device key pair.
 	primaryPriv, err := libsignal.GeneratePrivateKey()
 	if err != nil {
@@ -89,13 +93,17 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 
 	// Start reading link URI in a goroutine to extract the public key.
 	go func() {
-		uri := <-cb.ch
-		pubKey, err := extractPubKeyFromURI(uri)
-		if err != nil {
-			t.Errorf("extract pubkey: %v", err)
+		select {
+		case uri := <-cb.ch:
+			pubKey, err := extractPubKeyFromURI(uri)
+			if err != nil {
+				t.Errorf("extract pubkey: %v", err)
+				return
+			}
+			pubKeyCh <- pubKey
+		case <-ctx.Done():
 			return
 		}
-		pubKeyCh <- pubKey
 	}()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +113,6 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 			return
 		}
 		defer ws.CloseNow()
-		ctx := r.Context()
 
 		// Step 1: Send ProvisioningAddress.
 		addr := &proto.ProvisioningAddress{Address: &testUUID}
@@ -118,7 +125,13 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 		readWSResponse(t, ws, ctx, 1)
 
 		// Wait for secondary's public key (extracted from link URI callback after QR display).
-		secondaryPubKeyBytes := <-pubKeyCh
+		var secondaryPubKeyBytes []byte
+		select {
+		case secondaryPubKeyBytes = <-pubKeyCh:
+		case <-ctx.Done():
+			t.Errorf("timed out waiting for secondary public key")
+			return
+		}
 
 		secondaryPub, err := libsignal.DeserializePublicKey(secondaryPubKeyBytes)
 		if err != nil {
@@ -180,7 +193,6 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ctx := context.Background()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
 	result, err := RunProvisioning(ctx, wsURL, cb, nil)
