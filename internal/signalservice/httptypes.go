@@ -58,3 +58,41 @@ type PreKeyUpload struct {
 	SignedPreKey    *SignedPreKeyEntity `json:"signedPreKey,omitempty"`
 	PqLastResortKey *KyberPreKeyEntity `json:"pqLastResortPreKey,omitempty"`
 }
+
+// PreKeyResponse is the JSON response from GET /v2/keys/{destination}/{deviceId}.
+type PreKeyResponse struct {
+	IdentityKey string             `json:"identityKey"`
+	Devices     []PreKeyDeviceInfo `json:"devices"`
+}
+
+// PreKeyDeviceInfo contains pre-key material for a single device.
+type PreKeyDeviceInfo struct {
+	DeviceID       int                `json:"deviceId"`
+	RegistrationID int                `json:"registrationId"`
+	SignedPreKey   *SignedPreKeyEntity `json:"signedPreKey"`
+	PreKey         *PreKeyEntity       `json:"preKey,omitempty"`
+	PqPreKey       *KyberPreKeyEntity  `json:"pqPreKey,omitempty"`
+}
+
+// PreKeyEntity is the JSON representation of a one-time pre-key.
+type PreKeyEntity struct {
+	KeyID     int    `json:"keyId"`
+	PublicKey string `json:"publicKey"`
+}
+
+// OutgoingMessageList is the JSON body for PUT /v1/messages/{destination}.
+type OutgoingMessageList struct {
+	Destination string            `json:"destination"`
+	Timestamp   uint64            `json:"timestamp"`
+	Messages    []OutgoingMessage `json:"messages"`
+	Online      bool              `json:"online"`
+	Urgent      bool              `json:"urgent"`
+}
+
+// OutgoingMessage is a single message in an OutgoingMessageList.
+type OutgoingMessage struct {
+	Type                      int    `json:"type"`
+	DestinationDeviceID       int    `json:"destinationDeviceId"`
+	DestinationRegistrationID int    `json:"destinationRegistrationId"`
+	Content                   string `json:"content"` // base64
+}

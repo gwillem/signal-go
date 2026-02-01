@@ -1,6 +1,6 @@
 # Phase 2: Signal Service Layer (Pure Go)
 
-**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). Message send/receive not yet started.
+**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). SQLite persistent storage and message sending complete. Message receiving not yet started.
 
 Goal: link as secondary device, send text messages, receive text messages. Pure Go implementation of the Signal server protocol, using Phase 1's CGO bindings for crypto.
 
@@ -16,7 +16,7 @@ Source: `../Signal-Android/lib/libsignal-service/src/main/protowire/`
 | -------------------------- | ------------------------------------------------------------------------- | ------- |
 | `Provisioning.proto`       | `ProvisionEnvelope`, `ProvisionMessage`, `ProvisioningAddress`            | Done    |
 | `WebSocketResources.proto` | `WebSocketMessage`, `WebSocketRequestMessage`, `WebSocketResponseMessage` | Done    |
-| `SignalService.proto`      | `Envelope`, `Content`, `DataMessage`, `SyncMessage`, `ReceiptMessage`     | Not yet |
+| `SignalService.proto`      | `Envelope`, `Content`, `DataMessage`, `SyncMessage`, `ReceiptMessage`     | Done    |
 
 Generated into `internal/proto/` using `protoc --go_out` with `paths=source_relative`. Run `make proto` to regenerate.
 
@@ -135,8 +135,9 @@ Key insight: the link URI uses URL-safe base64 (`base64.URLEncoding`) for the pu
 | ---------------------- | ------------------------------------------------------------------------- |
 | `internal/provisioncrypto/` | PKCS7, HKDF, HMAC, AES-CBC, envelope decrypt, ProvisionData parsing, device name encryption |
 | `internal/signalws/`        | Protobuf-framed WebSocket (Dial, ReadMessage, WriteMessage, SendResponse) |
-| `client.go`          | Public API: Client with Link, Send, Receive, DeviceID                    |
-| `internal/signalservice/`   | Orchestration: RunProvisioning, RegisterLinkedDevice, HTTPClient, GeneratePreKeySet |
+| `client.go`                 | Public API: Client with Link, Load, Send, Close, Number, DeviceID               |
+| `internal/signalservice/`   | Orchestration: RunProvisioning, RegisterLinkedDevice, SendTextMessage, HTTPClient |
+| `internal/store/`           | SQLite persistent storage: all 5 store interfaces + Account CRUD                 |
 
 Reference files in Signal-Android:
 
@@ -198,20 +199,22 @@ Step 7:  Emit to consumer via channel or callback
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageReceiver.java`
 
-## Persistent storage (`internal/store/sqlite/`)
+## Persistent storage (`internal/store/`)
 
-SQLite via `modernc.org/sqlite` (pure Go). Tables:
+**Status: COMPLETE.** SQLite via `modernc.org/sqlite` (pure Go, no CGO). One DB file per account, path provided by caller or defaulting to `$XDG_DATA_HOME/signal-go/<aci>.db`.
 
-| Table            | Columns                                                                                                      | Purpose                       |
-| ---------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| `account`        | number, aci, pni, device_id, password, identity_key_pair_aci, identity_key_pair_pni, profile_key, master_key | Local device credentials      |
-| `session`        | service_id, device_id, record (BLOB)                                                                         | Signal Protocol sessions      |
-| `pre_key`        | id, public_key, private_key                                                                                  | One-time pre-keys             |
-| `signed_pre_key` | id, public_key, private_key, signature, timestamp                                                            | Signed pre-keys               |
-| `kyber_pre_key`  | id, key_pair (BLOB), signature, timestamp                                                                    | Post-quantum (Kyber) pre-keys |
-| `identity`       | address, identity_key, trust_level                                                                           | Recipient identity keys       |
+Tables:
 
-All stores implement interfaces from `internal/libsignal/store.go`.
+| Table            | Columns                          | Purpose                       |
+| ---------------- | -------------------------------- | ----------------------------- |
+| `account`        | key (TEXT PK), value (BLOB/JSON) | Local device credentials      |
+| `session`        | address, device_id, record BLOB  | Signal Protocol sessions      |
+| `pre_key`        | id, record BLOB                  | One-time pre-keys             |
+| `signed_pre_key` | id, record BLOB                  | Signed pre-keys               |
+| `kyber_pre_key`  | id, record BLOB, used            | Post-quantum (Kyber) pre-keys |
+| `identity`       | address, public_key BLOB         | Recipient identity keys       |
+
+Records stored as serialized blobs from libsignal's `Serialize()` methods. Account stored as JSON blob. All 5 store interfaces implemented with compile-time conformance checks. Identity trust uses TOFU (trust-on-first-use).
 
 ## Public API (`client.go`)
 
@@ -254,11 +257,11 @@ Each step is independently testable and committable. Phase 1 provides the follow
 | Step  | Files        | Test proves                                                                         |
 | ----- | ------------ | ----------------------------------------------------------------------------------- |
 | G1 ✅ | `internal/proto/` | Copy proto files, `protoc` generates Go code                                        |
-| G2    | `internal/proto/` | Construct a `DataMessage{body: "hi", timestamp: 123}`, marshal/unmarshal round-trip |
+| G2 ✅ | `internal/proto/` | Construct a `DataMessage{body: "hi", timestamp: 123}`, marshal/unmarshal round-trip |
 | G3 ✅ | `internal/proto/` | Construct `WebSocketMessage` wrapping a `WebSocketRequestMessage`, round-trip       |
 | G4 ✅ | `internal/proto/` | Construct `ProvisionEnvelope` + `ProvisionMessage`, round-trip                      |
 
-Note: G2 deferred — `SignalService.proto` not yet copied (needed for message send/receive phase). G1 uses `protoc --go_out` instead of `buf generate`.
+Note: G1 uses `protoc --go_out` instead of `buf generate`.
 
 ### H. WebSocket framing
 
@@ -291,18 +294,18 @@ Note: G2 deferred — `SignalService.proto` not yet copied (needed for message s
 | J1 ✅ | `internal/signalservice/httpclient.go` | HTTP Basic auth header: `{aci}.{deviceId}:{password}`                   |
 | J2 ✅ | `internal/signalservice/httpclient.go` | `PUT /v1/devices/link` → mock returns `{uuid, pni, deviceId}`           |
 | J3 ✅ | `internal/signalservice/httpclient.go` | `PUT /v2/keys?identity=aci` → upload pre-keys (mock verifies JSON body) |
-| J4   | —                                     | `GET /v2/keys/{dest}/{devId}` → parse pre-key bundle response           |
-| J5   | —                                     | `PUT /v1/messages/{dest}` → send encrypted message (mock verifies body) |
+| J4 ✅ | `internal/signalservice/httpclient.go` | `GET /v2/keys/{dest}/{devId}` → parse pre-key bundle response           |
+| J5 ✅ | `internal/signalservice/httpclient.go` | `PUT /v1/messages/{dest}` → send encrypted message (mock verifies body) |
 
 ### K. Message sending
 
 | Step | Files       | Test proves                                                                |
 | ---- | ----------- | -------------------------------------------------------------------------- |
-| K1   | `sender.go` | Build `Content{dataMessage{body, timestamp}}` protobuf, serialize          |
-| K2   | `sender.go` | Fetch pre-key bundle from mock server, parse into `PreKeyBundle`           |
-| K3   | `sender.go` | Establish session from fetched bundle (uses Phase 1 `ProcessPreKeyBundle`) |
-| K4   | `sender.go` | Encrypt content via session cipher → `OutgoingPushMessage`                 |
-| K5   | `sender.go` | Full send: build, encrypt, PUT to mock server                              |
+| K1 ✅ | `internal/signalservice/sender.go` | Build `Content{dataMessage{body, timestamp}}` protobuf, serialize          |
+| K2 ✅ | `internal/signalservice/sender.go` | Fetch pre-key bundle from mock server, parse into `PreKeyBundle`           |
+| K3 ✅ | `internal/signalservice/sender.go` | Establish session from fetched bundle (uses Phase 1 `ProcessPreKeyBundle`) |
+| K4 ✅ | `internal/signalservice/sender.go` | Encrypt content via session cipher → `OutgoingPushMessage`                 |
+| K5 ✅ | `internal/signalservice/sender.go` | Full send: build, encrypt, PUT to mock server                              |
 
 ### L. Message receiving
 
@@ -318,14 +321,14 @@ Note: G2 deferred — `SignalService.proto` not yet copied (needed for message s
 
 | Step | Files               | Test proves                                                                   |
 | ---- | ------------------- | ----------------------------------------------------------------------------- |
-| M1   | `internal/store/sqlite/` | Create database, run migrations, tables exist                                 |
-| M2   | `internal/store/sqlite/` | `SessionStore` CRUD: store, load, overwrite                                   |
-| M3   | `internal/store/sqlite/` | `IdentityKeyStore` CRUD: save, get, trust check                               |
-| M4   | `internal/store/sqlite/` | `PreKeyStore` CRUD: store, load, remove                                       |
-| M5   | `internal/store/sqlite/` | `SignedPreKeyStore` CRUD: store, load                                         |
-| M6   | `internal/store/sqlite/` | `KyberPreKeyStore` CRUD: store, load, mark-used                               |
-| M7   | `internal/store/sqlite/` | `Account` table: save and load credentials                                    |
-| M8   | `internal/store/sqlite/` | All SQLite stores pass same tests as in-memory stores (interface conformance) |
+| M1 ✅ | `internal/store/` | Create database, run migrations, tables exist                                 |
+| M2 ✅ | `internal/store/` | `SessionStore` CRUD: store, load, overwrite                                   |
+| M3 ✅ | `internal/store/` | `IdentityKeyStore` CRUD: save, get, trust check                               |
+| M4 ✅ | `internal/store/` | `PreKeyStore` CRUD: store, load, remove                                       |
+| M5 ✅ | `internal/store/` | `SignedPreKeyStore` CRUD: store, load                                         |
+| M6 ✅ | `internal/store/` | `KyberPreKeyStore` CRUD: store, load, mark-used                               |
+| M7 ✅ | `internal/store/` | `Account` table: save and load credentials                                    |
+| M8 ✅ | `internal/store/` | All SQLite stores pass same tests as in-memory stores (interface conformance) |
 
 ### N. Integration
 

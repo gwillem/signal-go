@@ -42,6 +42,15 @@ type KyberPublicKey struct {
 	ptr *C.SignalKyberPublicKey
 }
 
+// DeserializeKyberPublicKey reconstructs a Kyber public key from serialized form.
+func DeserializeKyberPublicKey(data []byte) (*KyberPublicKey, error) {
+	var out C.SignalMutPointerKyberPublicKey
+	if err := wrapError(C.signal_kyber_public_key_deserialize(&out, borrowedBuffer(data))); err != nil {
+		return nil, err
+	}
+	return &KyberPublicKey{ptr: out.raw}, nil
+}
+
 // Serialize returns the serialized form of the Kyber public key.
 func (k *KyberPublicKey) Serialize() ([]byte, error) {
 	var buf C.SignalOwnedBuffer

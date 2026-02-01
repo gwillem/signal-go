@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -37,7 +38,12 @@ func extractPubKeyFromURI(uri string) ([]byte, error) {
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("pub_key= not found in URI: %s", uri)
 	}
-	return base64.URLEncoding.DecodeString(parts[1])
+	// The pub_key value is URL-escaped standard base64 (no padding).
+	unescaped, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("unescape pub_key: %w", err)
+	}
+	return base64.RawStdEncoding.DecodeString(unescaped)
 }
 
 func TestRunProvisioningEndToEnd(t *testing.T) {

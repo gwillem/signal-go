@@ -14,10 +14,10 @@ $(HEADER): $(LIBSIGNAL_FFI)
 	PATH="$(NIGHTLY_BIN):$(HOME)/.cargo/bin:$$PATH" cbindgen --profile release $(LIBSIGNAL_DIR)/rust/bridge/ffi -o $(HEADER)
 
 proto:
-	protoc --go_out=. --go_opt=paths=source_relative internal/proto/Provisioning.proto internal/proto/WebSocketResources.proto internal/proto/DeviceName.proto
+	protoc --go_out=. --go_opt=paths=source_relative internal/proto/Provisioning.proto internal/proto/WebSocketResources.proto internal/proto/DeviceName.proto internal/proto/SignalService.proto
 
 test: build
-	CGO_LDFLAGS_ALLOW='-Wl,-w' CGO_LDFLAGS='-Wl,-w' go test ./...
+	CGO_LDFLAGS_ALLOW='-Wl,-w' CGO_LDFLAGS='-Wl,-w' go test ./... -timeout 10s
 
 clean:
 	rm -f $(HEADER)

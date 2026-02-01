@@ -174,6 +174,36 @@ Phase 2 adds:
 
 Note: `nhooyr.io/websocket` was the original plan but it is deprecated — the maintainer moved to `github.com/coder/websocket` (same API).
 
+## Design decisions
+
+### Single-account Client, caller-managed concurrency
+
+The `Client` owns exactly one device identity and one WebSocket connection. Multi-account usage (receiving messages for N accounts) is handled by the caller instantiating N `Client`s, not by a library-level multi-account manager.
+
+Rationale:
+- Each Signal account requires its own authenticated WebSocket (`wss://chat.signal.org/v1/websocket/?login={aci}.{deviceId}&password={pass}`). There is no server-side multiplexing — N accounts always means N connections.
+- A library-level pool would need per-account error handling, reconnection backoff, credential storage, lifecycle management, and account add/remove — all things the caller already has opinions about.
+- Go's concurrency primitives (goroutines, channels, contexts) make caller-side pooling trivial.
+
+The library provides a single-account receive primitive (channel or callback based). The caller composes multiple instances as needed:
+
+```go
+for _, acct := range accounts {
+    client := signal.NewClient(signal.WithStore(acct.Store))
+    go func() {
+        for msg := range client.Messages(ctx) {
+            handler(acct, msg)
+        }
+    }()
+}
+```
+
+This follows the same pattern as `database/sql` (one `*DB` per database) and `net/http` (one `Client` per config).
+
+### Send-only usage
+
+A send-only client is viable. Sending requires only an authenticated HTTP `PUT /v1/messages/{destination}` — no WebSocket receive loop needed. Caveats: the server may garbage-collect devices that never connect via WebSocket (~30 days inactivity), and pre-key supply won't be replenished (only matters for others initiating new sessions with you).
+
 ## Key technical challenges
 
 ### CGO store callbacks

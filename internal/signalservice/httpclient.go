@@ -68,6 +68,68 @@ func (c *HTTPClient) RegisterSecondaryDevice(ctx context.Context, req *RegisterR
 	return &result, nil
 }
 
+// GetPreKeys fetches a recipient's pre-key bundle.
+// GET /v2/keys/{destination}/{deviceId}
+func (c *HTTPClient) GetPreKeys(ctx context.Context, destination string, deviceID int, auth BasicAuth) (*PreKeyResponse, error) {
+	url := fmt.Sprintf("%s/v2/keys/%s/%d", c.baseURL, destination, deviceID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: get pre-keys: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get pre-keys: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result PreKeyResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal pre-keys: %w", err)
+	}
+
+	return &result, nil
+}
+
+// SendMessage sends an encrypted message to a destination.
+// PUT /v1/messages/{destination}
+func (c *HTTPClient) SendMessage(ctx context.Context, destination string, msg *OutgoingMessageList, auth BasicAuth) error {
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("httpclient: marshal message: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/messages/"+destination, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("httpclient: send message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("httpclient: send message: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	return nil
+}
+
 // UploadPreKeys calls PUT /v2/keys?identity={aci|pni} to upload pre-keys.
 func (c *HTTPClient) UploadPreKeys(ctx context.Context, identity string, keys *PreKeyUpload, auth BasicAuth) error {
 	body, err := json.Marshal(keys)
