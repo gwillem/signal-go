@@ -3,7 +3,7 @@ package proto
 import (
 	"testing"
 
-	"google.golang.org/protobuf/proto"
+	pb "google.golang.org/protobuf/proto"
 )
 
 func TestProvisionEnvelopeRoundTrip(t *testing.T) {
@@ -11,12 +11,12 @@ func TestProvisionEnvelopeRoundTrip(t *testing.T) {
 		PublicKey: []byte{0x05, 0x01, 0x02, 0x03},
 		Body:     []byte{0xaa, 0xbb, 0xcc},
 	}
-	data, err := proto.Marshal(original)
+	data, err := pb.Marshal(original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded := new(ProvisionEnvelope)
-	if err := proto.Unmarshal(data, decoded); err != nil {
+	if err := pb.Unmarshal(data, decoded); err != nil {
 		t.Fatal(err)
 	}
 	if string(decoded.GetPublicKey()) != string(original.GetPublicKey()) {
@@ -39,12 +39,12 @@ func TestProvisionMessageRoundTrip(t *testing.T) {
 		AciIdentityKeyPrivate: []byte{0x02},
 		ProfileKey:            []byte{0xde, 0xad},
 	}
-	data, err := proto.Marshal(original)
+	data, err := pb.Marshal(original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded := new(ProvisionMessage)
-	if err := proto.Unmarshal(data, decoded); err != nil {
+	if err := pb.Unmarshal(data, decoded); err != nil {
 		t.Fatal(err)
 	}
 	if decoded.GetNumber() != number {
@@ -72,12 +72,12 @@ func TestWebSocketMessageRoundTrip(t *testing.T) {
 			Body: []byte("hello"),
 		},
 	}
-	data, err := proto.Marshal(original)
+	data, err := pb.Marshal(original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded := new(WebSocketMessage)
-	if err := proto.Unmarshal(data, decoded); err != nil {
+	if err := pb.Unmarshal(data, decoded); err != nil {
 		t.Fatal(err)
 	}
 	if decoded.GetType() != typ {

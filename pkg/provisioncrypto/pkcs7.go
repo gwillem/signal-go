@@ -1,9 +1,11 @@
+// Package provisioncrypto implements the Signal provisioning envelope
+// crypto: HKDF key derivation, HMAC-SHA256, AES-256-CBC, and PKCS#7 padding.
 package provisioncrypto
 
 import "fmt"
 
-// pkcs7Pad appends PKCS#7 padding to data so the result is a multiple of blockSize.
-func pkcs7Pad(data []byte, blockSize int) []byte {
+// PKCS7Pad appends PKCS#7 padding so the result length is a multiple of blockSize.
+func PKCS7Pad(data []byte, blockSize int) []byte {
 	pad := blockSize - len(data)%blockSize
 	padding := make([]byte, pad)
 	for i := range padding {
@@ -12,8 +14,8 @@ func pkcs7Pad(data []byte, blockSize int) []byte {
 	return append(data, padding...)
 }
 
-// pkcs7Unpad removes and validates PKCS#7 padding.
-func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
+// PKCS7Unpad removes and validates PKCS#7 padding.
+func PKCS7Unpad(data []byte, blockSize int) ([]byte, error) {
 	if len(data) == 0 || len(data)%blockSize != 0 {
 		return nil, fmt.Errorf("pkcs7: invalid data length %d", len(data))
 	}

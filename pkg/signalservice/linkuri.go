@@ -1,3 +1,5 @@
+// Package signalservice orchestrates Signal protocol operations:
+// device provisioning, message sending, and message receiving.
 package signalservice
 
 import "encoding/base64"

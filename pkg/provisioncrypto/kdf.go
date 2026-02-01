@@ -16,5 +16,9 @@ func DeriveProvisioningKeys(sharedSecret []byte) (cipherKey, macKey []byte, err 
 	if _, err := r.Read(keys); err != nil {
 		return nil, nil, err
 	}
-	return keys[:32], keys[32:], nil
+	cipherKey = make([]byte, 32)
+	macKey = make([]byte, 32)
+	copy(cipherKey, keys[:32])
+	copy(macKey, keys[32:])
+	return cipherKey, macKey, nil
 }

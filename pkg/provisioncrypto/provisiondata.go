@@ -15,6 +15,8 @@ type ProvisionData struct {
 	PNI                 string
 	ProvisioningVersion uint32
 	AccountEntropyPool  string
+	UserAgent           string
+	ReadReceipts        bool
 
 	ACIIdentityKeyPublic  []byte
 	ACIIdentityKeyPrivate []byte
@@ -47,6 +49,8 @@ func ParseProvisionData(data []byte) (*ProvisionData, error) {
 		PNI:                   msg.GetPni(),
 		ProvisioningVersion:   msg.GetProvisioningVersion(),
 		AccountEntropyPool:    msg.GetAccountEntropyPool(),
+		UserAgent:             msg.GetUserAgent(),
+		ReadReceipts:          msg.GetReadReceipts(),
 		ACIIdentityKeyPublic:  msg.GetAciIdentityKeyPublic(),
 		ACIIdentityKeyPrivate: msg.GetAciIdentityKeyPrivate(),
 		PNIIdentityKeyPublic:  msg.GetPniIdentityKeyPublic(),

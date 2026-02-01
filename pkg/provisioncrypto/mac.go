@@ -17,7 +17,7 @@ func ComputeMAC(key, data []byte) []byte {
 func VerifyMAC(key, data, expectedMAC []byte) error {
 	computed := ComputeMAC(key, data)
 	if !hmac.Equal(computed, expectedMAC) {
-		return fmt.Errorf("MAC verification failed")
+		return fmt.Errorf("mac: verification failed")
 	}
 	return nil
 }

@@ -6,9 +6,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/coder/websocket"
 	"github.com/gwillem/signal-go/pkg/proto"
 	pb "google.golang.org/protobuf/proto"
-	"github.com/coder/websocket"
 )
 
 // Conn wraps a WebSocket connection with protobuf framing.
@@ -68,7 +68,12 @@ func (c *Conn) SendResponse(ctx context.Context, id uint64, status uint32, messa
 	return c.WriteMessage(ctx, msg)
 }
 
-// Close closes the underlying WebSocket connection.
+// Close sends a normal closure frame and then closes the connection.
 func (c *Conn) Close() error {
+	return c.ws.Close(websocket.StatusNormalClosure, "")
+}
+
+// CloseNow closes the connection immediately without a close frame.
+func (c *Conn) CloseNow() error {
 	return c.ws.CloseNow()
 }

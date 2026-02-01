@@ -16,7 +16,7 @@ func EncryptAESCBC(key, plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("aescbc: %w", err)
 	}
 
-	padded := pkcs7Pad(plaintext, aes.BlockSize)
+	padded := PKCS7Pad(plaintext, aes.BlockSize)
 
 	iv := make([]byte, aes.BlockSize)
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
@@ -45,5 +45,5 @@ func DecryptAESCBC(key, iv, ciphertext []byte) ([]byte, error) {
 	plaintext := make([]byte, len(ciphertext))
 	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plaintext, ciphertext)
 
-	return pkcs7Unpad(plaintext, aes.BlockSize)
+	return PKCS7Unpad(plaintext, aes.BlockSize)
 }

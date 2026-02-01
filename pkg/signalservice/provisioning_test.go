@@ -6,10 +6,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -20,9 +20,7 @@ import (
 )
 
 type testCallbacks struct {
-	mu      sync.Mutex
-	linkURI string
-	ch      chan string // signals when URI is available
+	ch chan string // signals when URI is available
 }
 
 func newTestCallbacks() *testCallbacks {
@@ -30,25 +28,15 @@ func newTestCallbacks() *testCallbacks {
 }
 
 func (tc *testCallbacks) OnLinkURI(uri string) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.linkURI = uri
 	tc.ch <- uri
-}
-
-// pkcs7PadForTest duplicates PKCS7 padding for test use.
-func pkcs7PadForTest(data []byte, blockSize int) []byte {
-	pad := blockSize - len(data)%blockSize
-	padding := make([]byte, pad)
-	for i := range padding {
-		padding[i] = byte(pad)
-	}
-	return append(data, padding...)
 }
 
 // extractPubKeyFromURI parses the pub_key from a device link URI.
 func extractPubKeyFromURI(uri string) ([]byte, error) {
 	parts := strings.SplitN(uri, "pub_key=", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("pub_key= not found in URI: %s", uri)
+	}
 	return base64.URLEncoding.DecodeString(parts[1])
 }
 
@@ -115,7 +103,11 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 
 		// Step 1: Send ProvisioningAddress.
 		addr := &proto.ProvisioningAddress{Address: &testUUID}
-		addrBytes, _ := pb.Marshal(addr)
+		addrBytes, err := pb.Marshal(addr)
+		if err != nil {
+			t.Errorf("marshal address: %v", err)
+			return
+		}
 		sendWSRequest(t, ws, ctx, "PUT", "/v1/address", 1, addrBytes)
 		readWSResponse(t, ws, ctx, 1)
 
@@ -143,11 +135,18 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 		}
 
 		iv := make([]byte, 16)
-		rand.Read(iv)
+		if _, err := rand.Read(iv); err != nil {
+			t.Errorf("rand read: %v", err)
+			return
+		}
 
-		padded := pkcs7PadForTest(provMsgBytes, 16)
+		padded := provisioncrypto.PKCS7Pad(provMsgBytes, 16)
 		ct := make([]byte, len(padded))
-		block, _ := aes.NewCipher(cipherKey)
+		block, err := aes.NewCipher(cipherKey)
+		if err != nil {
+			t.Errorf("new cipher: %v", err)
+			return
+		}
 		cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct, padded)
 
 		body := make([]byte, 0, 1+16+len(ct)+32)
@@ -161,7 +160,11 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 			PublicKey: primaryPubBytes,
 			Body:      body,
 		}
-		envBytes, _ := pb.Marshal(env)
+		envBytes, err := pb.Marshal(env)
+		if err != nil {
+			t.Errorf("marshal envelope: %v", err)
+			return
+		}
 
 		// Step 2: Send encrypted provision envelope.
 		sendWSRequest(t, ws, ctx, "PUT", "/v1/message", 2, envBytes)

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coder/websocket"
 	"github.com/gwillem/signal-go/pkg/proto"
 	pb "google.golang.org/protobuf/proto"
-	"github.com/coder/websocket"
 )
 
 func TestReadAndACK(t *testing.T) {

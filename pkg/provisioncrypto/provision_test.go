@@ -16,7 +16,7 @@ func encryptProvisionBody(cipherKey, macKey, plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	padded := pkcs7Pad(plaintext, aes.BlockSize)
+	padded := PKCS7Pad(plaintext, aes.BlockSize)
 	ct := make([]byte, len(padded))
 
 	block, err := aes.NewCipher(cipherKey)
