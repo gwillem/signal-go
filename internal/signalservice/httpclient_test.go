@@ -21,6 +21,11 @@ func TestRegisterSecondaryDevice(t *testing.T) {
 			t.Errorf("content-type: got %s", r.Header.Get("Content-Type"))
 		}
 
+		user, pass, ok := r.BasicAuth()
+		if !ok || user == "" || pass == "" {
+			t.Error("missing or empty basic auth on /v1/devices/link")
+		}
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read body: %v", err)
@@ -50,7 +55,7 @@ func TestRegisterSecondaryDevice(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL)
+	client := NewHTTPClient(srv.URL, nil)
 
 	req := &RegisterRequest{
 		VerificationCode: "test-code",
@@ -71,7 +76,10 @@ func TestRegisterSecondaryDevice(t *testing.T) {
 		PNIPqLastResort: KyberPreKeyEntity{KeyID: 1, PublicKey: "stu", Signature: "vwx"},
 	}
 
-	resp, err := client.RegisterSecondaryDevice(context.Background(), req)
+	resp, err := client.RegisterSecondaryDevice(context.Background(), req, BasicAuth{
+		Username: "+15551234567",
+		Password: "test-password",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,8 +110,8 @@ func TestRegisterSecondaryDeviceError(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := NewHTTPClient(srv.URL)
-			_, err := client.RegisterSecondaryDevice(context.Background(), &RegisterRequest{})
+			client := NewHTTPClient(srv.URL, nil)
+			_, err := client.RegisterSecondaryDevice(context.Background(), &RegisterRequest{}, BasicAuth{})
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -154,7 +162,7 @@ func TestUploadPreKeys(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL)
+	client := NewHTTPClient(srv.URL, nil)
 
 	err := client.UploadPreKeys(context.Background(), "aci", &PreKeyUpload{
 		SignedPreKey:    &SignedPreKeyEntity{KeyID: 1, PublicKey: "abc", Signature: "def"},
@@ -172,7 +180,7 @@ func TestUploadPreKeysError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL)
+	client := NewHTTPClient(srv.URL, nil)
 	err := client.UploadPreKeys(context.Background(), "aci", &PreKeyUpload{}, BasicAuth{})
 	if err == nil {
 		t.Fatal("expected error")

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -99,6 +100,17 @@ func TestClientLink(t *testing.T) {
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/devices/link" && r.Method == http.MethodPut:
+			user, pass, ok := r.BasicAuth()
+			if !ok || user == "" || pass == "" {
+				t.Errorf("missing basic auth on /v1/devices/link")
+				w.WriteHeader(401)
+				return
+			}
+			if user != number {
+				t.Errorf("basic auth username: got %q, want %q", user, number)
+			}
+			_ = pass // password is randomly generated
+
 			body, _ := io.ReadAll(r.Body)
 			var req signalservice.RegisterRequest
 			if err := json.Unmarshal(body, &req); err != nil {
@@ -204,16 +216,22 @@ func TestClientLink(t *testing.T) {
 	client := NewClient(
 		WithProvisioningURL(wsURL),
 		WithAPIURL(apiSrv.URL),
+		WithTLSConfig(nil),
 	)
 
 	// Extract pub key from QR URI in callback.
 	err = client.Link(context.Background(), func(uri string) {
-		parts := strings.SplitN(uri, "pub_key=", 2)
-		if len(parts) != 2 {
+		parsed, err := url.Parse(uri)
+		if err != nil {
+			t.Errorf("parse URI: %v", err)
+			return
+		}
+		b64 := parsed.Query().Get("pub_key")
+		if b64 == "" {
 			t.Errorf("pub_key not found in URI: %s", uri)
 			return
 		}
-		pubKey, err := base64.URLEncoding.DecodeString(parts[1])
+		pubKey, err := base64.RawStdEncoding.DecodeString(b64)
 		if err != nil {
 			t.Errorf("decode pubkey: %v", err)
 			return

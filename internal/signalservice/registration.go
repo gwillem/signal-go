@@ -3,6 +3,7 @@ package signalservice
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -23,7 +24,7 @@ type RegistrationResult struct {
 // RegisterLinkedDevice performs the full device registration after provisioning:
 // generates pre-keys, encrypts device name, calls PUT /v1/devices/link,
 // then uploads pre-keys via PUT /v2/keys.
-func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncrypto.ProvisionData, deviceName string) (*RegistrationResult, error) {
+func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncrypto.ProvisionData, deviceName string, tlsConf *tls.Config) (*RegistrationResult, error) {
 	// Reconstruct ACI identity key pair.
 	aciPriv, err := libsignal.DeserializePrivateKey(data.ACIIdentityKeyPrivate)
 	if err != nil {
@@ -93,8 +94,12 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 		return nil, fmt.Errorf("registration: PNI Kyber entity: %w", err)
 	}
 
+	// Generate password before the link call — Signal requires Basic auth on
+	// PUT /v1/devices/link with e164 as username and this password.
+	password := generatePassword()
+
 	// Register device.
-	httpClient := NewHTTPClient(apiURL)
+	httpClient := NewHTTPClient(apiURL, tlsConf)
 
 	regReq := &RegisterRequest{
 		VerificationCode: data.ProvisioningCode,
@@ -115,14 +120,17 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 		PNIPqLastResort: *pniKPK,
 	}
 
-	regResp, err := httpClient.RegisterSecondaryDevice(ctx, regReq)
+	linkAuth := BasicAuth{
+		Username: data.Number,
+		Password: password,
+	}
+
+	regResp, err := httpClient.RegisterSecondaryDevice(ctx, regReq, linkAuth)
 	if err != nil {
 		return nil, fmt.Errorf("registration: register device: %w", err)
 	}
 
-	// Generate password for authenticated requests.
-	password := generatePassword()
-
+	// Auth for subsequent key uploads uses ACI.deviceID as username.
 	auth := BasicAuth{
 		Username: fmt.Sprintf("%s.%d", regResp.UUID, regResp.DeviceID),
 		Password: password,

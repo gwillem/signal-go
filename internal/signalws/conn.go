@@ -4,7 +4,9 @@ package signalws
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 
 	"github.com/coder/websocket"
 	"github.com/gwillem/signal-go/internal/proto"
@@ -22,8 +24,19 @@ func New(ws *websocket.Conn) *Conn {
 }
 
 // Dial opens a WebSocket connection to the given URL.
-func Dial(ctx context.Context, url string) (*Conn, error) {
-	ws, _, err := websocket.Dial(ctx, url, nil)
+// If tlsConf is non-nil, it is used for the TLS handshake.
+func Dial(ctx context.Context, url string, tlsConf *tls.Config) (*Conn, error) {
+	var opts *websocket.DialOptions
+	if tlsConf != nil {
+		opts = &websocket.DialOptions{
+			HTTPClient: &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: tlsConf,
+				},
+			},
+		}
+	}
+	ws, _, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		return nil, fmt.Errorf("signalws: dial: %w", err)
 	}

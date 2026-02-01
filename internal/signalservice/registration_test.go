@@ -60,6 +60,16 @@ func TestRegisterLinkedDevice(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/devices/link" && r.Method == http.MethodPut:
+			user, pass, ok := r.BasicAuth()
+			if !ok || user == "" || pass == "" {
+				t.Error("missing or empty basic auth on /v1/devices/link")
+				w.WriteHeader(401)
+				return
+			}
+			if user != "+15551234567" {
+				t.Errorf("basic auth username: got %q, want +15551234567", user)
+			}
+
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Errorf("read body: %v", err)
@@ -146,7 +156,7 @@ func TestRegisterLinkedDevice(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := RegisterLinkedDevice(context.Background(), srv.URL, data, "signal-go-test")
+	result, err := RegisterLinkedDevice(context.Background(), srv.URL, data, "signal-go-test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

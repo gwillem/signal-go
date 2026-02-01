@@ -3,6 +3,7 @@ package signal
 
 import (
 	"context"
+	"crypto/tls"
 
 	"github.com/gwillem/signal-go/internal/provisioncrypto"
 	"github.com/gwillem/signal-go/internal/signalservice"
@@ -17,6 +18,7 @@ const (
 type Client struct {
 	provisioningURL string
 	apiURL          string
+	tlsConfig       *tls.Config
 	data            *provisioncrypto.ProvisionData
 	deviceID        int
 	aci             string
@@ -37,11 +39,18 @@ func WithAPIURL(url string) Option {
 	return func(c *Client) { c.apiURL = url }
 }
 
+// WithTLSConfig overrides the TLS configuration used for connections.
+// If nil (the default), Signal's pinned CA certificate is used.
+func WithTLSConfig(tc *tls.Config) Option {
+	return func(c *Client) { c.tlsConfig = tc }
+}
+
 // NewClient creates a new Signal client.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		provisioningURL: defaultProvisioningURL,
 		apiURL:          defaultAPIURL,
+		tlsConfig:       signalservice.TLSConfig(),
 	}
 	for _, o := range opts {
 		o(c)
@@ -55,13 +64,13 @@ func NewClient(opts ...Option) *Client {
 // URI for display as a QR code.
 func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 	cb := &linkCallbacks{onQR: onQR}
-	result, err := signalservice.RunProvisioning(ctx, c.provisioningURL, cb)
+	result, err := signalservice.RunProvisioning(ctx, c.provisioningURL, cb, c.tlsConfig)
 	if err != nil {
 		return err
 	}
 	c.data = result.Data
 
-	reg, err := signalservice.RegisterLinkedDevice(ctx, c.apiURL, result.Data, "signal-go")
+	reg, err := signalservice.RegisterLinkedDevice(ctx, c.apiURL, result.Data, "signal-go", c.tlsConfig)
 	if err != nil {
 		return err
 	}

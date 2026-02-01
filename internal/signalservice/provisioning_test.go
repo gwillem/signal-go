@@ -177,7 +177,7 @@ func TestRunProvisioningEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
-	result, err := RunProvisioning(ctx, wsURL, cb)
+	result, err := RunProvisioning(ctx, wsURL, cb, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

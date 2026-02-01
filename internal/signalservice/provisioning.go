@@ -2,6 +2,7 @@ package signalservice
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -26,7 +27,7 @@ type ProvisionCallbacks interface {
 // RunProvisioning connects to the provisioning WebSocket, receives the
 // provisioning address (UUID), builds a link URI, waits for the encrypted
 // provision envelope from the primary device, and decrypts it.
-func RunProvisioning(ctx context.Context, wsURL string, cb ProvisionCallbacks) (*ProvisionResult, error) {
+func RunProvisioning(ctx context.Context, wsURL string, cb ProvisionCallbacks, tlsConf *tls.Config) (*ProvisionResult, error) {
 	// Generate ephemeral key pair for provisioning.
 	privKey, err := libsignal.GeneratePrivateKey()
 	if err != nil {
@@ -45,7 +46,7 @@ func RunProvisioning(ctx context.Context, wsURL string, cb ProvisionCallbacks) (
 		return nil, fmt.Errorf("provisioning: serialize public key: %w", err)
 	}
 
-	conn, err := signalws.Dial(ctx, wsURL)
+	conn, err := signalws.Dial(ctx, wsURL, tlsConf)
 	if err != nil {
 		return nil, fmt.Errorf("provisioning: %w", err)
 	}

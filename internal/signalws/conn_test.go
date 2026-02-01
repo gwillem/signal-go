@@ -75,7 +75,7 @@ func TestReadAndACK(t *testing.T) {
 	ctx := context.Background()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
-	conn, err := Dial(ctx, wsURL)
+	conn, err := Dial(ctx, wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

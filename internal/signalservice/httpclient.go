@@ -3,6 +3,7 @@ package signalservice
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,15 +17,22 @@ type HTTPClient struct {
 }
 
 // NewHTTPClient creates a new HTTP client for the Signal API.
-func NewHTTPClient(baseURL string) *HTTPClient {
+// If tlsConf is non-nil, it is used for TLS connections.
+func NewHTTPClient(baseURL string, tlsConf *tls.Config) *HTTPClient {
+	client := &http.Client{}
+	if tlsConf != nil {
+		client.Transport = &http.Transport{TLSClientConfig: tlsConf}
+	}
 	return &HTTPClient{
 		baseURL:    baseURL,
-		httpClient: &http.Client{},
+		httpClient: client,
 	}
 }
 
 // RegisterSecondaryDevice calls PUT /v1/devices/link to finalize device registration.
-func (c *HTTPClient) RegisterSecondaryDevice(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
+// Signal requires Basic auth with the phone number (e164) as username and a
+// pre-generated password.
+func (c *HTTPClient) RegisterSecondaryDevice(ctx context.Context, req *RegisterRequest, auth BasicAuth) (*RegisterResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: marshal register request: %w", err)
@@ -35,6 +43,7 @@ func (c *HTTPClient) RegisterSecondaryDevice(ctx context.Context, req *RegisterR
 		return nil, fmt.Errorf("httpclient: new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.SetBasicAuth(auth.Username, auth.Password)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
