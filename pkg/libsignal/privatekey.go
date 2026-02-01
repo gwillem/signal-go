@@ -40,6 +40,27 @@ func (k *PrivateKey) Serialize() ([]byte, error) {
 	return freeOwnedBuffer(buf), nil
 }
 
+// Sign produces an Ed25519-compatible signature of message.
+func (k *PrivateKey) Sign(message []byte) ([]byte, error) {
+	var buf C.SignalOwnedBuffer
+	cPtr := C.SignalConstPointerPrivateKey{raw: k.ptr}
+	if err := wrapError(C.signal_privatekey_sign(&buf, cPtr, borrowedBuffer(message))); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(buf), nil
+}
+
+// Agree performs X25519 key agreement with the given public key.
+func (k *PrivateKey) Agree(pub *PublicKey) ([]byte, error) {
+	var buf C.SignalOwnedBuffer
+	privPtr := C.SignalConstPointerPrivateKey{raw: k.ptr}
+	pubPtr := C.SignalConstPointerPublicKey{raw: pub.ptr}
+	if err := wrapError(C.signal_privatekey_agree(&buf, privPtr, pubPtr)); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(buf), nil
+}
+
 // Destroy frees the underlying C resource.
 func (k *PrivateKey) Destroy() {
 	if k.ptr != nil {
