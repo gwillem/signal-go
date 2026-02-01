@@ -1,6 +1,6 @@
 # Phase 2: Signal Service Layer (Pure Go)
 
-**Status: IN PROGRESS** — Device provisioning (secondary device linking) implemented.
+**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). Message send/receive not yet started.
 
 Goal: link as secondary device, send text messages, receive text messages. Pure Go implementation of the Signal server protocol, using Phase 1's CGO bindings for crypto.
 
@@ -100,22 +100,22 @@ Step 8:  ✅ Parse ProvisionMessage protobuf → ProvisionData struct
          - Provisioning code
          - Ephemeral backup key, media root backup key
 
-Step 9:  Generate pre-keys for both ACI and PNI — NOT STARTED
-         For each: 100 one-time EC pre-keys + 1 signed pre-key
-         + 1 last-resort Kyber pre-key (KYBER_1024)
+Step 9:  ✅ Generate pre-keys for both ACI and PNI
+         → signalservice.GeneratePreKeySet() generates signed EC pre-key
+           + Kyber last-resort pre-key, both signed by identity key
 
-Step 10: Encrypt device name — NOT STARTED
-         AES-256-GCM with HKDF-derived key from ACI private key
+Step 10: ✅ Encrypt device name
+         → provisioncrypto.EncryptDeviceName() uses ECDH + HMAC-SHA256
+           derived keys with AES-256-CTR (Signal's DeviceNameCipher algorithm)
 
-Step 11: PUT /v1/devices/{provisioningCode} — NOT STARTED
-         Body: registrationId, pniRegistrationId, fetchesMessages: true,
-               name, aciSignedPreKey, pniSignedPreKey,
-               aciPqLastResortPreKey, pniPqLastResortPreKey
-         Response: { deviceId }
+Step 11: ✅ PUT /v1/devices/link
+         → signalservice.HTTPClient.RegisterSecondaryDevice()
+         Body: verificationCode, accountAttributes, signed pre-keys, Kyber pre-keys
+         Response: { uuid, pni, deviceId }
 
-Step 12: Upload pre-keys — NOT STARTED
-         PUT /v2/keys?identity=aci
-         PUT /v2/keys?identity=pni
+Step 12: ✅ Upload pre-keys
+         → signalservice.HTTPClient.UploadPreKeys()
+         PUT /v2/keys?identity=aci and PUT /v2/keys?identity=pni
 
 Step 13: Request sync data from primary — NOT STARTED
          Send SyncMessage.Request for: GROUPS, CONTACTS, BLOCKED, CONFIGURATION, KEYS
@@ -133,10 +133,10 @@ Key insight: the link URI uses URL-safe base64 (`base64.URLEncoding`) for the pu
 
 | Package                | Purpose                                                                   |
 | ---------------------- | ------------------------------------------------------------------------- |
-| `internal/provisioncrypto/` | PKCS7, HKDF, HMAC, AES-CBC, envelope decrypt, ProvisionData parsing       |
+| `internal/provisioncrypto/` | PKCS7, HKDF, HMAC, AES-CBC, envelope decrypt, ProvisionData parsing, device name encryption |
 | `internal/signalws/`        | Protobuf-framed WebSocket (Dial, ReadMessage, WriteMessage, SendResponse) |
-| `client.go`          | Public API: Client with Link, Send, Receive                              |
-| `internal/signalservice/`   | Orchestration: RunProvisioning, DeviceLinkURI                             |
+| `client.go`          | Public API: Client with Link, Send, Receive, DeviceID                    |
+| `internal/signalservice/`   | Orchestration: RunProvisioning, RegisterLinkedDevice, HTTPClient, GeneratePreKeySet |
 
 Reference files in Signal-Android:
 
@@ -281,18 +281,18 @@ Note: G2 deferred — `SignalService.proto` not yet copied (needed for message s
 | I6 ✅  | `internal/provisioncrypto/aescbc.go`, `pkcs7.go` | AES-256-CBC decrypt + PKCS7 unpad, reject bad ciphertext                                    |
 | I7 ✅  | `internal/provisioncrypto/provision.go`          | Full provisioning decrypt: key pair + envelope → plaintext                                  |
 | I8 ✅  | `internal/provisioncrypto/provisiondata.go`      | Parse ProvisionMessage → ProvisionData, validate required fields                            |
-| I9     | —                                           | Encrypt device name (AES-256-GCM with HKDF from ACI private key) — deferred to registration |
+| I9 ✅  | `internal/provisioncrypto/devicename.go`     | Encrypt device name (ECDH + HMAC-SHA256 + AES-256-CTR, Signal's DeviceNameCipher)            |
 | I10 ✅ | `internal/signalservice/provisioning.go`         | Full provisioning flow against mock WebSocket (end-to-end with real crypto)                 |
 
 ### J. HTTP client
 
 | Step | Files       | Test proves                                                             |
 | ---- | ----------- | ----------------------------------------------------------------------- |
-| J1   | `client.go` | HTTP Basic auth header: `{aci}.{deviceId}:{password}`                   |
-| J2   | `client.go` | `PUT /v1/devices/{code}` → mock returns `{deviceId}`                    |
-| J3   | `client.go` | `PUT /v2/keys?identity=aci` → upload pre-keys (mock verifies JSON body) |
-| J4   | `client.go` | `GET /v2/keys/{dest}/{devId}` → parse pre-key bundle response           |
-| J5   | `client.go` | `PUT /v1/messages/{dest}` → send encrypted message (mock verifies body) |
+| J1 ✅ | `internal/signalservice/httpclient.go` | HTTP Basic auth header: `{aci}.{deviceId}:{password}`                   |
+| J2 ✅ | `internal/signalservice/httpclient.go` | `PUT /v1/devices/link` → mock returns `{uuid, pni, deviceId}`           |
+| J3 ✅ | `internal/signalservice/httpclient.go` | `PUT /v2/keys?identity=aci` → upload pre-keys (mock verifies JSON body) |
+| J4   | —                                     | `GET /v2/keys/{dest}/{devId}` → parse pre-key bundle response           |
+| J5   | —                                     | `PUT /v1/messages/{dest}` → send encrypted message (mock verifies body) |
 
 ### K. Message sending
 
@@ -369,6 +369,36 @@ The `ProvisionMessage` protobuf contains more fields than originally documented.
 - `aciBinary` / `pniBinary` (16-byte UUIDs) — binary UUID representation alongside string UUIDs
 
 The `ProvisionData` Go struct captures all of these. Required field validation: `provisioningCode` and `aciIdentityKeyPublic`/`Private` must be present.
+
+### Device name encryption
+
+Signal encrypts device names using the DeviceNameCipher algorithm (from `DeviceNameCipher.kt`):
+
+1. Generate ephemeral EC key pair
+2. ECDH: `masterSecret = ephemeralPriv.Agree(aciIdentityPublicKey)`
+3. `syntheticIvKey = HMAC-SHA256(masterSecret, "auth")`
+4. `syntheticIv = HMAC-SHA256(syntheticIvKey, plaintext)[:16]`
+5. `cipherKeyKey = HMAC-SHA256(masterSecret, "cipher")`
+6. `cipherKey = HMAC-SHA256(cipherKeyKey, syntheticIv)`
+7. AES-256-CTR encrypt plaintext with `cipherKey`, IV=zeros
+8. Marshal `DeviceName{ephemeralPublic, syntheticIv, ciphertext}` protobuf
+9. Base64-encode for JSON
+
+This uses SIV-like construction (synthetic IV derived from plaintext) for deterministic-looking encryption with misuse resistance. Not AES-GCM as originally documented.
+
+### Registration flow
+
+`RegisterLinkedDevice()` orchestrates the full post-provisioning registration:
+
+1. Reconstruct ACI + PNI identity key pairs from `ProvisionData` raw bytes
+2. Generate random 14-bit registration IDs for ACI and PNI
+3. Generate pre-key sets (signed EC + Kyber last-resort) for both identities
+4. Encrypt device name using ACI identity key
+5. `PUT /v1/devices/link` with verification code, account attributes, and pre-keys
+6. Generate random password (24 bytes, base64url)
+7. `PUT /v2/keys?identity=aci` and `PUT /v2/keys?identity=pni` with Basic auth
+
+The endpoint is `/v1/devices/link` (not `/v1/devices/{code}` as originally documented). The verification code is included in the JSON body.
 
 ## Server endpoints
 

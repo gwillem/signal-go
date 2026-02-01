@@ -94,3 +94,62 @@ func TestKyberPreKeyRecordRoundTrip(t *testing.T) {
 		t.Fatal("Kyber pre-key record round-trip mismatch")
 	}
 }
+
+func TestKyberPreKeyRecordSignature(t *testing.T) {
+	kp, err := GenerateKyberKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer kp.Destroy()
+
+	identityKey, err := GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identityKey.Destroy()
+
+	kyberPub, err := kp.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer kyberPub.Destroy()
+
+	kyberPubBytes, err := kyberPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sig, err := identityKey.Sign(kyberPubBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := NewKyberPreKeyRecord(77, 2000000, kp, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rec.Destroy()
+
+	gotSig, err := rec.Signature()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(sig, gotSig) {
+		t.Fatal("signature mismatch")
+	}
+
+	// Verify signature is valid
+	identityPub, err := identityKey.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identityPub.Destroy()
+
+	valid, err := identityPub.Verify(kyberPubBytes, gotSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !valid {
+		t.Fatal("signature should be valid")
+	}
+}

@@ -8,12 +8,12 @@ Go library for Signal messenger, replacing the Java signal-cli dependency. Licen
 
 ## Architecture
 
-- `client.go` — Public API: `Client` with `Link`, `Number`
+- `client.go` — Public API: `Client` with `Link`, `Number`, `DeviceID`
 - `internal/libsignal/` — CGO bindings to libsignal's Rust C FFI (Phase 1, complete)
-- `internal/proto/` — Protobuf definitions and generated Go code (Provisioning, WebSocket)
-- `internal/provisioncrypto/` — Provisioning envelope encrypt/decrypt (HKDF, AES-CBC, HMAC, PKCS7)
+- `internal/proto/` — Protobuf definitions and generated Go code (Provisioning, WebSocket, DeviceName)
+- `internal/provisioncrypto/` — Provisioning envelope encrypt/decrypt (HKDF, AES-CBC, HMAC, PKCS7), device name encryption
 - `internal/signalws/` — Protobuf-framed WebSocket layer
-- `internal/signalservice/` — Provisioning orchestration, device link URI
+- `internal/signalservice/` — Provisioning orchestration, device registration, HTTP client, pre-key generation
 - `docs/` — Phase plans and architecture docs
 
 ## Prerequisites
@@ -50,13 +50,13 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 ## Phase status
 
 - **Phase 1 (CGO bindings):** Complete — key generation, session establishment, encrypt/decrypt
-- **Phase 2 (service layer):** In progress — device provisioning complete, see `docs/phase2-service-layer.md`
+- **Phase 2 (service layer):** In progress — device provisioning + registration complete (steps 1-12), see `docs/phase2-service-layer.md`
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `client.go` | Public API: Client, Link, Number |
+| `client.go` | Public API: Client, Link, Number, DeviceID |
 | `libsignal.go` | CGO preamble (LDFLAGS, includes) |
 | `error.go` | FFI error wrapping, owned buffer handling |
 | `privatekey.go` | PrivateKey: generate, serialize, sign, agree |
@@ -74,3 +74,8 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `memstore.go` | In-memory store implementations |
 | `pointer.go` | Handle map for Go→C→Go pointer passing |
 | `protocol.go` | ProcessPreKeyBundle, Encrypt, Decrypt |
+| `internal/provisioncrypto/devicename.go` | Device name encrypt/decrypt (DeviceNameCipher) |
+| `internal/signalservice/keygen.go` | Pre-key set generation (signed EC + Kyber) |
+| `internal/signalservice/httpclient.go` | HTTP client for Signal REST API |
+| `internal/signalservice/httptypes.go` | JSON request/response types for registration |
+| `internal/signalservice/registration.go` | RegisterLinkedDevice orchestration |

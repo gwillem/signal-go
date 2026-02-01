@@ -8,12 +8,20 @@ import (
 	"github.com/gwillem/signal-go/internal/signalservice"
 )
 
-const defaultProvisioningURL = "wss://chat.signal.org/v1/websocket/provisioning/"
+const (
+	defaultProvisioningURL = "wss://chat.signal.org/v1/websocket/provisioning/"
+	defaultAPIURL          = "https://chat.signal.org"
+)
 
 // Client is the main entry point for interacting with Signal.
 type Client struct {
 	provisioningURL string
+	apiURL          string
 	data            *provisioncrypto.ProvisionData
+	deviceID        int
+	aci             string
+	pni             string
+	password        string
 }
 
 // Option configures a Client.
@@ -24,9 +32,17 @@ func WithProvisioningURL(url string) Option {
 	return func(c *Client) { c.provisioningURL = url }
 }
 
+// WithAPIURL overrides the default REST API URL.
+func WithAPIURL(url string) Option {
+	return func(c *Client) { c.apiURL = url }
+}
+
 // NewClient creates a new Signal client.
 func NewClient(opts ...Option) *Client {
-	c := &Client{provisioningURL: defaultProvisioningURL}
+	c := &Client{
+		provisioningURL: defaultProvisioningURL,
+		apiURL:          defaultAPIURL,
+	}
 	for _, o := range opts {
 		o(c)
 	}
@@ -34,8 +50,9 @@ func NewClient(opts ...Option) *Client {
 }
 
 // Link connects as a secondary device. It blocks until the primary device
-// scans the QR code and completes provisioning. The onQR callback is called
-// with the device link URI for display as a QR code.
+// scans the QR code and completes provisioning, then registers the device
+// with the Signal server. The onQR callback is called with the device link
+// URI for display as a QR code.
 func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 	cb := &linkCallbacks{onQR: onQR}
 	result, err := signalservice.RunProvisioning(ctx, c.provisioningURL, cb)
@@ -43,6 +60,16 @@ func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 		return err
 	}
 	c.data = result.Data
+
+	reg, err := signalservice.RegisterLinkedDevice(ctx, c.apiURL, result.Data, "signal-go")
+	if err != nil {
+		return err
+	}
+
+	c.deviceID = reg.DeviceID
+	c.aci = reg.ACI
+	c.pni = reg.PNI
+	c.password = reg.Password
 	return nil
 }
 
@@ -52,6 +79,11 @@ func (c *Client) Number() string {
 		return ""
 	}
 	return c.data.Number
+}
+
+// DeviceID returns the device ID assigned during registration.
+func (c *Client) DeviceID() int {
+	return c.deviceID
 }
 
 type linkCallbacks struct {

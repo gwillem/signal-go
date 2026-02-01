@@ -104,6 +104,16 @@ func (r *KyberPreKeyRecord) PublicKey() (*KyberPublicKey, error) {
 	return &KyberPublicKey{ptr: out.raw}, nil
 }
 
+// Signature returns the signature from this Kyber pre-key record.
+func (r *KyberPreKeyRecord) Signature() ([]byte, error) {
+	var buf C.SignalOwnedBuffer
+	cPtr := C.SignalConstPointerKyberPreKeyRecord{raw: r.ptr}
+	if err := wrapError(C.signal_kyber_pre_key_record_get_signature(&buf, cPtr)); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(buf), nil
+}
+
 // Serialize returns the serialized form.
 func (r *KyberPreKeyRecord) Serialize() ([]byte, error) {
 	var buf C.SignalOwnedBuffer

@@ -6,6 +6,8 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/proto"
 	"github.com/gwillem/signal-go/internal/provisioncrypto"
+	"github.com/gwillem/signal-go/internal/signalservice"
 	pb "google.golang.org/protobuf/proto"
 )
 
@@ -37,16 +40,50 @@ func TestClientLink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Provision message payload.
+	// Generate real ACI and PNI identity keys for provisioning.
+	aciIdentity, err := libsignal.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer aciIdentity.Destroy()
+
+	pniIdentity, err := libsignal.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pniIdentity.Destroy()
+
+	aciPubBytes, err := aciIdentity.PublicKey.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aciPrivBytes, err := aciIdentity.PrivateKey.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pniPubBytes, err := pniIdentity.PublicKey.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pniPrivBytes, err := pniIdentity.PrivateKey.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Provision message payload with real keys.
 	number := "+15551234567"
 	code := "provision-code-xyz"
 	aciStr := "aci-uuid-1234"
+	pniStr := "pni-uuid-5678"
 	provMsg := &proto.ProvisionMessage{
 		Number:                &number,
 		ProvisioningCode:      &code,
 		Aci:                   &aciStr,
-		AciIdentityKeyPublic:  []byte{0x05, 0x01, 0x02},
-		AciIdentityKeyPrivate: []byte{0x03, 0x04},
+		Pni:                   &pniStr,
+		AciIdentityKeyPublic:  aciPubBytes,
+		AciIdentityKeyPrivate: aciPrivBytes,
+		PniIdentityKeyPublic:  pniPubBytes,
+		PniIdentityKeyPrivate: pniPrivBytes,
 	}
 	provMsgBytes, err := pb.Marshal(provMsg)
 	if err != nil {
@@ -58,7 +95,40 @@ func TestClientLink(t *testing.T) {
 	// Channel to pass the secondary's public key from QR callback to server.
 	pubKeyCh := make(chan []byte, 1)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Mock REST API server for registration.
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/devices/link" && r.Method == http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			var req signalservice.RegisterRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Errorf("unmarshal register: %v", err)
+				w.WriteHeader(500)
+				return
+			}
+			if req.VerificationCode != code {
+				t.Errorf("verificationCode: got %q, want %q", req.VerificationCode, code)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(signalservice.RegisterResponse{
+				UUID:     aciStr,
+				PNI:      pniStr,
+				DeviceID: 2,
+			})
+
+		case r.URL.Path == "/v2/keys" && r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			t.Errorf("unexpected API request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer apiSrv.Close()
+
+	// Mock WebSocket server for provisioning.
+	wsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			t.Errorf("accept: %v", err)
@@ -127,11 +197,14 @@ func TestClientLink(t *testing.T) {
 
 		ws.Close(websocket.StatusNormalClosure, "done")
 	}))
-	defer srv.Close()
+	defer wsSrv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	wsURL := "ws" + strings.TrimPrefix(wsSrv.URL, "http")
 
-	client := NewClient(WithProvisioningURL(wsURL))
+	client := NewClient(
+		WithProvisioningURL(wsURL),
+		WithAPIURL(apiSrv.URL),
+	)
 
 	// Extract pub key from QR URI in callback.
 	err = client.Link(context.Background(), func(uri string) {
@@ -153,6 +226,10 @@ func TestClientLink(t *testing.T) {
 
 	if client.Number() != number {
 		t.Fatalf("number: got %q, want %q", client.Number(), number)
+	}
+
+	if client.DeviceID() != 2 {
+		t.Fatalf("deviceId: got %d, want 2", client.DeviceID())
 	}
 }
 

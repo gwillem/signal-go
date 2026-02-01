@@ -113,6 +113,26 @@ func (r *SignedPreKeyRecord) ID() (uint32, error) {
 	return uint32(out), nil
 }
 
+// PublicKey returns the public key from this signed pre-key record.
+func (r *SignedPreKeyRecord) PublicKey() (*PublicKey, error) {
+	var out C.SignalMutPointerPublicKey
+	cPtr := C.SignalConstPointerSignedPreKeyRecord{raw: r.ptr}
+	if err := wrapError(C.signal_signed_pre_key_record_get_public_key(&out, cPtr)); err != nil {
+		return nil, err
+	}
+	return &PublicKey{ptr: out.raw}, nil
+}
+
+// Signature returns the signature from this signed pre-key record.
+func (r *SignedPreKeyRecord) Signature() ([]byte, error) {
+	var buf C.SignalOwnedBuffer
+	cPtr := C.SignalConstPointerSignedPreKeyRecord{raw: r.ptr}
+	if err := wrapError(C.signal_signed_pre_key_record_get_signature(&buf, cPtr)); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(buf), nil
+}
+
 // Serialize returns the serialized form.
 func (r *SignedPreKeyRecord) Serialize() ([]byte, error) {
 	var buf C.SignalOwnedBuffer

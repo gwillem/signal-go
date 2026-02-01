@@ -112,3 +112,78 @@ func TestSignedPreKeyRecordRoundTrip(t *testing.T) {
 		t.Fatal("signed pre-key record round-trip mismatch")
 	}
 }
+
+func TestSignedPreKeyRecordGetters(t *testing.T) {
+	identityPriv, err := GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identityPriv.Destroy()
+
+	priv, err := GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Destroy()
+
+	pub, err := priv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Destroy()
+
+	pubBytes, err := pub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sig, err := identityPriv.Sign(pubBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := NewSignedPreKeyRecord(42, 1000000, pub, priv, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rec.Destroy()
+
+	// Test PublicKey getter
+	gotPub, err := rec.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gotPub.Destroy()
+
+	gotPubBytes, err := gotPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(pubBytes, gotPubBytes) {
+		t.Fatal("public key mismatch")
+	}
+
+	// Test Signature getter
+	gotSig, err := rec.Signature()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(sig, gotSig) {
+		t.Fatal("signature mismatch")
+	}
+
+	// Verify signature is valid
+	identityPub, err := identityPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identityPub.Destroy()
+
+	valid, err := identityPub.Verify(pubBytes, gotSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !valid {
+		t.Fatal("signature should be valid")
+	}
+}

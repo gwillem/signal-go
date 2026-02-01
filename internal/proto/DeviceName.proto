@@ -1,0 +1,16 @@
+/*
+ * Copyright 2020 Signal Messenger, LLC
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+syntax = "proto2";
+
+package signalservice;
+
+option go_package = "github.com/gwillem/signal-go/internal/proto";
+
+message DeviceName {
+  optional bytes ephemeralPublic = 1;
+  optional bytes syntheticIv = 2;
+  optional bytes ciphertext = 3;
+}
