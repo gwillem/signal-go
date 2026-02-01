@@ -8,11 +8,12 @@ Go library for Signal messenger, replacing the Java signal-cli dependency. Licen
 
 ## Architecture
 
-- `pkg/libsignal/` — CGO bindings to libsignal's Rust C FFI (Phase 1, complete)
-- `pkg/proto/` — Protobuf definitions and generated Go code (Provisioning, WebSocket)
-- `pkg/provisioncrypto/` — Provisioning envelope encrypt/decrypt (HKDF, AES-CBC, HMAC, PKCS7)
-- `pkg/signalws/` — Protobuf-framed WebSocket layer
-- `pkg/signalservice/` — Provisioning orchestration, device link URI
+- `client.go` — Public API: `Client` with `Link`, `Number`
+- `internal/libsignal/` — CGO bindings to libsignal's Rust C FFI (Phase 1, complete)
+- `internal/proto/` — Protobuf definitions and generated Go code (Provisioning, WebSocket)
+- `internal/provisioncrypto/` — Provisioning envelope encrypt/decrypt (HKDF, AES-CBC, HMAC, PKCS7)
+- `internal/signalws/` — Protobuf-framed WebSocket layer
+- `internal/signalservice/` — Provisioning orchestration, device link URI
 - `docs/` — Phase plans and architecture docs
 
 ## Prerequisites
@@ -55,6 +56,7 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 
 | File | Purpose |
 |---|---|
+| `client.go` | Public API: Client, Link, Number |
 | `libsignal.go` | CGO preamble (LDFLAGS, includes) |
 | `error.go` | FFI error wrapping, owned buffer handling |
 | `privatekey.go` | PrivateKey: generate, serialize, sign, agree |

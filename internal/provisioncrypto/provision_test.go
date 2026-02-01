@@ -6,7 +6,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/gwillem/signal-go/pkg/libsignal"
+	"github.com/gwillem/signal-go/internal/libsignal"
 )
 
 // encryptProvisionBody simulates primary-side encryption of a provisioning message.

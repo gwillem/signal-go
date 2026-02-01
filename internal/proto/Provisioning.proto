@@ -7,7 +7,7 @@ syntax = "proto2";
 
 package signalservice;
 
-option go_package = "github.com/gwillem/signal-go/pkg/proto";
+option go_package = "github.com/gwillem/signal-go/internal/proto";
 
 // An opaque address sent by the server when clients first open a provisioning
 // WebSocket

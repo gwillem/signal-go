@@ -13,9 +13,9 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/gwillem/signal-go/pkg/libsignal"
-	"github.com/gwillem/signal-go/pkg/proto"
-	"github.com/gwillem/signal-go/pkg/provisioncrypto"
+	"github.com/gwillem/signal-go/internal/libsignal"
+	"github.com/gwillem/signal-go/internal/proto"
+	"github.com/gwillem/signal-go/internal/provisioncrypto"
 	pb "google.golang.org/protobuf/proto"
 )
 

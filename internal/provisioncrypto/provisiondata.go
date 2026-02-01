@@ -3,7 +3,7 @@ package provisioncrypto
 import (
 	"fmt"
 
-	"github.com/gwillem/signal-go/pkg/proto"
+	"github.com/gwillem/signal-go/internal/proto"
 	pb "google.golang.org/protobuf/proto"
 )
 

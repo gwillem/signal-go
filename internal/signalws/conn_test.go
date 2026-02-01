@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/gwillem/signal-go/pkg/proto"
+	"github.com/gwillem/signal-go/internal/proto"
 	pb "google.golang.org/protobuf/proto"
 )
 

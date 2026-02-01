@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gwillem/signal-go/pkg/libsignal"
-	"github.com/gwillem/signal-go/pkg/proto"
-	"github.com/gwillem/signal-go/pkg/provisioncrypto"
-	"github.com/gwillem/signal-go/pkg/signalws"
+	"github.com/gwillem/signal-go/internal/libsignal"
+	"github.com/gwillem/signal-go/internal/proto"
+	"github.com/gwillem/signal-go/internal/provisioncrypto"
+	"github.com/gwillem/signal-go/internal/signalws"
 	pb "google.golang.org/protobuf/proto"
 )
 

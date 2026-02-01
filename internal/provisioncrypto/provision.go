@@ -3,7 +3,7 @@ package provisioncrypto
 import (
 	"fmt"
 
-	"github.com/gwillem/signal-go/pkg/libsignal"
+	"github.com/gwillem/signal-go/internal/libsignal"
 )
 
 const (

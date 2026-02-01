@@ -18,11 +18,11 @@ Source: `../Signal-Android/lib/libsignal-service/src/main/protowire/`
 | `WebSocketResources.proto` | `WebSocketMessage`, `WebSocketRequestMessage`, `WebSocketResponseMessage` | Done    |
 | `SignalService.proto`      | `Envelope`, `Content`, `DataMessage`, `SyncMessage`, `ReceiptMessage`     | Not yet |
 
-Generated into `pkg/proto/` using `protoc --go_out` with `paths=source_relative`. Run `make proto` to regenerate.
+Generated into `internal/proto/` using `protoc --go_out` with `paths=source_relative`. Run `make proto` to regenerate.
 
-Each `.proto` file has `option go_package = "github.com/gwillem/signal-go/pkg/proto";` added. Signal-Android uses Square Wire for proto compilation; the files needed only this one-line addition for `protoc-gen-go` compatibility.
+Each `.proto` file has `option go_package = "github.com/gwillem/signal-go/internal/proto";` added. Signal-Android uses Square Wire for proto compilation; the files needed only this one-line addition for `protoc-gen-go` compatibility.
 
-## HTTP client (`pkg/signalservice/client.go`)
+## HTTP client (`internal/signalservice/client.go`)
 
 REST client for Signal's API at `https://chat.signal.org`.
 
@@ -39,7 +39,7 @@ Endpoints needed for minimal scope:
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/push/PushServiceSocket.java`
 
-## WebSocket (`pkg/signalws/`)
+## WebSocket (`internal/signalws/`)
 
 **Status: COMPLETE** (basic framing). Keep-alive and reconnection deferred.
 
@@ -50,7 +50,7 @@ Two connection types:
 
 Protocol: each frame is a `WebSocketMessage` protobuf. Server sends `WebSocketRequestMessage` (new messages); client responds with `WebSocketResponseMessage` (status 200 to ACK).
 
-Implementation: `pkg/signalws/conn.go` wraps `github.com/coder/websocket` with protobuf marshaling. Provides `Dial`, `ReadMessage`, `WriteMessage`, `SendResponse`. Tested with `httptest` WebSocket server.
+Implementation: `internal/signalws/conn.go` wraps `github.com/coder/websocket` with protobuf marshaling. Provides `Dial`, `ReadMessage`, `WriteMessage`, `SendResponse`. Tested with `httptest` WebSocket server.
 
 Keep-alive (every 30s, expect response within 20s) and reconnection are deferred to the message receiving phase.
 
@@ -123,7 +123,7 @@ Step 13: Request sync data from primary — NOT STARTED
 
 ### Implementation details
 
-Provisioning crypto is split into its own package (`pkg/provisioncrypto/`) separate from transport (`pkg/signalws/`), making the full decrypt pipeline testable with synthetic test vectors and no network. The end-to-end test in `pkg/signalservice/provisioning_test.go` uses an `httptest` WebSocket server that simulates the primary device: performs real ECDH key agreement, encrypts a ProvisionMessage, and sends it through the WebSocket. The secondary side decrypts and parses it, validating the full flow.
+Provisioning crypto is split into its own package (`internal/provisioncrypto/`) separate from transport (`internal/signalws/`), making the full decrypt pipeline testable with synthetic test vectors and no network. The end-to-end test in `internal/signalservice/provisioning_test.go` uses an `httptest` WebSocket server that simulates the primary device: performs real ECDH key agreement, encrypts a ProvisionMessage, and sends it through the WebSocket. The secondary side decrypts and parses it, validating the full flow.
 
 Key insight: the provisioning envelope body uses `version(1) || iv(16) || ciphertext || mac(32)` wire format, where the MAC covers `version || iv || ciphertext` (everything except the MAC itself). This is verified before decryption (encrypt-then-MAC pattern).
 
@@ -133,9 +133,10 @@ Key insight: the link URI uses URL-safe base64 (`base64.URLEncoding`) for the pu
 
 | Package                | Purpose                                                                   |
 | ---------------------- | ------------------------------------------------------------------------- |
-| `pkg/provisioncrypto/` | PKCS7, HKDF, HMAC, AES-CBC, envelope decrypt, ProvisionData parsing       |
-| `pkg/signalws/`        | Protobuf-framed WebSocket (Dial, ReadMessage, WriteMessage, SendResponse) |
-| `pkg/signalservice/`   | Orchestration: RunProvisioning, DeviceLinkURI                             |
+| `internal/provisioncrypto/` | PKCS7, HKDF, HMAC, AES-CBC, envelope decrypt, ProvisionData parsing       |
+| `internal/signalws/`        | Protobuf-framed WebSocket (Dial, ReadMessage, WriteMessage, SendResponse) |
+| `client.go`          | Public API: Client with Link, Send, Receive                              |
+| `internal/signalservice/`   | Orchestration: RunProvisioning, DeviceLinkURI                             |
 
 Reference files in Signal-Android:
 
@@ -143,7 +144,7 @@ Reference files in Signal-Android:
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/provisioning/ProvisioningApi.kt`
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/crypto/PrimaryProvisioningCipher.java`
 
-## Message sending (`pkg/signalservice/sender.go`)
+## Message sending (`internal/signalservice/sender.go`)
 
 ```
 Step 1:  Build Content protobuf
@@ -171,7 +172,7 @@ Step 7:  PUT /v1/messages/{destination}
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageSender.java`
 
-## Message receiving (`pkg/signalservice/receiver.go`)
+## Message receiving (`internal/signalservice/receiver.go`)
 
 ```
 Step 1:  Connect authenticated WebSocket
@@ -197,7 +198,7 @@ Step 7:  Emit to consumer via channel or callback
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageReceiver.java`
 
-## Persistent storage (`pkg/store/sqlite/`)
+## Persistent storage (`internal/store/sqlite/`)
 
 SQLite via `modernc.org/sqlite` (pure Go). Tables:
 
@@ -210,31 +211,31 @@ SQLite via `modernc.org/sqlite` (pure Go). Tables:
 | `kyber_pre_key`  | id, key_pair (BLOB), signature, timestamp                                                                    | Post-quantum (Kyber) pre-keys |
 | `identity`       | address, identity_key, trust_level                                                                           | Recipient identity keys       |
 
-All stores implement interfaces from `pkg/libsignal/store.go`.
+All stores implement interfaces from `internal/libsignal/store.go`.
 
-## Demo CLI (`cmd/signal-link/`)
+## Public API (`client.go`)
+
+The root `signal` package provides a `Client` that wraps all internal packages behind a simple interface:
 
 ```go
-func main() {
-    pm := signalservice.NewProvisioningManager()
-    uri, _ := pm.GetDeviceLinkURI(ctx)
-    fmt.Println("Scan this QR code with your phone:")
+client := signal.NewClient()
+
+// Link as secondary device — blocks until QR is scanned
+err := client.Link(ctx, func(uri string) {
     qrterminal.Generate(uri, os.Stdout)
+})
+fmt.Println("Linked to", client.Number())
 
-    account, _ := pm.WaitAndFinish(ctx, "signal-go")
-    fmt.Printf("Linked as device %d for %s\n", account.DeviceID, account.Number)
+// Send a message (not yet implemented)
+err = client.Send(ctx, "+31612345678", "Hello from signal-go!")
 
-    // Send a test message
-    sender := signalservice.NewSender(account, stores)
-    sender.Send(ctx, recipientUUID, "Hello from signal-go!")
-
-    // Receive messages
-    receiver := signalservice.NewReceiver(account, stores)
-    for msg := range receiver.Receive(ctx) {
-        fmt.Printf("[%s] %s: %s\n", msg.Timestamp, msg.Sender, msg.Body)
-    }
+// Receive messages (not yet implemented)
+for msg := range client.Receive(ctx) {
+    fmt.Printf("[%s] %s: %s\n", msg.Timestamp, msg.From, msg.Body)
 }
 ```
+
+`Client.Link()` internally calls `signalservice.RunProvisioning()` with the correct WebSocket URL and stores the resulting credentials. The caller only needs to display the QR code URI.
 
 ## Implementation order (TDD — tiny steps)
 
@@ -252,10 +253,10 @@ Each step is independently testable and committable. Phase 1 provides the follow
 
 | Step  | Files        | Test proves                                                                         |
 | ----- | ------------ | ----------------------------------------------------------------------------------- |
-| G1 ✅ | `pkg/proto/` | Copy proto files, `protoc` generates Go code                                        |
-| G2    | `pkg/proto/` | Construct a `DataMessage{body: "hi", timestamp: 123}`, marshal/unmarshal round-trip |
-| G3 ✅ | `pkg/proto/` | Construct `WebSocketMessage` wrapping a `WebSocketRequestMessage`, round-trip       |
-| G4 ✅ | `pkg/proto/` | Construct `ProvisionEnvelope` + `ProvisionMessage`, round-trip                      |
+| G1 ✅ | `internal/proto/` | Copy proto files, `protoc` generates Go code                                        |
+| G2    | `internal/proto/` | Construct a `DataMessage{body: "hi", timestamp: 123}`, marshal/unmarshal round-trip |
+| G3 ✅ | `internal/proto/` | Construct `WebSocketMessage` wrapping a `WebSocketRequestMessage`, round-trip       |
+| G4 ✅ | `internal/proto/` | Construct `ProvisionEnvelope` + `ProvisionMessage`, round-trip                      |
 
 Note: G2 deferred — `SignalService.proto` not yet copied (needed for message send/receive phase). G1 uses `protoc --go_out` instead of `buf generate`.
 
@@ -263,8 +264,8 @@ Note: G2 deferred — `SignalService.proto` not yet copied (needed for message s
 
 | Step  | Files                  | Test proves                                                          |
 | ----- | ---------------------- | -------------------------------------------------------------------- |
-| H1 ✅ | `pkg/signalws/conn.go` | Connect to local `httptest` server, send/receive protobuf messages   |
-| H2 ✅ | `pkg/signalws/conn.go` | Read `WebSocketMessage` request, send ACK response                   |
+| H1 ✅ | `internal/signalws/conn.go` | Connect to local `httptest` server, send/receive protobuf messages   |
+| H2 ✅ | `internal/signalws/conn.go` | Read `WebSocketMessage` request, send ACK response                   |
 | H3    | —                      | Keep-alive ping/pong every 30s (deferred to message receiving phase) |
 | H4    | —                      | Reconnect on disconnect (deferred to message receiving phase)        |
 
@@ -272,16 +273,16 @@ Note: G2 deferred — `SignalService.proto` not yet copied (needed for message s
 
 | Step   | Files                                       | Test proves                                                                                 |
 | ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| I1 ✅  | `pkg/signalservice/provisioning.go`         | Generate temp EC key pair (in RunProvisioning)                                              |
-| I2 ✅  | `pkg/signalservice/linkuri.go`              | Format `sgnl://linkdevice?uuid={uuid}&pub_key={base64url}` URI correctly                    |
-| I3 ✅  | `pkg/provisioncrypto/provision.go`          | ECDH shared secret via `PrivateKey.Agree(publicKey)`                                        |
-| I4 ✅  | `pkg/provisioncrypto/kdf.go`                | HKDF derive AES+MAC keys from shared secret (deterministic output)                          |
-| I5 ✅  | `pkg/provisioncrypto/mac.go`                | Verify HMAC-SHA256, reject tampered MAC/data                                                |
-| I6 ✅  | `pkg/provisioncrypto/aescbc.go`, `pkcs7.go` | AES-256-CBC decrypt + PKCS7 unpad, reject bad ciphertext                                    |
-| I7 ✅  | `pkg/provisioncrypto/provision.go`          | Full provisioning decrypt: key pair + envelope → plaintext                                  |
-| I8 ✅  | `pkg/provisioncrypto/provisiondata.go`      | Parse ProvisionMessage → ProvisionData, validate required fields                            |
+| I1 ✅  | `internal/signalservice/provisioning.go`         | Generate temp EC key pair (in RunProvisioning)                                              |
+| I2 ✅  | `internal/signalservice/linkuri.go`              | Format `sgnl://linkdevice?uuid={uuid}&pub_key={base64url}` URI correctly                    |
+| I3 ✅  | `internal/provisioncrypto/provision.go`          | ECDH shared secret via `PrivateKey.Agree(publicKey)`                                        |
+| I4 ✅  | `internal/provisioncrypto/kdf.go`                | HKDF derive AES+MAC keys from shared secret (deterministic output)                          |
+| I5 ✅  | `internal/provisioncrypto/mac.go`                | Verify HMAC-SHA256, reject tampered MAC/data                                                |
+| I6 ✅  | `internal/provisioncrypto/aescbc.go`, `pkcs7.go` | AES-256-CBC decrypt + PKCS7 unpad, reject bad ciphertext                                    |
+| I7 ✅  | `internal/provisioncrypto/provision.go`          | Full provisioning decrypt: key pair + envelope → plaintext                                  |
+| I8 ✅  | `internal/provisioncrypto/provisiondata.go`      | Parse ProvisionMessage → ProvisionData, validate required fields                            |
 | I9     | —                                           | Encrypt device name (AES-256-GCM with HKDF from ACI private key) — deferred to registration |
-| I10 ✅ | `pkg/signalservice/provisioning.go`         | Full provisioning flow against mock WebSocket (end-to-end with real crypto)                 |
+| I10 ✅ | `internal/signalservice/provisioning.go`         | Full provisioning flow against mock WebSocket (end-to-end with real crypto)                 |
 
 ### J. HTTP client
 
@@ -317,14 +318,14 @@ Note: G2 deferred — `SignalService.proto` not yet copied (needed for message s
 
 | Step | Files               | Test proves                                                                   |
 | ---- | ------------------- | ----------------------------------------------------------------------------- |
-| M1   | `pkg/store/sqlite/` | Create database, run migrations, tables exist                                 |
-| M2   | `pkg/store/sqlite/` | `SessionStore` CRUD: store, load, overwrite                                   |
-| M3   | `pkg/store/sqlite/` | `IdentityKeyStore` CRUD: save, get, trust check                               |
-| M4   | `pkg/store/sqlite/` | `PreKeyStore` CRUD: store, load, remove                                       |
-| M5   | `pkg/store/sqlite/` | `SignedPreKeyStore` CRUD: store, load                                         |
-| M6   | `pkg/store/sqlite/` | `KyberPreKeyStore` CRUD: store, load, mark-used                               |
-| M7   | `pkg/store/sqlite/` | `Account` table: save and load credentials                                    |
-| M8   | `pkg/store/sqlite/` | All SQLite stores pass same tests as in-memory stores (interface conformance) |
+| M1   | `internal/store/sqlite/` | Create database, run migrations, tables exist                                 |
+| M2   | `internal/store/sqlite/` | `SessionStore` CRUD: store, load, overwrite                                   |
+| M3   | `internal/store/sqlite/` | `IdentityKeyStore` CRUD: save, get, trust check                               |
+| M4   | `internal/store/sqlite/` | `PreKeyStore` CRUD: store, load, remove                                       |
+| M5   | `internal/store/sqlite/` | `SignedPreKeyStore` CRUD: store, load                                         |
+| M6   | `internal/store/sqlite/` | `KyberPreKeyStore` CRUD: store, load, mark-used                               |
+| M7   | `internal/store/sqlite/` | `Account` table: save and load credentials                                    |
+| M8   | `internal/store/sqlite/` | All SQLite stores pass same tests as in-memory stores (interface conformance) |
 
 ### N. Integration
 
@@ -339,8 +340,8 @@ Note: G2 deferred — `SignalService.proto` not yet copied (needed for message s
 
 ### Differences from original plan
 
-- **Package layout changed:** Crypto split into `pkg/provisioncrypto/` (pure Go, no network) separate from `pkg/signalws/` (WebSocket transport) and `pkg/signalservice/` (orchestration). This makes the full decrypt pipeline testable with synthetic test vectors.
-- **`protoc` instead of `buf`:** Using `protoc --go_out` with `paths=source_relative` directly. No need for `buf.yaml` / `buf.gen.yaml` config. Proto files go into `pkg/proto/` (not `pkg/proto/gen/`).
+- **Package layout changed:** Crypto split into `internal/provisioncrypto/` (pure Go, no network) separate from `internal/signalws/` (WebSocket transport) and `internal/signalservice/` (orchestration). This makes the full decrypt pipeline testable with synthetic test vectors.
+- **`protoc` instead of `buf`:** Using `protoc --go_out` with `paths=source_relative` directly. No need for `buf.yaml` / `buf.gen.yaml` config. Proto files go into `internal/proto/` (not `internal/proto/gen/`).
 - **`github.com/coder/websocket` instead of `nhooyr.io/websocket`:** The nhooyr.io package is deprecated; the maintainer moved to `github.com/coder/websocket` with the same API.
 - **WebSocket request paths:** The provisioning server sends `PUT /v1/address` (address) and `PUT /v1/message` (envelope). The body of each is a protobuf (`ProvisioningAddress` and `ProvisionEnvelope` respectively).
 - **URL-safe base64:** The device link URI uses `base64.URLEncoding` (RFC 4648 §5) for the public key, not standard base64. This avoids `+` and `/` characters in the URI.

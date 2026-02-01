@@ -1,1 +1,2 @@
-pkg/libsignal/libsignal-ffi.h
+internal/libsignal/libsignal-ffi.h
+.vscode
