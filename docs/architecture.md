@@ -105,14 +105,27 @@ signal-go/
 │   │   ├── pointer.go             # Handle map for Go→C→Go pointer passing
 │   │   ├── memstore.go            # In-memory store implementations (testing)
 │   │   └── protocol.go            # ProcessPreKeyBundle, Encrypt, Decrypt
-│   ├── signalservice/              # Signal server protocol — NOT STARTED (Phase 2)
-│   │   ├── client.go              # HTTP client (REST API)
-│   │   ├── websocket.go           # WebSocket framing
-│   │   ├── provisioning.go        # Device linking
-│   │   ├── sender.go              # Message sending
-│   │   ├── cipher.go              # Envelope encrypt/decrypt
-│   │   └── receiver.go            # Message receive loop
-│   ├── proto/                      # Protobuf definitions + generated code
+│   ├── proto/                      # Protobuf definitions + generated Go code (Phase 2)
+│   │   ├── Provisioning.proto     # ProvisionEnvelope, ProvisionMessage, ProvisioningAddress
+│   │   ├── WebSocketResources.proto # WebSocketMessage, Request, Response
+│   │   ├── Provisioning.pb.go    # Generated
+│   │   ├── WebSocketResources.pb.go # Generated
+│   │   └── generate.go            # go:generate directive for protoc
+│   ├── provisioncrypto/            # Provisioning envelope crypto (Phase 2, complete)
+│   │   ├── pkcs7.go               # PKCS#7 pad/unpad
+│   │   ├── kdf.go                 # HKDF-SHA256 key derivation
+│   │   ├── mac.go                 # HMAC-SHA256 compute + verify
+│   │   ├── aescbc.go              # AES-256-CBC encrypt/decrypt
+│   │   ├── provision.go           # Full envelope decrypt pipeline
+│   │   └── provisiondata.go       # ProvisionMessage → ProvisionData parsing
+│   ├── signalws/                   # WebSocket framing layer (Phase 2, complete)
+│   │   └── conn.go                # Protobuf-framed read/write/ACK over WebSocket
+│   ├── signalservice/              # Signal server protocol (Phase 2, in progress)
+│   │   ├── linkuri.go             # Device link URI formatting
+│   │   ├── provisioning.go        # Provisioning orchestration (complete)
+│   │   ├── client.go              # HTTP client (REST API) — not started
+│   │   ├── sender.go              # Message sending — not started
+│   │   └── receiver.go            # Message receive loop — not started
 │   └── store/
 │       └── sqlite/                 # Persistent store (modernc.org/sqlite)
 └── cmd/
@@ -123,14 +136,16 @@ signal-go/
 
 Phase 1 has zero external Go dependencies (CGO only).
 
-Phase 2 will add:
+Phase 2 adds:
 
-| Dependency | Purpose |
-|---|---|
-| `google.golang.org/protobuf` | Protobuf runtime |
-| `nhooyr.io/websocket` | WebSocket client |
-| `golang.org/x/crypto` | HKDF, curve25519 (provisioning crypto) |
-| `modernc.org/sqlite` | Pure-Go SQLite for persistent storage |
+| Dependency | Purpose | Status |
+|---|---|---|
+| `google.golang.org/protobuf` | Protobuf runtime | Added |
+| `github.com/coder/websocket` | WebSocket client | Added |
+| `golang.org/x/crypto` | HKDF (provisioning key derivation) | Added |
+| `modernc.org/sqlite` | Pure-Go SQLite for persistent storage | Not yet |
+
+Note: `nhooyr.io/websocket` was the original plan but it is deprecated — the maintainer moved to `github.com/coder/websocket` (same API).
 
 ## Key technical challenges
 

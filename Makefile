@@ -3,7 +3,7 @@ LIBSIGNAL_FFI := $(LIBSIGNAL_DIR)/target/release/libsignal_ffi.a
 HEADER         := pkg/libsignal/libsignal-ffi.h
 NIGHTLY_BIN   := $(HOME)/.rustup/toolchains/nightly-aarch64-apple-darwin/bin
 
-.PHONY: build test clean
+.PHONY: build test clean proto
 
 build: $(LIBSIGNAL_FFI) $(HEADER)
 
@@ -12,6 +12,9 @@ $(LIBSIGNAL_FFI): $(LIBSIGNAL_DIR)/rust/bridge/ffi/Cargo.toml
 
 $(HEADER): $(LIBSIGNAL_FFI)
 	PATH="$(NIGHTLY_BIN):$(HOME)/.cargo/bin:$$PATH" cbindgen --profile release $(LIBSIGNAL_DIR)/rust/bridge/ffi -o $(HEADER)
+
+proto:
+	protoc --go_out=. --go_opt=paths=source_relative pkg/proto/Provisioning.proto pkg/proto/WebSocketResources.proto
 
 test: build
 	CGO_LDFLAGS_ALLOW='-Wl,-w' CGO_LDFLAGS='-Wl,-w' go test ./...
