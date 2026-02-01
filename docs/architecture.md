@@ -44,9 +44,9 @@ for msg := range client.Receive(ctx) {
 
 ```
 ┌─────────────────────────────────────────────┐
-│  cmd/signal-link         (demo CLI app)     │
-│  - link as secondary device                 │
-│  - send and receive text messages           │
+│  cmd/sig                 (CLI app)          │
+│  - sig link: link as secondary device       │
+│  - sig send: send text messages             │
 ├─────────────────────────────────────────────┤
 │  client.go                  (public API)  │
 │  - Client: Link, Send, Receive              │
@@ -156,7 +156,7 @@ signal-go/
 │   └── store/
 │       └── sqlite/                 # Persistent store (modernc.org/sqlite)
 └── cmd/
-    └── signal-link/                # Demo: link + send + receive
+    └── sig/                        # CLI: link + send + receive
 ```
 
 ## Dependencies
