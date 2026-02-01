@@ -12,7 +12,7 @@ Go library for Signal messenger, replacing the Java signal-cli dependency. Licen
 - `internal/libsignal/` — CGO bindings to libsignal's Rust C FFI (Phase 1, complete)
 - `internal/proto/` — Protobuf definitions and generated Go code (Provisioning, WebSocket, DeviceName, SignalService)
 - `internal/provisioncrypto/` — Provisioning envelope encrypt/decrypt (HKDF, AES-CBC, HMAC, PKCS7), device name encryption
-- `internal/signalws/` — Protobuf-framed WebSocket layer
+- `internal/signalws/` — Protobuf-framed WebSocket layer with keep-alive and reconnection
 - `internal/signalservice/` — Provisioning orchestration, device registration, HTTP client, pre-key generation, message sending
 - `internal/store/` — SQLite persistent storage (sessions, identity keys, pre-keys, account credentials)
 - `docs/` — Phase plans and architecture docs
@@ -76,6 +76,7 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `pointer.go` | Handle map for Go→C→Go pointer passing |
 | `protocol.go` | ProcessPreKeyBundle, Encrypt, Decrypt |
 | `internal/provisioncrypto/devicename.go` | Device name encrypt/decrypt (DeviceNameCipher) |
+| `internal/signalws/persistent.go` | PersistentConn: keep-alive heartbeats + automatic reconnection |
 | `internal/signalservice/keygen.go` | Pre-key set generation (signed EC + Kyber) |
 | `internal/signalservice/httpclient.go` | HTTP client for Signal REST API (register, pre-keys, send) |
 | `internal/signalservice/httptypes.go` | JSON request/response types for all endpoints |

@@ -41,7 +41,7 @@ Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersys
 
 ## WebSocket (`internal/signalws/`)
 
-**Status: COMPLETE** (basic framing). Keep-alive and reconnection deferred.
+**Status: COMPLETE** — basic framing + persistent connection with keep-alive heartbeats and automatic reconnection.
 
 Two connection types:
 
@@ -52,7 +52,10 @@ Protocol: each frame is a `WebSocketMessage` protobuf. Server sends `WebSocketRe
 
 Implementation: `internal/signalws/conn.go` wraps `github.com/coder/websocket` with protobuf marshaling. Provides `Dial`, `ReadMessage`, `WriteMessage`, `SendResponse`. Tested with `httptest` WebSocket server.
 
-Keep-alive (every 30s, expect response within 20s) and reconnection are deferred to the message receiving phase.
+`PersistentConn` (`internal/signalws/persistent.go`) wraps `Conn` for long-lived connections:
+- **Keep-alive**: Sends `GET /v1/keepalive` every 30s (configurable). Keep-alive responses are consumed internally and not returned to the caller.
+- **Timeout**: If no keep-alive response within 20s (configurable), forces reconnect.
+- **Reconnect**: On read error or keep-alive timeout, re-dials with same URL/TLS config and resumes.
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/websocket/SignalWebSocket.kt`
 
@@ -269,8 +272,8 @@ Note: G1 uses `protoc --go_out` instead of `buf generate`.
 | ----- | ---------------------- | -------------------------------------------------------------------- |
 | H1 ✅ | `internal/signalws/conn.go` | Connect to local `httptest` server, send/receive protobuf messages   |
 | H2 ✅ | `internal/signalws/conn.go` | Read `WebSocketMessage` request, send ACK response                   |
-| H3    | —                      | Keep-alive ping/pong every 30s (deferred to message receiving phase) |
-| H4    | —                      | Reconnect on disconnect (deferred to message receiving phase)        |
+| H3 ✅ | `internal/signalws/persistent.go` | Keep-alive GET /v1/keepalive every 30s, timeout triggers reconnect   |
+| H4 ✅ | `internal/signalws/persistent.go` | Reconnect on disconnect, preserve URL, Close() stops reconnect       |
 
 ### I. Provisioning (device linking)
 
@@ -334,10 +337,10 @@ Note: G1 uses `protoc --go_out` instead of `buf generate`.
 
 | Step | Files              | Test proves                                                    |
 | ---- | ------------------ | -------------------------------------------------------------- |
-| N1   | `cmd/signal-link/` | CLI scaffolding: parse flags, print usage                      |
-| N2   | `cmd/signal-link/` | Link to real Signal account (manual test, QR code in terminal) |
-| N3   | `cmd/signal-link/` | Send a real text message                                       |
-| N4   | `cmd/signal-link/` | Receive and print real text messages                           |
+| N1   | `cmd/sig/` | CLI scaffolding: subcommands (link, send) with go-flags        |
+| N2   | `cmd/sig/` | Link to real Signal account (manual test, QR code in terminal) |
+| N3   | `cmd/sig/` | Send a real text message                                       |
+| N4   | `cmd/sig/` | Receive and print real text messages                           |
 
 ## Implementation notes
 
