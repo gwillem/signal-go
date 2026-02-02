@@ -130,6 +130,65 @@ func (c *HTTPClient) SendMessage(ctx context.Context, destination string, msg *O
 	return nil
 }
 
+// SetAccountAttributes calls PUT /v1/accounts/attributes/ to update account attributes.
+func (c *HTTPClient) SetAccountAttributes(ctx context.Context, attrs *AccountAttributes, auth BasicAuth) error {
+	body, err := json.Marshal(attrs)
+	if err != nil {
+		return fmt.Errorf("httpclient: marshal attributes: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/accounts/attributes/", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("httpclient: set attributes: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("httpclient: set attributes: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	return nil
+}
+
+// GetDevices calls GET /v1/devices/ to list registered devices for this account.
+func (c *HTTPClient) GetDevices(ctx context.Context, auth BasicAuth) ([]DeviceInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/devices/", nil)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: get devices: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get devices: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result DeviceListResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal devices: %w", err)
+	}
+
+	return result.Devices, nil
+}
+
 // UploadPreKeys calls PUT /v2/keys?identity={aci|pni} to upload pre-keys.
 func (c *HTTPClient) UploadPreKeys(ctx context.Context, identity string, keys *PreKeyUpload, auth BasicAuth) error {
 	body, err := json.Marshal(keys)

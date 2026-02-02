@@ -53,6 +53,7 @@ func TestRegisterLinkedDevice(t *testing.T) {
 		ACIIdentityKeyPrivate: aciPrivBytes,
 		PNIIdentityKeyPublic:  pniPubBytes,
 		PNIIdentityKeyPrivate: pniPrivBytes,
+		ProfileKey:            make([]byte, 32), // 32-byte profile key
 	}
 
 	var uploadCount atomic.Int32
@@ -102,6 +103,9 @@ func TestRegisterLinkedDevice(t *testing.T) {
 			if req.ACIPqLastResort.PublicKey == "" {
 				t.Error("aciPqLastResortPreKey.publicKey should not be empty")
 			}
+			if req.AccountAttributes.UnidentifiedAccessKey == "" {
+				t.Error("unidentifiedAccessKey should not be empty")
+			}
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(RegisterResponse{
@@ -149,6 +153,9 @@ func TestRegisterLinkedDevice(t *testing.T) {
 			uploadCount.Add(1)
 			w.WriteHeader(http.StatusNoContent)
 
+		case r.URL.Path == "/v1/accounts/attributes/" && r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusNoContent)
+
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(404)
@@ -173,9 +180,47 @@ func TestRegisterLinkedDevice(t *testing.T) {
 	if result.Password == "" {
 		t.Fatal("password should not be empty")
 	}
+	if result.RegistrationID == 0 {
+		t.Fatal("registrationID should not be 0")
+	}
+	if result.PNIRegistrationID == 0 {
+		t.Fatal("pniRegistrationID should not be 0")
+	}
 
 	// Should have uploaded keys for both ACI and PNI.
 	if got := uploadCount.Load(); got != 2 {
 		t.Fatalf("upload count: got %d, want 2", got)
+	}
+}
+
+func TestDeriveUnidentifiedAccessKey(t *testing.T) {
+	// Profile key of 32 zero bytes should produce a deterministic 16-byte result.
+	profileKey := make([]byte, 32)
+	key, err := DeriveUnidentifiedAccessKey(profileKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(key) != 16 {
+		t.Fatalf("expected 16 bytes, got %d", len(key))
+	}
+
+	// Same input should produce same output (deterministic).
+	key2, err := DeriveUnidentifiedAccessKey(profileKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(key) != string(key2) {
+		t.Fatal("derivation is not deterministic")
+	}
+
+	// Different profile key should produce different output.
+	profileKey2 := make([]byte, 32)
+	profileKey2[0] = 1
+	key3, err := DeriveUnidentifiedAccessKey(profileKey2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(key) == string(key3) {
+		t.Fatal("different profile keys produced same access key")
 	}
 }

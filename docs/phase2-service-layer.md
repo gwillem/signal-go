@@ -1,6 +1,6 @@
 # Phase 2: Signal Service Layer (Pure Go)
 
-**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). SQLite persistent storage and message sending complete. Message receiving not yet started.
+**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). SQLite persistent storage, message sending, and message receiving complete. Sealed sender (UNIDENTIFIED_SENDER) not yet implemented.
 
 Goal: link as secondary device, send text messages, receive text messages. Pure Go implementation of the Signal server protocol, using Phase 1's CGO bindings for crypto.
 
@@ -138,8 +138,8 @@ Key insight: the link URI uses URL-safe base64 (`base64.URLEncoding`) for the pu
 | ---------------------- | ------------------------------------------------------------------------- |
 | `internal/provisioncrypto/` | PKCS7, HKDF, HMAC, AES-CBC, envelope decrypt, ProvisionData parsing, device name encryption |
 | `internal/signalws/`        | Protobuf-framed WebSocket (Dial, ReadMessage, WriteMessage, SendResponse) |
-| `client.go`                 | Public API: Client with Link, Load, Send, Close, Number, DeviceID               |
-| `internal/signalservice/`   | Orchestration: RunProvisioning, RegisterLinkedDevice, SendTextMessage, HTTPClient |
+| `client.go`                 | Public API: Client with Link, Load, Send, Receive, Close, Number, DeviceID       |
+| `internal/signalservice/`   | Orchestration: RunProvisioning, RegisterLinkedDevice, SendTextMessage, ReceiveMessages, HTTPClient |
 | `internal/store/`           | SQLite persistent storage: all 5 store interfaces + Account CRUD                 |
 
 Reference files in Signal-Android:
@@ -314,11 +314,11 @@ Note: G1 uses `protoc --go_out` instead of `buf generate`.
 
 | Step | Files         | Test proves                                                                        |
 | ---- | ------------- | ---------------------------------------------------------------------------------- |
-| L1   | `receiver.go` | Parse `Envelope` from raw bytes                                                    |
-| L2   | `receiver.go` | Decrypt `PREKEY_BUNDLE` envelope → `Content` (uses Phase 1 `DecryptPreKeyMessage`) |
-| L3   | `receiver.go` | Decrypt `CIPHERTEXT` envelope → `Content` (uses Phase 1 `DecryptMessage`)          |
-| L4   | `receiver.go` | ACK: send `WebSocketResponseMessage{status: 200, id: request.id}`                  |
-| L5   | `receiver.go` | Full receive loop: mock WebSocket sends envelopes, receiver decrypts and ACKs      |
+| L1 ✅ | `receiver.go` | Parse `Envelope` from raw bytes                                                    |
+| L2 ✅ | `receiver.go` | Decrypt `PREKEY_BUNDLE` envelope → `Content` (uses Phase 1 `DecryptPreKeyMessage`) |
+| L3 ✅ | `receiver.go` | Decrypt `CIPHERTEXT` envelope → `Content` (uses Phase 1 `DecryptMessage`)          |
+| L4 ✅ | `receiver.go` | ACK: send `WebSocketResponseMessage{status: 200, id: request.id}`                  |
+| L5 ✅ | `receiver.go` | Full receive loop: mock WebSocket sends envelopes, receiver decrypts and ACKs      |
 
 ### M. Persistent storage
 

@@ -17,6 +17,15 @@ Go library for Signal messenger, replacing the Java signal-cli dependency. Licen
 - `internal/store/` — SQLite persistent storage (sessions, identity keys, pre-keys, account credentials)
 - `docs/` — Phase plans and architecture docs
 
+## Reference implementation
+
+When debugging or implementing new functionality, consult the Signal-Android source at `../Signal-Android`. Key locations:
+
+- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/websocket/` — WebSocket connection (OkHttpWebSocketConnection, LibSignalChatConnection)
+- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/websocket/` — SignalWebSocket, message batching
+- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/push/` — PushServiceSocket (REST API calls)
+- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/` — High-level service APIs
+
 ## Prerequisites
 
 - Go 1.25+
@@ -51,13 +60,13 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 ## Phase status
 
 - **Phase 1 (CGO bindings):** Complete — key generation, session establishment, encrypt/decrypt
-- **Phase 2 (service layer):** In progress — device provisioning + registration complete (steps 1-12), SQLite storage + message sending complete, see `docs/phase2-service-layer.md`
+- **Phase 2 (service layer):** In progress — device provisioning + registration complete (steps 1-12), SQLite storage + message sending + message receiving complete, see `docs/phase2-service-layer.md`
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `client.go` | Public API: Client, Link, Load, Send, Close, Number, DeviceID |
+| `client.go` | Public API: Client, Link, Load, Send, Receive, Close, Number, DeviceID |
 | `libsignal.go` | CGO preamble (LDFLAGS, includes) |
 | `error.go` | FFI error wrapping, owned buffer handling |
 | `privatekey.go` | PrivateKey: generate, serialize, sign, agree |
@@ -82,6 +91,7 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `internal/signalservice/httptypes.go` | JSON request/response types for all endpoints |
 | `internal/signalservice/registration.go` | RegisterLinkedDevice orchestration |
 | `internal/signalservice/sender.go` | SendTextMessage: session establishment + encryption + delivery |
+| `internal/signalservice/receiver.go` | ReceiveMessages: WebSocket receive loop + decryption + iterator |
 | `internal/store/store.go` | SQLite store: Open, Close, migrations, SetIdentity |
 | `internal/store/account.go` | Account CRUD (credentials persistence) |
 | `internal/store/session.go` | SessionStore implementation |

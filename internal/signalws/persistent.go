@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,14 +23,17 @@ type PersistentConn struct {
 	conn    *Conn
 	url     string
 	tlsConf *tls.Config
+	headers http.Header
 	closed  atomic.Bool
 
 	keepAliveInterval time.Duration
 	keepAliveTimeout  time.Duration
+	keepAliveCallback func(rtt time.Duration) // called on successful keep-alive
 
 	// pendingKeepAlive tracks the ID of an outstanding keep-alive request.
 	pendingKeepAlive atomic.Uint64
-	keepAliveAcked   chan struct{} // signaled when keep-alive response received
+	keepAliveSentAt  atomic.Int64   // UnixMilli when keep-alive was sent
+	keepAliveAcked   chan struct{}   // signaled when keep-alive response received
 
 	cancel context.CancelFunc // cancels the keep-alive goroutine
 }
@@ -47,6 +51,16 @@ func WithKeepAliveTimeout(d time.Duration) Option {
 	return func(pc *PersistentConn) { pc.keepAliveTimeout = d }
 }
 
+// WithKeepAliveCallback sets a function called on each successful keep-alive round-trip.
+func WithKeepAliveCallback(fn func(rtt time.Duration)) Option {
+	return func(pc *PersistentConn) { pc.keepAliveCallback = fn }
+}
+
+// WithHeaders sets HTTP headers for the WebSocket upgrade request.
+func WithHeaders(h http.Header) Option {
+	return func(pc *PersistentConn) { pc.headers = h }
+}
+
 // DialPersistent dials a WebSocket and returns a PersistentConn with keep-alive and reconnect.
 func DialPersistent(ctx context.Context, url string, tlsConf *tls.Config, opts ...Option) (*PersistentConn, error) {
 	pc := &PersistentConn{
@@ -60,7 +74,7 @@ func DialPersistent(ctx context.Context, url string, tlsConf *tls.Config, opts .
 		o(pc)
 	}
 
-	conn, err := Dial(ctx, url, tlsConf)
+	conn, err := Dial(ctx, url, tlsConf, pc.headers)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +221,8 @@ func (pc *PersistentConn) sendKeepAlive(ctx context.Context) error {
 		},
 	}
 
+	pc.keepAliveSentAt.Store(time.Now().UnixMilli())
+
 	pc.mu.Lock()
 	conn := pc.conn
 	pc.mu.Unlock()
@@ -217,6 +233,13 @@ func (pc *PersistentConn) sendKeepAlive(ctx context.Context) error {
 }
 
 func (pc *PersistentConn) handleKeepAliveResponse() {
+	if pc.keepAliveCallback != nil {
+		sentAt := pc.keepAliveSentAt.Load()
+		if sentAt > 0 {
+			rtt := time.Duration(time.Now().UnixMilli()-sentAt) * time.Millisecond
+			pc.keepAliveCallback(rtt)
+		}
+	}
 	pc.pendingKeepAlive.Store(0)
 	select {
 	case pc.keepAliveAcked <- struct{}{}:
@@ -238,7 +261,7 @@ func (pc *PersistentConn) reconnect(ctx context.Context) error {
 		pc.conn = nil
 	}
 
-	conn, err := Dial(ctx, pc.url, pc.tlsConf)
+	conn, err := Dial(ctx, pc.url, pc.tlsConf, pc.headers)
 	if err != nil {
 		return fmt.Errorf("signalws: reconnect: %w", err)
 	}

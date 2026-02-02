@@ -4,7 +4,11 @@ package signal
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
+	"iter"
+	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -13,9 +17,13 @@ import (
 	"github.com/gwillem/signal-go/internal/store"
 )
 
+// Message represents a received Signal message.
+type Message = signalservice.Message
+
 const (
 	defaultProvisioningURL = "wss://chat.signal.org/v1/websocket/provisioning/"
 	defaultAPIURL          = "https://chat.signal.org"
+	defaultWSURL           = "wss://chat.signal.org"
 )
 
 // Client is the main entry point for interacting with Signal.
@@ -24,13 +32,16 @@ type Client struct {
 	apiURL          string
 	tlsConfig       *tls.Config
 	dbPath          string
+	logger          *slog.Logger
 	data            *provisioncrypto.ProvisionData
 	store           *store.Store
-	deviceID        int
-	aci             string
-	pni             string
-	password        string
-	number          string
+	deviceID          int
+	aci               string
+	pni               string
+	password          string
+	number            string
+	registrationID    int
+	pniRegistrationID int
 }
 
 // Option configures a Client.
@@ -56,6 +67,12 @@ func WithTLSConfig(tc *tls.Config) Option {
 // If not set, defaults to $XDG_DATA_HOME/signal-go/<aci>.db after linking.
 func WithDBPath(path string) Option {
 	return func(c *Client) { c.dbPath = path }
+}
+
+// WithLogger sets the logger for verbose output.
+// If not set, logging is disabled.
+func WithLogger(l *slog.Logger) Option {
+	return func(c *Client) { c.logger = l }
 }
 
 // NewClient creates a new Signal client.
@@ -93,17 +110,43 @@ func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 	c.pni = reg.PNI
 	c.password = reg.Password
 	c.number = result.Data.Number
+	c.registrationID = reg.RegistrationID
+	c.pniRegistrationID = reg.PNIRegistrationID
 
 	// Open store and persist credentials.
 	if err := c.openStore(); err != nil {
 		return fmt.Errorf("client: open store: %w", err)
 	}
 
+	// Store pre-keys locally so we can decrypt incoming messages.
+	if err := c.storePreKeys(reg); err != nil {
+		return fmt.Errorf("client: store pre-keys: %w", err)
+	}
+
+	// Set up identity key for the store.
+	aciPriv, err := libsignal.DeserializePrivateKey(result.Data.ACIIdentityKeyPrivate)
+	if err != nil {
+		return fmt.Errorf("client: deserialize identity key: %w", err)
+	}
+	c.store.SetIdentity(aciPriv, uint32(reg.RegistrationID))
+
 	return c.saveAccount()
 }
 
 // Load opens an existing database and loads credentials without re-linking.
+// If no explicit DB path is set, it discovers the most recent account database
+// in the default data directory.
 func (c *Client) Load() error {
+	if c.dbPath == "" {
+		discovered, err := discoverDB()
+		if err != nil {
+			return fmt.Errorf("client: %w", err)
+		}
+		c.dbPath = discovered
+	}
+	if c.logger != nil {
+		c.logger.Info("opening database", "path", c.dbPath)
+	}
 	if err := c.openStore(); err != nil {
 		return fmt.Errorf("client: open store: %w", err)
 	}
@@ -168,6 +211,151 @@ func (c *Client) Send(ctx context.Context, recipient string, text string) error 
 	return signalservice.SendTextMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig)
 }
 
+// Receive returns an iterator that yields incoming text messages.
+// It connects to the authenticated WebSocket and decrypts messages.
+// The iterator stops when the context is cancelled or the caller breaks.
+func (c *Client) Receive(ctx context.Context) iter.Seq2[Message, error] {
+	if c.store == nil {
+		return func(yield func(Message, error) bool) {
+			yield(Message{}, fmt.Errorf("client: not linked (call Link or Load first)"))
+		}
+	}
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+	wsURL := defaultWSURL
+	return signalservice.ReceiveMessages(ctx, wsURL, c.store, auth, c.tlsConfig, c.logger)
+}
+
+// DeviceInfo is the public type for device information.
+type DeviceInfo = signalservice.DeviceInfo
+
+// Devices returns the list of registered devices for this account.
+func (c *Client) Devices(ctx context.Context) ([]DeviceInfo, error) {
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig)
+	return httpClient.GetDevices(ctx, auth)
+}
+
+// UpdateAttributes updates account attributes on the Signal server.
+// This can fix message delivery issues by ensuring the unidentifiedAccessKey is set.
+func (c *Client) UpdateAttributes(ctx context.Context) error {
+	if c.store == nil {
+		return fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	acct, err := c.store.LoadAccount()
+	if err != nil {
+		return fmt.Errorf("client: load account: %w", err)
+	}
+	if acct == nil {
+		return fmt.Errorf("client: no account found")
+	}
+
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+
+	attrs := &signalservice.AccountAttributes{
+		RegistrationID:    acct.RegistrationID,
+		PNIRegistrationID: acct.PNIRegistrationID,
+		FetchesMessages:   true,
+		Capabilities: signalservice.Capabilities{
+			Storage:                  true,
+			VersionedExpirationTimer: true,
+			AttachmentBackfill:       true,
+		},
+	}
+
+	// Derive unidentified access key from profile key.
+	if len(acct.ProfileKey) > 0 {
+		uak, err := signalservice.DeriveUnidentifiedAccessKey(acct.ProfileKey)
+		if err != nil {
+			return fmt.Errorf("client: derive access key: %w", err)
+		}
+		attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
+	}
+
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig)
+	return httpClient.SetAccountAttributes(ctx, attrs, auth)
+}
+
+func (c *Client) storePreKeys(reg *signalservice.RegistrationResult) error {
+	// Store ACI signed pre-key.
+	if len(reg.ACISignedPreKey) > 0 {
+		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.ACISignedPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize ACI signed pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("ACI signed pre-key ID: %w", err)
+		}
+		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store ACI signed pre-key: %w", err)
+		}
+	}
+
+	// Store ACI Kyber pre-key.
+	if len(reg.ACIKyberPreKey) > 0 {
+		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.ACIKyberPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize ACI Kyber pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("ACI Kyber pre-key ID: %w", err)
+		}
+		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store ACI Kyber pre-key: %w", err)
+		}
+	}
+
+	// Store PNI signed pre-key (uses offset ID to avoid colliding with ACI).
+	if len(reg.PNISignedPreKey) > 0 {
+		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.PNISignedPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize PNI signed pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("PNI signed pre-key ID: %w", err)
+		}
+		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store PNI signed pre-key: %w", err)
+		}
+	}
+
+	// Store PNI Kyber pre-key (uses offset ID to avoid colliding with ACI).
+	if len(reg.PNIKyberPreKey) > 0 {
+		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.PNIKyberPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize PNI Kyber pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("PNI Kyber pre-key ID: %w", err)
+		}
+		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store PNI Kyber pre-key: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // Store returns the underlying store, or nil if not yet opened.
 func (c *Client) Store() *store.Store {
 	return c.store
@@ -200,11 +388,13 @@ func (c *Client) saveAccount() error {
 	}
 
 	acct := &store.Account{
-		Number:   c.number,
-		ACI:      c.aci,
-		PNI:      c.pni,
-		Password: c.password,
-		DeviceID: c.deviceID,
+		Number:            c.number,
+		ACI:               c.aci,
+		PNI:               c.pni,
+		Password:          c.password,
+		DeviceID:          c.deviceID,
+		RegistrationID:    c.registrationID,
+		PNIRegistrationID: c.pniRegistrationID,
 	}
 
 	if c.data != nil {
@@ -217,6 +407,36 @@ func (c *Client) saveAccount() error {
 	}
 
 	return c.store.SaveAccount(acct)
+}
+
+// discoverDB finds the most recently modified .db file in the default data directory.
+// Returns an error if no database files exist.
+func discoverDB() (string, error) {
+	dir := store.DefaultDataDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("read data dir %s: %w", dir, err)
+	}
+
+	var bestPath string
+	var bestTime int64
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".db" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if t := info.ModTime().UnixNano(); t > bestTime {
+			bestTime = t
+			bestPath = filepath.Join(dir, e.Name())
+		}
+	}
+	if bestPath == "" {
+		return "", fmt.Errorf("no account database found in %s (run 'sig link' first)", dir)
+	}
+	return bestPath, nil
 }
 
 type linkCallbacks struct {

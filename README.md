@@ -4,7 +4,7 @@ Go library for [Signal](https://signal.org) messenger, replacing the Java `signa
 
 Uses CGO bindings to the Rust C FFI.
 
-> **Status:** Early development. Device linking works. Message send/receive is not yet implemented.
+> **Status:** Early development. Device linking, message sending, and message receiving work.
 
 ## Example
 
@@ -33,13 +33,20 @@ func main() {
 	}
 	fmt.Println("Linked to", client.Number())
 
-	// 2. Send a message (not yet implemented)
-	// err = client.Send(ctx, "+31612345678", "Hello from signal-go!")
+	// 2. Send a message
+	err = client.Send(ctx, "recipient-aci-uuid", "Hello from signal-go!")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// 3. Receive messages (not yet implemented)
-	// for msg := range client.Receive(ctx) {
-	// 	fmt.Printf("%s: %s\n", msg.From, msg.Body)
-	// }
+	// 3. Receive messages
+	for msg, err := range client.Receive(ctx) {
+		if err != nil {
+			log.Println("Error:", err)
+			continue
+		}
+		fmt.Printf("%s: %s\n", msg.Sender, msg.Body)
+	}
 }
 ```
 
@@ -59,22 +66,26 @@ make test    # builds if needed, then runs tests with correct CGO flags
 ## Architecture
 
 ```
-client.go                — public API (Client, Link, Number)
-internal/signalservice   — provisioning orchestration, device linking
-internal/signalws        — protobuf-framed WebSocket layer
+client.go                — public API (Client, Link, Send, Receive, Load, Close)
+cmd/sig                  — CLI tool (sig link, sig send, sig receive)
+internal/signalservice   — provisioning, registration, send, receive orchestration
+internal/signalws        — protobuf-framed WebSocket layer with keep-alive
 internal/provisioncrypto — provisioning envelope crypto (HKDF, AES-CBC, HMAC)
 internal/libsignal       — CGO bindings to libsignal Rust FFI
-internal/proto           — protobuf definitions (provisioning, websocket)
+internal/proto           — protobuf definitions (provisioning, websocket, service)
+internal/store           — SQLite persistent storage (sessions, keys, account)
 ```
 
 ## Roadmap
 
 - [x] CGO bindings — key generation, session establishment, encrypt/decrypt
 - [x] Device provisioning — link as secondary device via QR code
-- [ ] Device registration — pre-key upload, complete linking
-- [ ] Message sending — encrypt and deliver to Signal servers
-- [ ] Message receiving — authenticated WebSocket, decrypt incoming
-- [ ] Persistent storage — SQLite-backed key/session stores
+- [x] Device registration — pre-key upload, complete linking
+- [x] Message sending — encrypt and deliver to Signal servers
+- [x] Message receiving — authenticated WebSocket, decrypt incoming
+- [x] Persistent storage — SQLite-backed key/session stores
+- [ ] Sealed sender — UNIDENTIFIED_SENDER envelope decryption
+- [ ] Sync messages — request contacts, groups, configuration from primary
 
 ## License
 

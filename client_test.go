@@ -134,6 +134,9 @@ func TestClientLink(t *testing.T) {
 		case r.URL.Path == "/v2/keys" && r.Method == http.MethodPut:
 			w.WriteHeader(http.StatusNoContent)
 
+		case r.URL.Path == "/v1/accounts/attributes/" && r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusNoContent)
+
 		default:
 			t.Errorf("unexpected API request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(404)

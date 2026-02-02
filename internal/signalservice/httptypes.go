@@ -18,11 +18,13 @@ type RegisterRequest struct {
 
 // AccountAttributes describes the account properties for registration.
 type AccountAttributes struct {
-	RegistrationID    int          `json:"registrationId"`
-	PNIRegistrationID int          `json:"pniRegistrationId"`
-	FetchesMessages   bool         `json:"fetchesMessages"`
-	Name              string       `json:"name"` // base64 encrypted device name
-	Capabilities      Capabilities `json:"capabilities"`
+	RegistrationID                int          `json:"registrationId"`
+	PNIRegistrationID             int          `json:"pniRegistrationId"`
+	FetchesMessages               bool         `json:"fetchesMessages"`
+	Name                          string       `json:"name"` // base64 encrypted device name
+	Capabilities                  Capabilities `json:"capabilities"`
+	UnidentifiedAccessKey         string       `json:"unidentifiedAccessKey,omitempty"`         // base64, 16 bytes
+	UnrestrictedUnidentifiedAccess bool        `json:"unrestrictedUnidentifiedAccess,omitempty"` // allow sealed sender from anyone
 }
 
 // Capabilities declares supported features.
@@ -95,4 +97,17 @@ type OutgoingMessage struct {
 	DestinationDeviceID       int    `json:"destinationDeviceId"`
 	DestinationRegistrationID int    `json:"destinationRegistrationId"`
 	Content                   string `json:"content"` // base64
+}
+
+// DeviceListResponse is the JSON response from GET /v1/devices/.
+type DeviceListResponse struct {
+	Devices []DeviceInfo `json:"devices"`
+}
+
+// DeviceInfo describes a registered device.
+type DeviceInfo struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Created  int64  `json:"created"`
+	LastSeen int64  `json:"lastSeen"`
 }
