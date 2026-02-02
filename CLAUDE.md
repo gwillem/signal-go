@@ -84,6 +84,7 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `memstore.go` | In-memory store implementations |
 | `pointer.go` | Handle map for Go→C→Go pointer passing |
 | `protocol.go` | ProcessPreKeyBundle, Encrypt, Decrypt |
+| `sealedsender.go` | SealedSenderDecrypt: sealed sender (UNIDENTIFIED_SENDER) decryption |
 | `internal/provisioncrypto/devicename.go` | Device name encrypt/decrypt (DeviceNameCipher) |
 | `internal/signalws/persistent.go` | PersistentConn: keep-alive heartbeats + automatic reconnection |
 | `internal/signalservice/keygen.go` | Pre-key set generation (signed EC + Kyber) |
@@ -91,7 +92,9 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `internal/signalservice/httptypes.go` | JSON request/response types for all endpoints |
 | `internal/signalservice/registration.go` | RegisterLinkedDevice orchestration |
 | `internal/signalservice/sender.go` | SendTextMessage: session establishment + encryption + delivery |
+| `internal/signalservice/dump.go` | dumpEnvelope: raw envelope debug dump to file, LoadDump for test replay |
 | `internal/signalservice/receiver.go` | ReceiveMessages: WebSocket receive loop + decryption + iterator |
+| `internal/signalservice/trustroot.go` | Signal sealed sender trust root public keys |
 | `internal/store/store.go` | SQLite store: Open, Close, migrations, SetIdentity |
 | `internal/store/account.go` | Account CRUD (credentials persistence) |
 | `internal/store/session.go` | SessionStore implementation |

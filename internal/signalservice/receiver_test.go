@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -274,7 +275,7 @@ func TestHandleEnvelopeDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(envBytes, bobStore, nil)
+	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,12 +306,103 @@ func TestHandleEnvelopeSkipsDeliveryReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(envBytes, bobStore, nil)
+	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if msg != nil {
 		t.Errorf("expected nil for delivery receipt, got %+v", msg)
+	}
+}
+
+func TestDumpEnvelope(t *testing.T) {
+	bobStore, senderACI, encryptAsAlice := setupAliceAndBob(t)
+	ct, _ := encryptAsAlice("dump test")
+
+	timestamp := uint64(time.Now().UnixMilli())
+	senderDevice := uint32(1)
+	env := &proto.Envelope{
+		Type:            proto.Envelope_PREKEY_BUNDLE.Enum(),
+		SourceServiceId: &senderACI,
+		SourceDevice:    &senderDevice,
+		Timestamp:       &timestamp,
+		Content:         ct,
+	}
+	envBytes, err := pb.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	debugDir := t.TempDir()
+
+	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, debugDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || msg.Body != "dump test" {
+		t.Fatalf("unexpected message: %+v", msg)
+	}
+
+	// Verify a .bin file was written with the correct raw bytes.
+	entries, err := os.ReadDir(debugDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 dump file, got %d", len(entries))
+	}
+
+	name := entries[0].Name()
+	if !strings.HasSuffix(name, ".bin") {
+		t.Errorf("expected .bin extension, got %q", name)
+	}
+	if !strings.Contains(name, "PREKEY_BUNDLE") {
+		t.Errorf("expected filename to contain PREKEY_BUNDLE, got %q", name)
+	}
+	if !strings.Contains(name, senderACI[:8]) {
+		t.Errorf("expected filename to contain sender prefix, got %q", name)
+	}
+
+	// Verify contents match the raw envelope bytes.
+	dumped, err := LoadDump(filepath.Join(debugDir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dumped) != len(envBytes) {
+		t.Errorf("dump size: got %d, want %d", len(dumped), len(envBytes))
+	}
+	for i := range dumped {
+		if dumped[i] != envBytes[i] {
+			t.Fatalf("dump mismatch at byte %d", i)
+		}
+	}
+}
+
+func TestDumpEnvelopeNoOpWhenEmpty(t *testing.T) {
+	bobStore, senderACI, encryptAsAlice := setupAliceAndBob(t)
+	ct, _ := encryptAsAlice("no dump test")
+
+	timestamp := uint64(time.Now().UnixMilli())
+	senderDevice := uint32(1)
+	env := &proto.Envelope{
+		Type:            proto.Envelope_PREKEY_BUNDLE.Enum(),
+		SourceServiceId: &senderACI,
+		SourceDevice:    &senderDevice,
+		Timestamp:       &timestamp,
+		Content:         ct,
+	}
+	envBytes, err := pb.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass empty debugDir — should not create any files.
+	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || msg.Body != "no dump test" {
+		t.Fatalf("unexpected message: %+v", msg)
 	}
 }
 
@@ -350,7 +442,7 @@ func TestReceivePreKeyMessage(t *testing.T) {
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, nil, nil) {
+	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}
@@ -420,7 +512,7 @@ func TestReceiveCiphertextMessage(t *testing.T) {
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, nil, nil) {
+	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}
@@ -469,7 +561,7 @@ func TestReceiveMultipleMessages(t *testing.T) {
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, nil, nil) {
+	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}
@@ -538,7 +630,7 @@ func TestReceiveBreakClosesConnection(t *testing.T) {
 	defer cancel()
 
 	count := 0
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, nil, nil) {
+	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}

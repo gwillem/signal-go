@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"iter"
-	"log/slog"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -28,13 +28,14 @@ const (
 
 // Client is the main entry point for interacting with Signal.
 type Client struct {
-	provisioningURL string
-	apiURL          string
-	tlsConfig       *tls.Config
-	dbPath          string
-	logger          *slog.Logger
-	data            *provisioncrypto.ProvisionData
-	store           *store.Store
+	provisioningURL   string
+	apiURL            string
+	tlsConfig         *tls.Config
+	dbPath            string
+	debugDir          string
+	logger            *log.Logger
+	data              *provisioncrypto.ProvisionData
+	store             *store.Store
 	deviceID          int
 	aci               string
 	pni               string
@@ -71,8 +72,14 @@ func WithDBPath(path string) Option {
 
 // WithLogger sets the logger for verbose output.
 // If not set, logging is disabled.
-func WithLogger(l *slog.Logger) Option {
+func WithLogger(l *log.Logger) Option {
 	return func(c *Client) { c.logger = l }
+}
+
+// WithDebugDir sets a directory for dumping raw envelope bytes before decryption.
+// When set, every received envelope is written as a .bin file for offline inspection.
+func WithDebugDir(path string) Option {
+	return func(c *Client) { c.debugDir = path }
 }
 
 // NewClient creates a new Signal client.
@@ -145,7 +152,7 @@ func (c *Client) Load() error {
 		c.dbPath = discovered
 	}
 	if c.logger != nil {
-		c.logger.Info("opening database", "path", c.dbPath)
+		c.logger.Printf("opening database path=%s", c.dbPath)
 	}
 	if err := c.openStore(); err != nil {
 		return fmt.Errorf("client: open store: %w", err)
@@ -225,7 +232,7 @@ func (c *Client) Receive(ctx context.Context) iter.Seq2[Message, error] {
 		Password: c.password,
 	}
 	wsURL := defaultWSURL
-	return signalservice.ReceiveMessages(ctx, wsURL, c.store, auth, c.tlsConfig, c.logger)
+	return signalservice.ReceiveMessages(ctx, wsURL, c.store, auth, c.aci, uint32(c.deviceID), c.tlsConfig, c.logger, c.debugDir)
 }
 
 // DeviceInfo is the public type for device information.

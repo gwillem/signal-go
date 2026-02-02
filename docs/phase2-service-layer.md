@@ -1,6 +1,6 @@
 # Phase 2: Signal Service Layer (Pure Go)
 
-**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). SQLite persistent storage, message sending, and message receiving complete. Sealed sender (UNIDENTIFIED_SENDER) not yet implemented.
+**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). SQLite persistent storage, message sending, message receiving, and sealed sender (UNIDENTIFIED_SENDER) decryption complete.
 
 Goal: link as secondary device, send text messages, receive text messages. Pure Go implementation of the Signal server protocol, using Phase 1's CGO bindings for crypto.
 
@@ -199,6 +199,25 @@ Step 6:  ACK: send WebSocketResponseMessage { status: 200, id: request.id }
 
 Step 7:  Emit to consumer via channel or callback
 ```
+
+**Debug envelope dump:** When `debugDir` is configured (via `WithDebugDir` client option or `--debug-dir` CLI flag), every raw envelope is written to a `.bin` file before decryption. Filename format: `{timestamp}_{type}_{senderPrefix}_{device}.bin`. Files can be inspected with `protoc --decode` or replayed through `handleEnvelope` in tests using `LoadDump()`. See `internal/signalservice/dump.go`.
+
+### Sealed sender identity key mismatch after re-link
+
+UNIDENTIFIED_SENDER envelopes use sealed sender encryption. The outer layer performs ECDH between the sender's ephemeral key and the **recipient's identity key**. After a device re-link, the device has a new identity key pair, but other clients may still cache the old public key.
+
+When this happens:
+1. The outer `UnidentifiedSenderMessage` protobuf parses fine (version byte, ephemeralPublic, encryptedStatic, encryptedMessage are all well-formed)
+2. The ECDH produces a wrong shared secret (old key vs new key)
+3. The AES decryption produces garbage
+4. Parsing the decrypted bytes as `UnidentifiedSenderMessageContent` fails with `protobuf encoding was invalid`
+
+This is expected after re-linking. The sender's client will eventually fetch the new identity key from the server and re-encrypt. No action needed — the error is logged and the envelope is ACK'd so the server doesn't retry.
+
+**Sealed sender version bytes** (from libsignal `sealed_sender.rs`):
+- `0x11` — Sealed Sender v1 (protobuf-based: ephemeralPublic + encryptedStatic + encryptedMessage)
+- `0x22` — Sealed Sender v2 with UUID (flat binary: C‖AT‖E.pub‖ciphertext)
+- `0x23` — Sealed Sender v2 with ServiceId (same binary format, newer addressing)
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageReceiver.java`
 
