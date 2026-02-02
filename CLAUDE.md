@@ -91,12 +91,15 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `internal/signalservice/httpclient.go` | HTTP client for Signal REST API (register, pre-keys, send) |
 | `internal/signalservice/httptypes.go` | JSON request/response types for all endpoints |
 | `internal/signalservice/registration.go` | RegisterLinkedDevice orchestration |
-| `internal/signalservice/sender.go` | SendTextMessage: session establishment + encryption + delivery |
+| `internal/signalservice/sender.go` | SendTextMessage, SendNullMessage: session establishment + encryption + delivery |
+| `internal/signalservice/retryreceipt.go` | SendRetryReceipt, HandleRetryReceipt: DecryptionErrorMessage retry flow |
 | `internal/signalservice/dump.go` | dumpEnvelope: raw envelope debug dump to file, LoadDump for test replay |
-| `internal/signalservice/receiver.go` | ReceiveMessages: WebSocket receive loop + decryption + iterator |
+| `internal/signalservice/receiver.go` | ReceiveMessages: WebSocket receive loop + decryption + retry receipts + iterator |
 | `internal/signalservice/trustroot.go` | Signal sealed sender trust root public keys |
+| `internal/libsignal/decryptionerror.go` | DecryptionErrorMessage: CGO bindings for retry receipts |
+| `internal/libsignal/plaintextcontent.go` | PlaintextContent: CGO bindings for unencrypted retry receipt delivery |
 | `internal/store/store.go` | SQLite store: Open, Close, migrations, SetIdentity |
 | `internal/store/account.go` | Account CRUD (credentials persistence) |
-| `internal/store/session.go` | SessionStore implementation |
+| `internal/store/session.go` | SessionStore + ArchiveSession implementation |
 | `internal/store/identity.go` | IdentityKeyStore implementation (TOFU) |
 | `internal/store/prekey.go` | PreKeyStore, SignedPreKeyStore, KyberPreKeyStore implementations |

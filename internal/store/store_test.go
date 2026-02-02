@@ -493,6 +493,149 @@ func TestSignedPreKeyStore(t *testing.T) {
 	}
 }
 
+func TestArchiveSession(t *testing.T) {
+	s := tempStore(t)
+
+	// Set up identity so StoreSession works through CGO callbacks.
+	identityPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetIdentity(identityPriv, 1)
+
+	bobPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobPriv.Destroy()
+
+	bobPub, err := bobPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobPub.Destroy()
+
+	addr, err := libsignal.NewAddress("bob-uuid", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer addr.Destroy()
+
+	// Create a session via pre-key bundle processing.
+	memSession := libsignal.NewMemorySessionStore()
+
+	spk, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spk.Destroy()
+
+	spkPub, err := spk.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spkPub.Destroy()
+
+	spkPubBytes, err := spkPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spkSig, err := bobPriv.Sign(spkPubBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kyberKP, err := libsignal.GenerateKyberKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer kyberKP.Destroy()
+
+	kyberPub, err := kyberKP.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer kyberPub.Destroy()
+
+	kyberPubBytes, err := kyberPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kyberSig, err := bobPriv.Sign(kyberPubBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	preKeyPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer preKeyPriv.Destroy()
+
+	preKeyPub, err := preKeyPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer preKeyPub.Destroy()
+
+	memIdentity := libsignal.NewMemoryIdentityKeyStore(identityPriv, 1)
+
+	bundle, err := libsignal.NewPreKeyBundle(1, 1, 1, preKeyPub, 1, spkPub, spkSig, bobPub, 1, kyberPub, kyberSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bundle.Destroy()
+
+	if err := libsignal.ProcessPreKeyBundle(bundle, addr, memSession, memIdentity, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionRec, err := memSession.LoadSession(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessionRec == nil {
+		t.Fatal("expected session")
+	}
+
+	// Store in SQLite.
+	if err := s.StoreSession(addr, sessionRec); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify session exists.
+	loaded, err := s.LoadSession(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil {
+		t.Fatal("expected session to exist before archive")
+	}
+	loaded.Destroy()
+
+	// Archive (delete) the session.
+	if err := s.ArchiveSession("bob-uuid", 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify session is gone.
+	loaded, err = s.LoadSession(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != nil {
+		loaded.Destroy()
+		t.Fatal("expected nil session after archive")
+	}
+
+	// Archiving non-existent session should not error.
+	if err := s.ArchiveSession("nonexistent", 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestKyberPreKeyStore(t *testing.T) {
 	s := tempStore(t)
 

@@ -131,7 +131,10 @@ signal-go/
 │   │   ├── bridge.c               # C bridge: unwrap SignalConstPointer* structs
 │   │   ├── pointer.go             # Handle map for Go→C→Go pointer passing
 │   │   ├── memstore.go            # In-memory store implementations (testing)
-│   │   └── protocol.go            # ProcessPreKeyBundle, Encrypt, Decrypt
+│   │   ├── protocol.go            # ProcessPreKeyBundle, Encrypt, Decrypt
+│   │   ├── sealedsender.go        # SealedSenderDecrypt, SealedSenderDecryptToUSMC
+│   │   ├── decryptionerror.go     # DecryptionErrorMessage CGO bindings
+│   │   └── plaintextcontent.go    # PlaintextContent CGO bindings
 │   ├── proto/                      # Protobuf definitions + generated Go code (Phase 2)
 │   │   ├── Provisioning.proto     # ProvisionEnvelope, ProvisionMessage, ProvisioningAddress
 │   │   ├── WebSocketResources.proto # WebSocketMessage, Request, Response
@@ -150,9 +153,10 @@ signal-go/
 │   ├── signalservice/              # Signal server protocol (Phase 2, in progress)
 │   │   ├── linkuri.go             # Device link URI formatting
 │   │   ├── provisioning.go        # Provisioning orchestration (complete)
-│   │   ├── client.go              # HTTP client (REST API) — not started
-│   │   ├── sender.go              # Message sending — not started
-│   │   └── receiver.go            # Message receive loop — not started
+│   │   ├── httpclient.go          # HTTP client (REST API) (complete)
+│   │   ├── sender.go              # Message sending + SendNullMessage (complete)
+│   │   ├── receiver.go            # Message receive loop + retry receipts (complete)
+│   │   └── retryreceipt.go        # DecryptionErrorMessage retry flow (complete)
 │   └── store/
 │       └── sqlite/                 # Persistent store (modernc.org/sqlite)
 └── cmd/

@@ -17,20 +17,35 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// receiverContext groups the parameters needed by handleEnvelope.
+type receiverContext struct {
+	store       *store.Store
+	localUUID   string
+	localDevice uint32
+	apiURL      string
+	auth        BasicAuth
+	tlsConf     *tls.Config
+	logger      *log.Logger
+	debugDir    string
+}
+
 // Message represents a received Signal message.
 type Message struct {
-	Sender    string    // sender ACI UUID
-	Device    uint32    // sender device ID
-	Timestamp time.Time // sender timestamp
-	Body      string    // text content
-	SyncTo    string    // recipient ACI if this is a SyncMessage (sent by our other device)
+	Sender       string    // sender ACI UUID
+	SenderNumber string    // sender phone number (if known from contacts)
+	SenderName   string    // sender display name (if known from contacts)
+	Device       uint32    // sender device ID
+	Timestamp    time.Time // sender timestamp
+	Body         string    // text content
+	SyncTo       string    // recipient ACI if this is a SyncMessage (sent by our other device)
+	SyncToNumber string    // recipient phone number (if known from contacts)
 }
 
 // ReceiveMessages connects to the authenticated WebSocket and returns an iterator
 // that yields received text messages. The iterator stops when the context is
 // cancelled or when the caller breaks out of the range loop.
 // If logger is nil, logging is disabled.
-func ReceiveMessages(ctx context.Context, wsURL string, st *store.Store, auth BasicAuth, localUUID string, localDeviceID uint32, tlsConf *tls.Config, logger *log.Logger, debugDir string) iter.Seq2[Message, error] {
+func ReceiveMessages(ctx context.Context, wsURL string, apiURL string, st *store.Store, auth BasicAuth, localUUID string, localDeviceID uint32, tlsConf *tls.Config, logger *log.Logger, debugDir string) iter.Seq2[Message, error] {
 	return func(yield func(Message, error) bool) {
 		wsEndpoint := wsURL + "/v1/websocket/"
 		headers := buildWebSocketHeaders(auth)
@@ -83,7 +98,11 @@ func ReceiveMessages(ctx context.Context, wsURL string, st *store.Store, auth Ba
 				continue
 			}
 
-			msg, err := handleEnvelope(req.GetBody(), st, localUUID, localDeviceID, logger, debugDir)
+			rc := &receiverContext{
+				store: st, localUUID: localUUID, localDevice: localDeviceID,
+				apiURL: apiURL, auth: auth, tlsConf: tlsConf, logger: logger, debugDir: debugDir,
+			}
+			msg, err := handleEnvelope(ctx, req.GetBody(), rc)
 			if err != nil {
 				// ACK even on decrypt failure — server won't retry.
 				_ = conn.SendResponse(ctx, req.GetId(), 200, "OK")
@@ -110,13 +129,16 @@ func ReceiveMessages(ctx context.Context, wsURL string, st *store.Store, auth Ba
 
 // handleEnvelope parses an Envelope protobuf and decrypts the content.
 // Returns nil, nil for envelopes that don't contain a text message (e.g. delivery receipts).
-func handleEnvelope(data []byte, st *store.Store, localUUID string, localDeviceID uint32, logger *log.Logger, debugDir string) (*Message, error) {
+func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Message, error) {
+	st := rc.store
+	logger := rc.logger
+
 	var env proto.Envelope
 	if err := pb.Unmarshal(data, &env); err != nil {
 		return nil, fmt.Errorf("unmarshal envelope: %w", err)
 	}
 
-	dumpEnvelope(debugDir, data, &env, logger)
+	dumpEnvelope(rc.debugDir, data, &env, logger)
 
 	envType := env.GetType()
 	logf(logger, "envelope type=%v sender=%s device=%d timestamp=%d contentLen=%d",
@@ -124,8 +146,8 @@ func handleEnvelope(data []byte, st *store.Store, localUUID string, localDeviceI
 
 	// Only handle known envelope types.
 	switch envType {
-	case proto.Envelope_CIPHERTEXT, proto.Envelope_PREKEY_BUNDLE, proto.Envelope_UNIDENTIFIED_SENDER:
-		// Proceed with decryption below.
+	case proto.Envelope_CIPHERTEXT, proto.Envelope_PREKEY_BUNDLE, proto.Envelope_UNIDENTIFIED_SENDER, proto.Envelope_PLAINTEXT_CONTENT:
+		// Proceed below.
 	default:
 		logf(logger, "skipping unsupported envelope type=%v", envType)
 		return nil, nil
@@ -139,6 +161,11 @@ func handleEnvelope(data []byte, st *store.Store, localUUID string, localDeviceI
 	senderACI := env.GetSourceServiceId()
 	senderDevice := env.GetSourceDevice()
 
+	// Handle PLAINTEXT_CONTENT (retry receipts).
+	if envType == proto.Envelope_PLAINTEXT_CONTENT {
+		return handlePlaintextContent(ctx, content, senderACI, senderDevice, rc)
+	}
+
 	var plaintext []byte
 
 	switch envType {
@@ -146,13 +173,12 @@ func handleEnvelope(data []byte, st *store.Store, localUUID string, localDeviceI
 		logf(logger, "decrypting sealed sender message (version byte=0x%02x, len=%d)", content[0], len(content))
 
 		// Step 1: Decrypt outer sealed sender layer → USMC (uses only identity key for ECDH).
-		// This ECDH uses our local identity key. If the sender cached our old identity
-		// key (e.g. after a re-link), decryption produces garbage and the inner protobuf
-		// parse fails with "protobuf encoding was invalid". The sender's client will
-		// eventually refresh our key and retry.
+		// If the sender cached our old identity key (e.g. after re-link), this fails.
+		// We can't send a retry receipt here because the sender's identity is encrypted
+		// inside the failed outer layer — we don't know who to send it to.
 		usmc, err := libsignal.SealedSenderDecryptToUSMC(content, st)
 		if err != nil {
-			return nil, fmt.Errorf("sealed sender decrypt outer (if recent re-link, sender has stale identity key): %w", err)
+			return nil, fmt.Errorf("sealed sender decrypt outer (sender unknown, cannot send retry receipt): %w", err)
 		}
 		defer usmc.Destroy()
 
@@ -209,11 +235,15 @@ func handleEnvelope(data []byte, st *store.Store, localUUID string, localDeviceI
 			logf(logger, "sealed sender: decrypting inner pre-key message")
 			preKeyMsg, err := libsignal.DeserializePreKeySignalMessage(innerContent)
 			if err != nil {
+				// Inner deserialize failed — sender is known, send retry receipt.
+				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 				return nil, fmt.Errorf("sealed sender deserialize pre-key: %w", err)
 			}
 			defer preKeyMsg.Destroy()
 			plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
 			if err != nil {
+				// Inner decrypt failed — sender is known, send retry receipt.
+				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 				return nil, fmt.Errorf("sealed sender decrypt pre-key: %w", err)
 			}
 
@@ -221,11 +251,13 @@ func handleEnvelope(data []byte, st *store.Store, localUUID string, localDeviceI
 			logf(logger, "sealed sender: decrypting inner whisper message")
 			sigMsg, err := libsignal.DeserializeSignalMessage(innerContent)
 			if err != nil {
+				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 				return nil, fmt.Errorf("sealed sender deserialize whisper: %w", err)
 			}
 			defer sigMsg.Destroy()
 			plaintext, err = libsignal.DecryptMessage(sigMsg, addr, st, st)
 			if err != nil {
+				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 				return nil, fmt.Errorf("sealed sender decrypt whisper: %w", err)
 			}
 
@@ -286,32 +318,152 @@ func handleEnvelope(data []byte, st *store.Store, localUUID string, localDeviceI
 
 	// Extract text body from DataMessage (direct message).
 	if dm := contentProto.GetDataMessage(); dm != nil && dm.Body != nil {
-		return &Message{
+		msg := &Message{
 			Sender:    senderACI,
 			Device:    senderDevice,
 			Timestamp: time.UnixMilli(int64(env.GetTimestamp())),
 			Body:      dm.GetBody(),
-		}, nil
+		}
+		populateContactInfo(msg, st)
+		return msg, nil
 	}
 
-	// Extract text body from SyncMessage.Sent (message sent by our other device).
+	// Handle SyncMessage subtypes.
 	if sm := contentProto.GetSyncMessage(); sm != nil {
+		// SyncMessage.Sent: message sent by our other device.
 		if sent := sm.GetSent(); sent != nil {
 			if dm := sent.GetMessage(); dm != nil && dm.Body != nil {
 				recipient := sent.GetDestinationServiceId()
-				return &Message{
+				msg := &Message{
 					Sender:    senderACI,
 					Device:    senderDevice,
 					Timestamp: time.UnixMilli(int64(sent.GetTimestamp())),
 					Body:      dm.GetBody(),
 					SyncTo:    recipient,
-				}, nil
+				}
+				populateContactInfo(msg, st)
+				return msg, nil
 			}
+		}
+
+		// SyncMessage.Contacts: contact sync from primary device.
+		if contacts := sm.GetContacts(); contacts != nil {
+			if err := handleContactSync(ctx, contacts, st, rc.tlsConf, logger); err != nil {
+				logf(logger, "contact sync error: %v", err)
+			}
+			return nil, nil
 		}
 	}
 
 	logf(logger, "skipping non-text content")
 	return nil, nil
+}
+
+// handlePlaintextContent processes a PLAINTEXT_CONTENT envelope, which contains
+// a DecryptionErrorMessage (retry receipt) from a peer who couldn't decrypt our message.
+func handlePlaintextContent(ctx context.Context, content []byte, senderACI string, senderDevice uint32, rc *receiverContext) (*Message, error) {
+	logf(rc.logger, "handling PLAINTEXT_CONTENT from=%s device=%d", senderACI, senderDevice)
+
+	// Deserialize PlaintextContent to extract the body.
+	pc, err := libsignal.DeserializePlaintextContent(content)
+	if err != nil {
+		return nil, fmt.Errorf("plaintext content deserialize: %w", err)
+	}
+	defer pc.Destroy()
+
+	body, err := pc.Body()
+	if err != nil {
+		return nil, fmt.Errorf("plaintext content body: %w", err)
+	}
+
+	// Extract DecryptionErrorMessage from the serialized Content body.
+	dem, err := libsignal.ExtractDecryptionErrorFromContent(body)
+	if err != nil {
+		return nil, fmt.Errorf("extract decryption error: %w", err)
+	}
+	defer dem.Destroy()
+
+	ts, _ := dem.Timestamp()
+	devID, _ := dem.DeviceID()
+	logf(rc.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
+
+	// Handle the retry receipt: archive session and send null message.
+	if err := HandleRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice); err != nil {
+		logf(rc.logger, "handle retry receipt error: %v", err)
+	}
+
+	return nil, nil // Retry receipts are not user-visible.
+}
+
+// sendRetryReceiptAsync sends a retry receipt to the sender in a fire-and-forget
+// goroutine. Errors are logged but don't block message processing.
+func sendRetryReceiptAsync(ctx context.Context, rc *receiverContext, senderACI string, senderDevice uint32, innerContent []byte, msgType uint8, timestamp uint64) {
+	if rc.apiURL == "" {
+		logf(rc.logger, "cannot send retry receipt: no API URL configured")
+		return
+	}
+	logf(rc.logger, "sending retry receipt to=%s device=%d timestamp=%d", senderACI, senderDevice, timestamp)
+	go func() {
+		if err := SendRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice, innerContent, msgType, timestamp); err != nil {
+			logf(rc.logger, "retry receipt send error: %v", err)
+		} else {
+			logf(rc.logger, "retry receipt sent to=%s device=%d", senderACI, senderDevice)
+		}
+	}()
+}
+
+// handleContactSync downloads the contact attachment, parses the contact stream, and saves contacts.
+func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts, st *store.Store, tlsConf *tls.Config, logger *log.Logger) error {
+	blob := contacts.GetBlob()
+	if blob == nil {
+		return fmt.Errorf("contact sync: no attachment blob")
+	}
+
+	logf(logger, "downloading contact sync attachment (cdnId=%d cdnKey=%s size=%d)",
+		blob.GetCdnId(), blob.GetCdnKey(), blob.GetSize())
+
+	data, err := DownloadAttachment(ctx, blob, tlsConf)
+	if err != nil {
+		return fmt.Errorf("contact sync: download: %w", err)
+	}
+
+	parsed, err := ParseContactStream(data)
+	if err != nil {
+		return fmt.Errorf("contact sync: parse: %w", err)
+	}
+
+	var storeContacts []*store.Contact
+	for _, cd := range parsed {
+		aci := cd.GetAci()
+		if aci == "" {
+			continue
+		}
+		storeContacts = append(storeContacts, &store.Contact{
+			ACI:    aci,
+			Number: cd.GetNumber(),
+			Name:   cd.GetName(),
+		})
+	}
+
+	if err := st.SaveContacts(storeContacts); err != nil {
+		return fmt.Errorf("contact sync: save: %w", err)
+	}
+
+	logf(logger, "contact sync complete: saved %d contacts", len(storeContacts))
+	return nil
+}
+
+// populateContactInfo fills SenderNumber/SenderName/SyncToNumber from the contact store.
+func populateContactInfo(msg *Message, st *store.Store) {
+	if c, _ := st.GetContactByACI(msg.Sender); c != nil {
+		msg.SenderNumber = c.Number
+		msg.SenderName = c.Name
+	}
+	if msg.SyncTo != "" {
+		if c, _ := st.GetContactByACI(msg.SyncTo); c != nil {
+			msg.SyncToNumber = c.Number
+		}
+	}
 }
 
 // logf logs a formatted message if the logger is non-nil.

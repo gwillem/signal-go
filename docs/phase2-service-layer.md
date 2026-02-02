@@ -212,7 +212,11 @@ When this happens:
 3. The AES decryption produces garbage
 4. Parsing the decrypted bytes as `UnidentifiedSenderMessageContent` fails with `protobuf encoding was invalid`
 
-This is expected after re-linking. The sender's client will eventually fetch the new identity key from the server and re-encrypt. No action needed — the error is logged and the envelope is ACK'd so the server doesn't retry.
+There are two failure modes with different recovery paths:
+
+**Outer-layer failure (ECDH with stale identity key):** The sender's identity is encrypted inside the outer sealed sender layer that failed — we don't know who sent the message. We cannot send a retry receipt. The sender must independently re-establish a session (e.g., by receiving a message from us, or by their client periodically refreshing our key). The error is logged and the envelope is ACK'd.
+
+**Inner-layer failure (session error after outer layer succeeds):** The outer sealed sender layer decrypts successfully (giving us the sender's identity from the certificate), but the inner session-level decryption fails. In this case, we know the sender and can send a `DecryptionErrorMessage` (retry receipt) back, prompting them to archive the broken session and re-establish it.
 
 **Sealed sender version bytes** (from libsignal `sealed_sender.rs`):
 - `0x11` — Sealed Sender v1 (protobuf-based: ephemeralPublic + encryptedStatic + encryptedMessage)
@@ -220,6 +224,31 @@ This is expected after re-linking. The sender's client will eventually fetch the
 - `0x23` — Sealed Sender v2 with ServiceId (same binary format, newer addressing)
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageReceiver.java`
+
+### Retry receipts (DecryptionErrorMessage)
+
+**Status: COMPLETE.**
+
+When an inner-layer decrypt error occurs (sender is known from the sealed sender certificate), the receiver sends a `DecryptionErrorMessage` wrapped as `PlaintextContent` (envelope type 8 = `PLAINTEXT_CONTENT`) back to the sender. This is sent unencrypted — no session is required.
+
+On the sender side, receiving a retry receipt triggers:
+1. Archive (delete) the broken session for that peer
+2. Send a `NullMessage` (random padding) to force pre-key bundle fetch and new session establishment
+
+The original failed message is lost — we don't implement a Message Send Log for resending. Future messages work correctly after session re-establishment.
+
+**Key files:**
+- `internal/libsignal/decryptionerror.go` — CGO bindings for `DecryptionErrorMessage`
+- `internal/libsignal/plaintextcontent.go` — CGO bindings for `PlaintextContent` (unencrypted wrapper)
+- `internal/signalservice/retryreceipt.go` — `SendRetryReceipt`, `HandleRetryReceipt`, `SendNullMessage`
+- `internal/signalservice/receiver.go` — Integration: sends retry on inner decrypt failure, handles incoming `PLAINTEXT_CONTENT`
+- `internal/store/session.go` — `ArchiveSession` (deletes session to force re-establishment)
+
+**Signal-Android reference:**
+- `MessageDecryptor.kt` — Detects decrypt errors, sends retry receipt
+- `SendRetryReceiptJob.java` — Sends PlaintextContent with DecryptionErrorMessage
+- `MessageContentProcessor.kt` — Handles incoming retry receipts
+- `AutomaticSessionResetJob.java` — Archives session and sends null message
 
 ## Persistent storage (`internal/store/`)
 

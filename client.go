@@ -232,7 +232,34 @@ func (c *Client) Receive(ctx context.Context) iter.Seq2[Message, error] {
 		Password: c.password,
 	}
 	wsURL := defaultWSURL
-	return signalservice.ReceiveMessages(ctx, wsURL, c.store, auth, c.aci, uint32(c.deviceID), c.tlsConfig, c.logger, c.debugDir)
+	return signalservice.ReceiveMessages(ctx, wsURL, c.apiURL, c.store, auth, c.aci, uint32(c.deviceID), c.tlsConfig, c.logger, c.debugDir)
+}
+
+// SyncContacts requests a contact sync from the primary device.
+// The primary device will respond with a SyncMessage.Contacts that is
+// automatically handled by the receive loop, populating the local contact store.
+func (c *Client) SyncContacts(ctx context.Context) error {
+	if c.store == nil {
+		return fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+	return signalservice.RequestContactSync(ctx, c.apiURL, c.store, auth, c.aci, c.tlsConfig, c.logger)
+}
+
+// LookupNumber returns the phone number for the given ACI UUID from the local
+// contact store. Returns empty string if not found.
+func (c *Client) LookupNumber(aci string) string {
+	if c.store == nil {
+		return ""
+	}
+	contact, err := c.store.GetContactByACI(aci)
+	if err != nil || contact == nil {
+		return ""
+	}
+	return contact.Number
 }
 
 // DeviceInfo is the public type for device information.

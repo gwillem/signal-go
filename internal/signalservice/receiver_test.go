@@ -275,7 +275,7 @@ func TestHandleEnvelopeDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, "")
+	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestHandleEnvelopeSkipsDeliveryReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, "")
+	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestDumpEnvelope(t *testing.T) {
 
 	debugDir := t.TempDir()
 
-	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, debugDir)
+	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2, debugDir: debugDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestDumpEnvelopeNoOpWhenEmpty(t *testing.T) {
 	}
 
 	// Pass empty debugDir — should not create any files.
-	msg, err := handleEnvelope(envBytes, bobStore, "bob-aci", 2, nil, "")
+	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestReceivePreKeyMessage(t *testing.T) {
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}
@@ -512,7 +512,7 @@ func TestReceiveCiphertextMessage(t *testing.T) {
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}
@@ -561,7 +561,7 @@ func TestReceiveMultipleMessages(t *testing.T) {
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}
@@ -630,7 +630,7 @@ func TestReceiveBreakClosesConnection(t *testing.T) {
 	defer cancel()
 
 	count := 0
-	for msg, err := range ReceiveMessages(ctx, wsURL, bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
 		if err != nil {
 			continue
 		}

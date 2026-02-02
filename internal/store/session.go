@@ -58,3 +58,16 @@ func (s *Store) StoreSession(address *libsignal.Address, record *libsignal.Sessi
 	}
 	return nil
 }
+
+// ArchiveSession deletes the session record for the given address and device ID.
+// This forces the next encrypt attempt to establish a new session via pre-key fetch.
+func (s *Store) ArchiveSession(address string, deviceID uint32) error {
+	_, err := s.db.Exec(
+		"DELETE FROM session WHERE address = ? AND device_id = ?",
+		address, deviceID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: archive session: %w", err)
+	}
+	return nil
+}
