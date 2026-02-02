@@ -153,7 +153,7 @@ func TestSendRetryReceipt(t *testing.T) {
 	auth := BasicAuth{Username: "me.1", Password: "pass"}
 	var timestamp uint64 = 1700000000000
 
-	err = SendRetryReceipt(context.Background(), srv.URL, st, auth, nil, "sender-aci", 1, ctBytes, msgType, timestamp)
+	err = SendRetryReceipt(context.Background(), srv.URL, st, auth, nil, "sender-aci", 1, ctBytes, msgType, timestamp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestHandleRetryReceipt(t *testing.T) {
 
 	auth := BasicAuth{Username: "me.1", Password: "pass"}
 
-	err = HandleRetryReceipt(context.Background(), srv.URL, st, auth, nil, "requester-aci", 1)
+	err = HandleRetryReceipt(context.Background(), srv.URL, st, auth, nil, "requester-aci", 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

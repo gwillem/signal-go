@@ -388,7 +388,7 @@ func handlePlaintextContent(ctx context.Context, content []byte, senderACI strin
 	logf(rc.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
 
 	// Handle the retry receipt: archive session and send null message.
-	if err := HandleRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice); err != nil {
+	if err := HandleRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice, rc.logger); err != nil {
 		logf(rc.logger, "handle retry receipt error: %v", err)
 	}
 
@@ -404,7 +404,7 @@ func sendRetryReceiptAsync(ctx context.Context, rc *receiverContext, senderACI s
 	}
 	logf(rc.logger, "sending retry receipt to=%s device=%d timestamp=%d", senderACI, senderDevice, timestamp)
 	go func() {
-		if err := SendRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice, innerContent, msgType, timestamp); err != nil {
+		if err := SendRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice, innerContent, msgType, timestamp, rc.logger); err != nil {
 			logf(rc.logger, "retry receipt send error: %v", err)
 		} else {
 			logf(rc.logger, "retry receipt sent to=%s device=%d", senderACI, senderDevice)

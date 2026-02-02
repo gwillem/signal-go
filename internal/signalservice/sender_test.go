@@ -164,7 +164,7 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
 
 	// Send a message — this should fetch pre-keys, establish session, encrypt, and send.
-	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello Bob!", st, auth, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello Bob!", st, auth, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 
 	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
 
-	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello again!", st, auth, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello again!", st, auth, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

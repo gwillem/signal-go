@@ -7,18 +7,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 // HTTPClient communicates with the Signal server REST API.
 type HTTPClient struct {
 	baseURL    string
 	httpClient *http.Client
+	logger     *log.Logger
 }
 
 // NewHTTPClient creates a new HTTP client for the Signal API.
 // If tlsConf is non-nil, it is used for TLS connections.
-func NewHTTPClient(baseURL string, tlsConf *tls.Config) *HTTPClient {
+// If logger is nil, logging is disabled.
+func NewHTTPClient(baseURL string, tlsConf *tls.Config, logger *log.Logger) *HTTPClient {
 	client := &http.Client{}
 	if tlsConf != nil {
 		client.Transport = &http.Transport{TLSClientConfig: tlsConf}
@@ -26,7 +31,80 @@ func NewHTTPClient(baseURL string, tlsConf *tls.Config) *HTTPClient {
 	return &HTTPClient{
 		baseURL:    baseURL,
 		httpClient: client,
+		logger:     logger,
 	}
+}
+
+// do executes an HTTP request with automatic retry on 429 (Too Many Requests).
+// It respects the Retry-After header, capping the wait at 10 minutes.
+// Falls back to exponential backoff (5s, 10s, 20s) if no Retry-After is present.
+func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
+	const maxRetries = 3
+	const maxWait = 10 * time.Minute
+
+	var body []byte
+	if req.Body != nil {
+		var err error
+		body, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("httpclient: read request body: %w", err)
+		}
+	}
+
+	for attempt := range maxRetries + 1 {
+		if body != nil {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		logf(c.logger, "http %s %s", req.Method, req.URL.Path)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests {
+			logf(c.logger, "http %s %s → %d", req.Method, req.URL.Path, resp.StatusCode)
+			return resp, nil
+		}
+
+		// 429 — read body for logging, then close it before sleeping.
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		wait := time.Duration(5<<attempt) * time.Second // 5s, 10s, 20s, 40s
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+				wait = time.Duration(secs) * time.Second
+			}
+		}
+		wait = min(wait, maxWait)
+
+		if attempt == maxRetries {
+			logf(c.logger, "http %s %s → 429 (no retries left, Retry-After: %s)",
+				req.Method, req.URL.Path, resp.Header.Get("Retry-After"))
+			// Return a synthetic response so callers see the 429.
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Header:     resp.Header,
+				Body:       io.NopCloser(bytes.NewReader(respBody)),
+				Request:    req,
+			}, nil
+		}
+
+		logf(c.logger, "http %s %s → 429, retrying in %v (attempt %d/%d, Retry-After: %s)",
+			req.Method, req.URL.Path, wait, attempt+1, maxRetries,
+			resp.Header.Get("Retry-After"))
+
+		select {
+		case <-time.After(wait):
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
+	}
+
+	// unreachable
+	return nil, fmt.Errorf("httpclient: retry loop exhausted")
 }
 
 // RegisterSecondaryDevice calls PUT /v1/devices/link to finalize device registration.
@@ -45,7 +123,7 @@ func (c *HTTPClient) RegisterSecondaryDevice(ctx context.Context, req *RegisterR
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.SetBasicAuth(auth.Username, auth.Password)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: register: %w", err)
 	}
@@ -78,7 +156,7 @@ func (c *HTTPClient) GetPreKeys(ctx context.Context, destination string, deviceI
 	}
 	httpReq.SetBasicAuth(auth.Username, auth.Password)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: get pre-keys: %w", err)
 	}
@@ -101,8 +179,33 @@ func (c *HTTPClient) GetPreKeys(ctx context.Context, destination string, deviceI
 	return &result, nil
 }
 
+// StaleDevicesError is returned when the server responds with 410,
+// indicating that sessions for certain devices are outdated.
+// The caller should delete those sessions, re-fetch pre-keys, and retry.
+type StaleDevicesError struct {
+	StaleDevices []int
+}
+
+func (e *StaleDevicesError) Error() string {
+	return fmt.Sprintf("httpclient: stale devices: %v", e.StaleDevices)
+}
+
+// MismatchedDevicesError is returned when the server responds with 409,
+// indicating device list mismatch (missing or extra devices).
+type MismatchedDevicesError struct {
+	MissingDevices []int `json:"missingDevices"`
+	ExtraDevices   []int `json:"extraDevices"`
+}
+
+func (e *MismatchedDevicesError) Error() string {
+	return fmt.Sprintf("httpclient: mismatched devices: missing=%v extra=%v", e.MissingDevices, e.ExtraDevices)
+}
+
 // SendMessage sends an encrypted message to a destination.
 // PUT /v1/messages/{destination}
+//
+// Returns *StaleDevicesError for 410 and *MismatchedDevicesError for 409,
+// allowing callers to handle session refresh and retry.
 func (c *HTTPClient) SendMessage(ctx context.Context, destination string, msg *OutgoingMessageList, auth BasicAuth) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
@@ -116,18 +219,34 @@ func (c *HTTPClient) SendMessage(ctx context.Context, destination string, msg *O
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.SetBasicAuth(auth.Username, auth.Password)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.do(httpReq)
 	if err != nil {
 		return fmt.Errorf("httpclient: send message: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated:
+		return nil
+	case http.StatusGone: // 410
+		var parsed struct {
+			StaleDevices []int `json:"staleDevices"`
+		}
+		if err := json.Unmarshal(respBody, &parsed); err != nil {
+			return fmt.Errorf("httpclient: send message: status 410: %s", respBody)
+		}
+		return &StaleDevicesError{StaleDevices: parsed.StaleDevices}
+	case http.StatusConflict: // 409
+		var parsed MismatchedDevicesError
+		if err := json.Unmarshal(respBody, &parsed); err != nil {
+			return fmt.Errorf("httpclient: send message: status 409: %s", respBody)
+		}
+		return &parsed
+	default:
 		return fmt.Errorf("httpclient: send message: status %d: %s", resp.StatusCode, respBody)
 	}
-
-	return nil
 }
 
 // SetAccountAttributes calls PUT /v1/accounts/attributes/ to update account attributes.
@@ -144,7 +263,7 @@ func (c *HTTPClient) SetAccountAttributes(ctx context.Context, attrs *AccountAtt
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.SetBasicAuth(auth.Username, auth.Password)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.do(httpReq)
 	if err != nil {
 		return fmt.Errorf("httpclient: set attributes: %w", err)
 	}
@@ -166,7 +285,7 @@ func (c *HTTPClient) GetDevices(ctx context.Context, auth BasicAuth) ([]DeviceIn
 	}
 	httpReq.SetBasicAuth(auth.Username, auth.Password)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: get devices: %w", err)
 	}
@@ -203,7 +322,7 @@ func (c *HTTPClient) UploadPreKeys(ctx context.Context, identity string, keys *P
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.SetBasicAuth(auth.Username, auth.Password)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.do(httpReq)
 	if err != nil {
 		return fmt.Errorf("httpclient: upload keys: %w", err)
 	}

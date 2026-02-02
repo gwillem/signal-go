@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -15,11 +16,9 @@ import (
 
 // SendTextMessage sends a text message to a recipient. It handles session
 // establishment (fetching pre-keys if needed), encryption, and HTTP delivery.
-func SendTextMessage(ctx context.Context, apiURL string, recipient string, text string, st *store.Store, auth BasicAuth, tlsConf *tls.Config) error {
-	now := time.Now()
-	timestamp := uint64(now.UnixMilli())
-
-	// Build Content protobuf.
+// Automatically retries on 410 (stale devices).
+func SendTextMessage(ctx context.Context, apiURL string, recipient string, text string, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger) error {
+	timestamp := uint64(time.Now().UnixMilli())
 	content := &proto.Content{
 		DataMessage: &proto.DataMessage{
 			Body:      &text,
@@ -31,86 +30,7 @@ func SendTextMessage(ctx context.Context, apiURL string, recipient string, text 
 		return fmt.Errorf("sender: marshal content: %w", err)
 	}
 
-	// Create address for device 1 (primary device).
-	addr, err := libsignal.NewAddress(recipient, 1)
-	if err != nil {
-		return fmt.Errorf("sender: create address: %w", err)
-	}
-	defer addr.Destroy()
-
-	httpClient := NewHTTPClient(apiURL, tlsConf)
-
-	// Check if session exists.
-	session, err := st.LoadSession(addr)
-	if err != nil {
-		return fmt.Errorf("sender: load session: %w", err)
-	}
-
-	var registrationID int
-
-	if session == nil {
-		// No session — fetch pre-keys and establish one.
-		preKeyResp, err := httpClient.GetPreKeys(ctx, recipient, 1, auth)
-		if err != nil {
-			return fmt.Errorf("sender: get pre-keys: %w", err)
-		}
-
-		if len(preKeyResp.Devices) == 0 {
-			return fmt.Errorf("sender: no devices in pre-key response")
-		}
-
-		dev := preKeyResp.Devices[0]
-		registrationID = dev.RegistrationID
-
-		bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, dev)
-		if err != nil {
-			return fmt.Errorf("sender: build pre-key bundle: %w", err)
-		}
-		defer bundle.Destroy()
-
-		if err := libsignal.ProcessPreKeyBundle(bundle, addr, st, st, now); err != nil {
-			return fmt.Errorf("sender: process pre-key bundle: %w", err)
-		}
-	} else {
-		session.Destroy()
-		// Use a cached registration ID — for an established session we use 0
-		// and the server will route by session info.
-		registrationID = 0
-	}
-
-	// Encrypt.
-	ciphertext, err := libsignal.Encrypt(contentBytes, addr, st, st, now)
-	if err != nil {
-		return fmt.Errorf("sender: encrypt: %w", err)
-	}
-	defer ciphertext.Destroy()
-
-	msgType, err := ciphertext.Type()
-	if err != nil {
-		return fmt.Errorf("sender: ciphertext type: %w", err)
-	}
-
-	ctBytes, err := ciphertext.Serialize()
-	if err != nil {
-		return fmt.Errorf("sender: serialize ciphertext: %w", err)
-	}
-
-	// Build outgoing message.
-	msgList := &OutgoingMessageList{
-		Destination: recipient,
-		Timestamp:   timestamp,
-		Messages: []OutgoingMessage{
-			{
-				Type:                      envelopeTypeForCiphertext(msgType),
-				DestinationDeviceID:       1,
-				DestinationRegistrationID: registrationID,
-				Content:                   base64.StdEncoding.EncodeToString(ctBytes),
-			},
-		},
-		Urgent: true,
-	}
-
-	return httpClient.SendMessage(ctx, recipient, msgList, auth)
+	return sendEncryptedMessage(ctx, apiURL, recipient, contentBytes, st, auth, tlsConf, logger)
 }
 
 // envelopeTypeForCiphertext maps libsignal CiphertextMessage types to Signal

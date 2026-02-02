@@ -5,7 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"log"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -21,6 +25,7 @@ func SendRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 	auth BasicAuth, tlsConf *tls.Config,
 	senderACI string, senderDevice uint32,
 	originalContent []byte, originalType uint8, originalTimestamp uint64,
+	logger *log.Logger,
 ) error {
 	dem, err := libsignal.NewDecryptionErrorMessage(originalContent, originalType, originalTimestamp, senderDevice)
 	if err != nil {
@@ -53,7 +58,7 @@ func SendRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 		Urgent: true,
 	}
 
-	httpClient := NewHTTPClient(apiURL, tlsConf)
+	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
 	return httpClient.SendMessage(ctx, senderACI, msgList, auth)
 }
 
@@ -63,6 +68,7 @@ func SendRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 func HandleRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 	auth BasicAuth, tlsConf *tls.Config,
 	requesterACI string, requesterDevice uint32,
+	logger *log.Logger,
 ) error {
 	// Archive the broken session.
 	if err := st.ArchiveSession(requesterACI, requesterDevice); err != nil {
@@ -70,14 +76,14 @@ func HandleRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 	}
 
 	// Send a null message to force new session establishment.
-	return SendNullMessage(ctx, apiURL, requesterACI, st, auth, tlsConf)
+	return SendNullMessage(ctx, apiURL, requesterACI, st, auth, tlsConf, logger)
 }
 
 // SendNullMessage sends a NullMessage (with random padding) to the recipient.
 // This forces pre-key bundle fetch and new session establishment if no session
 // exists (e.g. after archival).
 func SendNullMessage(ctx context.Context, apiURL string, recipient string,
-	st *store.Store, auth BasicAuth, tlsConf *tls.Config,
+	st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
 ) error {
 	padding := make([]byte, 140)
 	if _, err := rand.Read(padding); err != nil {
@@ -94,85 +100,151 @@ func SendNullMessage(ctx context.Context, apiURL string, recipient string,
 		return fmt.Errorf("null message: marshal: %w", err)
 	}
 
-	return sendEncryptedMessage(ctx, apiURL, recipient, contentBytes, st, auth, tlsConf)
+	return sendEncryptedMessage(ctx, apiURL, recipient, contentBytes, st, auth, tlsConf, logger)
 }
 
 // sendEncryptedMessage encrypts and sends arbitrary Content bytes to a recipient.
-// It handles session establishment (fetching pre-keys if needed).
+// It handles session establishment (fetching pre-keys if needed) and retries on:
+//   - 410 (stale devices): deletes stale sessions and retries
+//   - 409 (mismatched devices): adds missing devices and retries
+//
+// The local device ID is extracted from auth.Username ("{aci}.{deviceId}") and
+// excluded from the device list when sending to self (sync messages).
 func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
-	contentBytes []byte, st *store.Store, auth BasicAuth, tlsConf *tls.Config,
+	contentBytes []byte, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
+) error {
+	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
+
+	// Parse local device ID from auth username ("{aci}.{deviceId}").
+	localDeviceID := 0
+	if parts := strings.SplitN(auth.Username, ".", 2); len(parts) == 2 {
+		fmt.Sscanf(parts[1], "%d", &localDeviceID)
+	}
+
+	// Start with device 1. The server will tell us about additional devices via 409.
+	deviceIDs := []int{1}
+
+	for attempt := range 3 {
+		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth)
+		if err == nil {
+			return nil
+		}
+		if attempt == 2 {
+			return err
+		}
+
+		var staleErr *StaleDevicesError
+		var mismatchErr *MismatchedDevicesError
+
+		switch {
+		case errors.As(err, &staleErr):
+			// Archive only the stale sessions so they get re-fetched.
+			for _, deviceID := range staleErr.StaleDevices {
+				_ = st.ArchiveSession(recipient, uint32(deviceID))
+			}
+		case errors.As(err, &mismatchErr):
+			// Add missing devices (skip our own device — we never send to
+			// ourselves). Archive and remove extra devices.
+			for _, deviceID := range mismatchErr.MissingDevices {
+				if deviceID != localDeviceID {
+					deviceIDs = append(deviceIDs, deviceID)
+				}
+			}
+			for _, deviceID := range mismatchErr.ExtraDevices {
+				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
+				_ = st.ArchiveSession(recipient, uint32(deviceID))
+			}
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+// encryptAndSend performs a single encrypt-and-send attempt for the given device IDs.
+func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient string,
+	contentBytes []byte, deviceIDs []int, st *store.Store, auth BasicAuth,
 ) error {
 	now := time.Now()
 	timestamp := uint64(now.UnixMilli())
 
-	addr, err := libsignal.NewAddress(recipient, 1)
-	if err != nil {
-		return fmt.Errorf("send: create address: %w", err)
-	}
-	defer addr.Destroy()
+	var messages []OutgoingMessage
 
-	httpClient := NewHTTPClient(apiURL, tlsConf)
-
-	session, err := st.LoadSession(addr)
-	if err != nil {
-		return fmt.Errorf("send: load session: %w", err)
-	}
-
-	var registrationID int
-
-	if session == nil {
-		preKeyResp, err := httpClient.GetPreKeys(ctx, recipient, 1, auth)
+	for _, deviceID := range deviceIDs {
+		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
 		if err != nil {
-			return fmt.Errorf("send: get pre-keys: %w", err)
-		}
-		if len(preKeyResp.Devices) == 0 {
-			return fmt.Errorf("send: no devices in pre-key response")
+			return fmt.Errorf("send: create address for device %d: %w", deviceID, err)
 		}
 
-		dev := preKeyResp.Devices[0]
-		registrationID = dev.RegistrationID
-
-		bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, dev)
+		session, err := st.LoadSession(addr)
 		if err != nil {
-			return fmt.Errorf("send: build pre-key bundle: %w", err)
+			addr.Destroy()
+			return fmt.Errorf("send: load session for device %d: %w", deviceID, err)
 		}
-		defer bundle.Destroy()
 
-		if err := libsignal.ProcessPreKeyBundle(bundle, addr, st, st, now); err != nil {
-			return fmt.Errorf("send: process pre-key bundle: %w", err)
+		var registrationID int
+
+		if session == nil {
+			preKeyResp, err := httpClient.GetPreKeys(ctx, recipient, deviceID, auth)
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("send: get pre-keys for device %d: %w", deviceID, err)
+			}
+			if len(preKeyResp.Devices) == 0 {
+				addr.Destroy()
+				return fmt.Errorf("send: no devices in pre-key response for device %d", deviceID)
+			}
+
+			dev := preKeyResp.Devices[0]
+			registrationID = dev.RegistrationID
+
+			bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, dev)
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("send: build pre-key bundle for device %d: %w", deviceID, err)
+			}
+
+			if err := libsignal.ProcessPreKeyBundle(bundle, addr, st, st, now); err != nil {
+				bundle.Destroy()
+				addr.Destroy()
+				return fmt.Errorf("send: process pre-key bundle for device %d: %w", deviceID, err)
+			}
+			bundle.Destroy()
+		} else {
+			session.Destroy()
 		}
-	} else {
-		session.Destroy()
-	}
 
-	ciphertext, err := libsignal.Encrypt(contentBytes, addr, st, st, now)
-	if err != nil {
-		return fmt.Errorf("send: encrypt: %w", err)
-	}
-	defer ciphertext.Destroy()
+		ciphertext, err := libsignal.Encrypt(contentBytes, addr, st, st, now)
+		addr.Destroy()
+		if err != nil {
+			return fmt.Errorf("send: encrypt for device %d: %w", deviceID, err)
+		}
 
-	msgType, err := ciphertext.Type()
-	if err != nil {
-		return fmt.Errorf("send: ciphertext type: %w", err)
-	}
+		msgType, err := ciphertext.Type()
+		if err != nil {
+			ciphertext.Destroy()
+			return fmt.Errorf("send: ciphertext type for device %d: %w", deviceID, err)
+		}
 
-	ctBytes, err := ciphertext.Serialize()
-	if err != nil {
-		return fmt.Errorf("send: serialize ciphertext: %w", err)
+		ctBytes, err := ciphertext.Serialize()
+		ciphertext.Destroy()
+		if err != nil {
+			return fmt.Errorf("send: serialize ciphertext for device %d: %w", deviceID, err)
+		}
+
+		messages = append(messages, OutgoingMessage{
+			Type:                      envelopeTypeForCiphertext(msgType),
+			DestinationDeviceID:       deviceID,
+			DestinationRegistrationID: registrationID,
+			Content:                   base64.StdEncoding.EncodeToString(ctBytes),
+		})
 	}
 
 	msgList := &OutgoingMessageList{
 		Destination: recipient,
 		Timestamp:   timestamp,
-		Messages: []OutgoingMessage{
-			{
-				Type:                      envelopeTypeForCiphertext(msgType),
-				DestinationDeviceID:       1,
-				DestinationRegistrationID: registrationID,
-				Content:                   base64.StdEncoding.EncodeToString(ctBytes),
-			},
-		},
-		Urgent: true,
+		Messages:    messages,
+		Urgent:      true,
 	}
 
 	return httpClient.SendMessage(ctx, recipient, msgList, auth)

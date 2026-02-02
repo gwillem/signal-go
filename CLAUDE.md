@@ -57,6 +57,20 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 3. `pointer.go` provides a handle map for passing Go interfaces through C `void*`
 4. `memstore.go` has in-memory implementations for testing
 
+## Logging convention
+
+All logging uses an optional `*log.Logger` instance threaded from `Client.logger` (set via `WithLogger`). Never use the global `log.Printf` — always accept a `*log.Logger` parameter and use the nil-safe `logf()` helper in `internal/signalservice/receiver.go`:
+
+```go
+func logf(logger *log.Logger, format string, args ...any) {
+    if logger != nil {
+        logger.Printf(format, args...)
+    }
+}
+```
+
+When adding new functions that need logging, accept `logger *log.Logger` as a parameter and pass it through to `NewHTTPClient` and any callees. Logging is disabled by default (nil logger).
+
 ## Phase status
 
 - **Phase 1 (CGO bindings):** Complete — key generation, session establishment, encrypt/decrypt

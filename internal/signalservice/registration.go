@@ -120,7 +120,7 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 	password := generatePassword()
 
 	// Register device.
-	httpClient := NewHTTPClient(apiURL, tlsConf)
+	httpClient := NewHTTPClient(apiURL, tlsConf, nil)
 
 	regReq := &RegisterRequest{
 		VerificationCode: data.ProvisioningCode,

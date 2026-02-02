@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestRegisterSecondaryDevice(t *testing.T) {
@@ -55,7 +56,7 @@ func TestRegisterSecondaryDevice(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, nil)
+	client := NewHTTPClient(srv.URL, nil, nil)
 
 	req := &RegisterRequest{
 		VerificationCode: "test-code",
@@ -105,13 +106,23 @@ func TestRegisterSecondaryDeviceError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.status == 429 {
+					w.Header().Set("Retry-After", "0")
+				}
 				w.WriteHeader(tt.status)
 				w.Write([]byte("error"))
 			}))
 			defer srv.Close()
 
-			client := NewHTTPClient(srv.URL, nil)
-			_, err := client.RegisterSecondaryDevice(context.Background(), &RegisterRequest{}, BasicAuth{})
+			ctx := context.Background()
+			if tt.status == 429 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
+				defer cancel()
+			}
+
+			client := NewHTTPClient(srv.URL, nil, nil)
+			_, err := client.RegisterSecondaryDevice(ctx, &RegisterRequest{}, BasicAuth{})
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -162,7 +173,7 @@ func TestUploadPreKeys(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, nil)
+	client := NewHTTPClient(srv.URL, nil, nil)
 
 	err := client.UploadPreKeys(context.Background(), "aci", &PreKeyUpload{
 		SignedPreKey:    &SignedPreKeyEntity{KeyID: 1, PublicKey: "abc", Signature: "def"},
@@ -180,7 +191,7 @@ func TestUploadPreKeysError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, nil)
+	client := NewHTTPClient(srv.URL, nil, nil)
 	err := client.UploadPreKeys(context.Background(), "aci", &PreKeyUpload{}, BasicAuth{})
 	if err == nil {
 		t.Fatal("expected error")
@@ -220,7 +231,7 @@ func TestGetPreKeys(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, nil)
+	client := NewHTTPClient(srv.URL, nil, nil)
 	resp, err := client.GetPreKeys(context.Background(), "recipient-aci", 1, BasicAuth{
 		Username: "my-aci.2",
 		Password: "mypass",
@@ -256,7 +267,7 @@ func TestGetPreKeysError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, nil)
+	client := NewHTTPClient(srv.URL, nil, nil)
 	_, err := client.GetPreKeys(context.Background(), "unknown", 1, BasicAuth{})
 	if err == nil {
 		t.Fatal("expected error")
@@ -309,7 +320,7 @@ func TestSendMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, nil)
+	client := NewHTTPClient(srv.URL, nil, nil)
 	err := client.SendMessage(context.Background(), "recipient-aci", &OutgoingMessageList{
 		Destination: "recipient-aci",
 		Timestamp:   1234567890,
@@ -335,7 +346,7 @@ func TestSendMessageError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, nil)
+	client := NewHTTPClient(srv.URL, nil, nil)
 	err := client.SendMessage(context.Background(), "recipient", &OutgoingMessageList{}, BasicAuth{})
 	if err == nil {
 		t.Fatal("expected error")

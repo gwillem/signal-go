@@ -215,7 +215,7 @@ func (c *Client) Send(ctx context.Context, recipient string, text string) error 
 		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
 		Password: c.password,
 	}
-	return signalservice.SendTextMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig)
+	return signalservice.SendTextMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig, c.logger)
 }
 
 // Receive returns an iterator that yields incoming text messages.
@@ -271,7 +271,7 @@ func (c *Client) Devices(ctx context.Context) ([]DeviceInfo, error) {
 		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
 		Password: c.password,
 	}
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig)
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
 	return httpClient.GetDevices(ctx, auth)
 }
 
@@ -314,7 +314,7 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 		attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
 	}
 
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig)
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
 	return httpClient.SetAccountAttributes(ctx, attrs, auth)
 }
 
