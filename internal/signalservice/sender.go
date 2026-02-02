@@ -101,7 +101,7 @@ func SendTextMessage(ctx context.Context, apiURL string, recipient string, text 
 		Timestamp:   timestamp,
 		Messages: []OutgoingMessage{
 			{
-				Type:                      int(msgType),
+				Type:                      envelopeTypeForCiphertext(msgType),
 				DestinationDeviceID:       1,
 				DestinationRegistrationID: registrationID,
 				Content:                   base64.StdEncoding.EncodeToString(ctBytes),
@@ -111,6 +111,27 @@ func SendTextMessage(ctx context.Context, apiURL string, recipient string, text 
 	}
 
 	return httpClient.SendMessage(ctx, recipient, msgList, auth)
+}
+
+// envelopeTypeForCiphertext maps libsignal CiphertextMessage types to Signal
+// server envelope types. These are different numbering schemes:
+//
+//	libsignal Whisper (2) → Envelope CIPHERTEXT (1)
+//	libsignal PreKey  (3) → Envelope PREKEY_BUNDLE (3)
+//	libsignal Plaintext (8) → Envelope PLAINTEXT_CONTENT (8)
+func envelopeTypeForCiphertext(ciphertextType uint8) proto.Envelope_Type {
+	switch ciphertextType {
+	case libsignal.CiphertextMessageTypeWhisper:
+		return proto.Envelope_CIPHERTEXT
+	case libsignal.CiphertextMessageTypePreKey:
+		return proto.Envelope_PREKEY_BUNDLE
+	case libsignal.CiphertextMessageTypePlaintext:
+		return proto.Envelope_PLAINTEXT_CONTENT
+	case libsignal.CiphertextMessageTypeSenderKey:
+		return proto.Envelope_SENDERKEY_MESSAGE
+	default:
+		return proto.Envelope_Type(ciphertextType)
+	}
 }
 
 // buildPreKeyBundle constructs a libsignal PreKeyBundle from server response data.

@@ -1,5 +1,7 @@
 package signalservice
 
+import "github.com/gwillem/signal-go/internal/proto"
+
 // BasicAuth holds credentials for HTTP Basic authentication.
 type BasicAuth struct {
 	Username string // "{aci}.{deviceId}"
@@ -93,10 +95,10 @@ type OutgoingMessageList struct {
 
 // OutgoingMessage is a single message in an OutgoingMessageList.
 type OutgoingMessage struct {
-	Type                      int    `json:"type"`
-	DestinationDeviceID       int    `json:"destinationDeviceId"`
-	DestinationRegistrationID int    `json:"destinationRegistrationId"`
-	Content                   string `json:"content"` // base64
+	Type                      proto.Envelope_Type `json:"type"`
+	DestinationDeviceID       int                 `json:"destinationDeviceId"`
+	DestinationRegistrationID int                 `json:"destinationRegistrationId"`
+	Content                   string              `json:"content"` // base64
 }
 
 // DeviceListResponse is the JSON response from GET /v1/devices/.

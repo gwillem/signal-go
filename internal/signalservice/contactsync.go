@@ -137,7 +137,7 @@ func RequestContactSync(ctx context.Context, apiURL string, st *store.Store, aut
 		Timestamp:   timestamp,
 		Messages: []OutgoingMessage{
 			{
-				Type:                      int(msgType),
+				Type:                      envelopeTypeForCiphertext(msgType),
 				DestinationDeviceID:       1,
 				DestinationRegistrationID: registrationID,
 				Content:                   base64.StdEncoding.EncodeToString(ctBytes),

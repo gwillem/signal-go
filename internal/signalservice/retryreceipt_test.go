@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
+	"github.com/gwillem/signal-go/internal/proto"
 	"github.com/gwillem/signal-go/internal/store"
 )
 
@@ -166,8 +167,8 @@ func TestSendRetryReceipt(t *testing.T) {
 	if len(receivedMsg.Messages) != 1 {
 		t.Fatalf("messages: got %d", len(receivedMsg.Messages))
 	}
-	if receivedMsg.Messages[0].Type != int(libsignal.CiphertextMessageTypePlaintext) {
-		t.Errorf("type: got %d, want %d", receivedMsg.Messages[0].Type, libsignal.CiphertextMessageTypePlaintext)
+	if receivedMsg.Messages[0].Type != proto.Envelope_PLAINTEXT_CONTENT {
+		t.Errorf("type: got %d, want %d", receivedMsg.Messages[0].Type, proto.Envelope_PLAINTEXT_CONTENT)
 	}
 	if receivedMsg.Messages[0].Content == "" {
 		t.Error("content should not be empty")

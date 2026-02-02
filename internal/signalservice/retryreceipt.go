@@ -45,7 +45,7 @@ func SendRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 		Timestamp:   timestamp,
 		Messages: []OutgoingMessage{
 			{
-				Type:                int(libsignal.CiphertextMessageTypePlaintext),
+				Type:                proto.Envelope_PLAINTEXT_CONTENT,
 				DestinationDeviceID: int(senderDevice),
 				Content:             base64.StdEncoding.EncodeToString(serialized),
 			},
@@ -166,7 +166,7 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 		Timestamp:   timestamp,
 		Messages: []OutgoingMessage{
 			{
-				Type:                      int(msgType),
+				Type:                      envelopeTypeForCiphertext(msgType),
 				DestinationDeviceID:       1,
 				DestinationRegistrationID: registrationID,
 				Content:                   base64.StdEncoding.EncodeToString(ctBytes),

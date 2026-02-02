@@ -181,8 +181,8 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	}
 
 	msg := receivedMsg.Messages[0]
-	if msg.Type != int(libsignal.CiphertextMessageTypePreKey) {
-		t.Errorf("type: got %d, want %d (PreKey)", msg.Type, libsignal.CiphertextMessageTypePreKey)
+	if msg.Type != proto.Envelope_PREKEY_BUNDLE {
+		t.Errorf("type: got %d, want %d (PreKey)", msg.Type, proto.Envelope_PREKEY_BUNDLE)
 	}
 	if msg.DestinationDeviceID != 1 {
 		t.Errorf("destinationDeviceId: got %d", msg.DestinationDeviceID)
@@ -402,7 +402,7 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	}
 
 	// With an existing session, we send a regular (Whisper) message.
-	if receivedMsg.Messages[0].Type != int(libsignal.CiphertextMessageTypePreKey) {
+	if receivedMsg.Messages[0].Type != proto.Envelope_PREKEY_BUNDLE {
 		// First message after ProcessPreKeyBundle is still PreKey type.
 		// This is expected — subsequent messages would be Whisper type.
 	}
