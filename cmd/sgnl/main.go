@@ -23,8 +23,9 @@ type globalOpts struct {
 	Link    linkCommand     `command:"link" description:"Link as a secondary Signal device"`
 	Send    sendCommand     `command:"send" description:"Send a text message"`
 	Receive receiveCommand  `command:"receive" description:"Receive and print incoming messages"`
-	Devices    devicesCommand    `command:"devices" description:"List registered devices for this account"`
-	UpdateAttr updateAttrCommand `command:"update-attributes" description:"Update account attributes on server (can fix message delivery)"`
+	Devices      devicesCommand      `command:"devices" description:"List registered devices for this account"`
+	UpdateAttr   updateAttrCommand   `command:"update-attributes" description:"Update account attributes on server (can fix message delivery)"`
+	SyncContacts syncContactsCommand `command:"sync-contacts" description:"Request contact sync from primary device"`
 }
 
 var opts globalOpts

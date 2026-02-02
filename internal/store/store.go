@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS kyber_pre_key (
 	record BLOB NOT NULL,
 	used INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS contact (
+	aci TEXT PRIMARY KEY,
+	number TEXT NOT NULL DEFAULT '',
+	name TEXT NOT NULL DEFAULT ''
+);
 `
 
 // DefaultDataDir returns the default data directory for signal-go databases.

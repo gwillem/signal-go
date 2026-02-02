@@ -9,6 +9,20 @@ import (
 	client "github.com/gwillem/signal-go"
 )
 
+// displayName returns the best available display string for a contact.
+func displayName(name, number, aci string) string {
+	if name != "" {
+		if number != "" {
+			return fmt.Sprintf("%s (%s)", name, number)
+		}
+		return name
+	}
+	if number != "" {
+		return number
+	}
+	return aci
+}
+
 type receiveCommand struct {
 	N int `short:"n" description:"Maximum number of messages to receive (0 = unlimited)" default:"0"`
 }
@@ -33,10 +47,12 @@ func (cmd *receiveCommand) Execute(args []string) error {
 			continue
 		}
 		ts := msg.Timestamp.Format("2006-01-02 15:04:05")
+		sender := displayName(msg.SenderName, msg.SenderNumber, msg.Sender)
 		if msg.SyncTo != "" {
-			fmt.Printf("[%s] (you) → %s: %s\n", ts, msg.SyncTo, msg.Body)
+			recipient := displayName("", msg.SyncToNumber, msg.SyncTo)
+			fmt.Printf("[%s] (you) → %s: %s\n", ts, recipient, msg.Body)
 		} else {
-			fmt.Printf("[%s] %s: %s\n", ts, msg.Sender, msg.Body)
+			fmt.Printf("[%s] %s: %s\n", ts, sender, msg.Body)
 		}
 		count++
 		if cmd.N > 0 && count >= cmd.N {
