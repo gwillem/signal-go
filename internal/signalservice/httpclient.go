@@ -56,8 +56,6 @@ func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
 			req.Body = io.NopCloser(bytes.NewReader(body))
 		}
 
-		logf(c.logger, "http %s %s", req.Method, req.URL.Path)
-
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			return nil, err

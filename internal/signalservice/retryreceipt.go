@@ -120,16 +120,19 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 	if parts := strings.SplitN(auth.Username, ".", 2); len(parts) == 2 {
 		fmt.Sscanf(parts[1], "%d", &localDeviceID)
 	}
+	logf(logger, "send: localDeviceID=%d recipient=%s", localDeviceID, recipient)
 
 	// Start with device 1. The server will tell us about additional devices via 409.
 	deviceIDs := []int{1}
 
-	for attempt := range 3 {
+	const maxAttempts = 5
+	for attempt := range maxAttempts {
+		logf(logger, "send: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
 		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth)
 		if err == nil {
 			return nil
 		}
-		if attempt == 2 {
+		if attempt == maxAttempts-1 {
 			return err
 		}
 
@@ -138,13 +141,31 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 
 		switch {
 		case errors.As(err, &staleErr):
-			// Archive only the stale sessions so they get re-fetched.
-			for _, deviceID := range staleErr.StaleDevices {
+			logf(logger, "send: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
+			// 410: the server rejected the entire batch. Archive all
+			// sessions so the retry re-establishes with fresh PreKey messages.
+			for _, deviceID := range deviceIDs {
 				_ = st.ArchiveSession(recipient, uint32(deviceID))
 			}
+			// Remove stale devices from the list — they may no longer
+			// exist on the server. If the server still needs them, it
+			// will re-add them via 409 on the next attempt.
+			for _, deviceID := range staleErr.StaleDevices {
+				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
+			}
+			// Always keep at least device 1 (primary).
+			if len(deviceIDs) == 0 {
+				deviceIDs = []int{1}
+			}
 		case errors.As(err, &mismatchErr):
-			// Add missing devices (skip our own device — we never send to
-			// ourselves). Archive and remove extra devices.
+			logf(logger, "send: 409 missing=%v extra=%v, archiving all sessions for devices=%v",
+				mismatchErr.MissingDevices, mismatchErr.ExtraDevices, deviceIDs)
+			// 409: the server rejected the entire batch. Archive all
+			// sessions so the retry re-establishes with fresh PreKey messages.
+			for _, deviceID := range deviceIDs {
+				_ = st.ArchiveSession(recipient, uint32(deviceID))
+			}
+			// Adjust the device list per the server's response.
 			for _, deviceID := range mismatchErr.MissingDevices {
 				if deviceID != localDeviceID {
 					deviceIDs = append(deviceIDs, deviceID)
@@ -152,7 +173,6 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 			}
 			for _, deviceID := range mismatchErr.ExtraDevices {
 				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
-				_ = st.ArchiveSession(recipient, uint32(deviceID))
 			}
 		default:
 			return err
