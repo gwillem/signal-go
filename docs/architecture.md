@@ -22,20 +22,23 @@ err := client.Link(ctx, func(uri string) {
 })
 fmt.Println("Linked to", client.Number())
 
-// Send (not yet implemented)
-err = client.Send(ctx, "+31612345678", "Hello from signal-go!")
+// Send a message
+err = client.Send(ctx, "recipient-aci-uuid", "Hello from signal-go!")
 
-// Receive (not yet implemented)
-for msg := range client.Receive(ctx) {
-    fmt.Printf("%s: %s\n", msg.From, msg.Body)
+// Receive messages
+for msg, err := range client.Receive(ctx) {
+    fmt.Printf("[%s] %s: %s\n", msg.Timestamp, msg.SenderNumber, msg.Body)
 }
+
+// Sync contacts from primary device (populates SenderNumber/SenderName)
+err = client.SyncContacts(ctx)
 ```
 
 ## Non-goals (for now)
 
-- Attachments, reactions, read receipts, typing indicators
+- Attachments (beyond contact sync blobs), reactions, read receipts, typing indicators
 - Group v2 management (create, invite, admin)
-- Profile updates, contact sync
+- Profile updates
 - Registration as primary device
 - Stories, calls, stickers
 - Desktop/multi-platform UI
@@ -44,23 +47,28 @@ for msg := range client.Receive(ctx) {
 
 ```
 ┌─────────────────────────────────────────────┐
-│  cmd/sig                 (CLI app)          │
-│  - sig link: link as secondary device       │
-│  - sig send: send text messages             │
+│  cmd/sgnl                (CLI app)          │
+│  - sgnl link: link as secondary device      │
+│  - sgnl send: send text messages            │
+│  - sgnl receive: receive + decrypt messages │
+│  - sgnl sync-contacts: contact sync         │
 ├─────────────────────────────────────────────┤
-│  client.go                  (public API)  │
-│  - Client: Link, Send, Receive              │
+│  client.go                  (public API)    │
+│  - Client: Link, Load, Send, Receive        │
+│  - SyncContacts, LookupNumber               │
 │  - hides WebSocket URLs, crypto, stores     │
 ├─────────────────────────────────────────────┤
-│  internal/signalservice     (pure Go)     │
+│  internal/signalservice     (pure Go)       │
 │  - HTTP client for Signal REST API          │
 │  - WebSocket for message push               │
 │  - device provisioning (linking)            │
-│  - message send / receive                   │
+│  - message send / receive / retry receipts  │
+│  - contact sync + attachment download       │
 ├─────────────────────────────────────────────┤
-│  internal/libsignal         (CGO bindings)│
+│  internal/libsignal         (CGO bindings)  │
 │  - key generation, session management       │
 │  - encrypt / decrypt (Double Ratchet)       │
+│  - sealed sender, retry receipts            │
 ├─────────────────────────────────────────────┤
 │  libsignal_ffi.a + libsignal-ffi.h          │
 │  - 48MB static lib, 2080-line C header      │
@@ -111,7 +119,7 @@ signal-go/
 ├── Makefile                        # Build libsignal Rust → .a + .h
 ├── LICENSE                         # AGPL-3.0
 ├── CLAUDE.md                       # Development instructions
-├── client.go                       # Public API — Client, Link, Number
+├── client.go                       # Public API — Client, Link, Load, Send, Receive, SyncContacts
 ├── internal/
 │   ├── libsignal/                  # CGO bindings — COMPLETE (Phase 1)
 │   │   ├── libsignal-ffi.h        # Generated C header (gitignored)
@@ -135,32 +143,44 @@ signal-go/
 │   │   ├── sealedsender.go        # SealedSenderDecrypt, SealedSenderDecryptToUSMC
 │   │   ├── decryptionerror.go     # DecryptionErrorMessage CGO bindings
 │   │   └── plaintextcontent.go    # PlaintextContent CGO bindings
-│   ├── proto/                      # Protobuf definitions + generated Go code (Phase 2)
+│   ├── proto/                      # Protobuf definitions + generated Go code
 │   │   ├── Provisioning.proto     # ProvisionEnvelope, ProvisionMessage, ProvisioningAddress
 │   │   ├── WebSocketResources.proto # WebSocketMessage, Request, Response
-│   │   ├── Provisioning.pb.go    # Generated
-│   │   ├── WebSocketResources.pb.go # Generated
+│   │   ├── SignalService.proto    # Envelope, Content, DataMessage, SyncMessage, ContactDetails
 │   │   └── generate.go            # go:generate directive for protoc
-│   ├── provisioncrypto/            # Provisioning envelope crypto (Phase 2, complete)
+│   ├── provisioncrypto/            # Provisioning envelope crypto (complete)
 │   │   ├── pkcs7.go               # PKCS#7 pad/unpad
 │   │   ├── kdf.go                 # HKDF-SHA256 key derivation
 │   │   ├── mac.go                 # HMAC-SHA256 compute + verify
 │   │   ├── aescbc.go              # AES-256-CBC encrypt/decrypt
 │   │   ├── provision.go           # Full envelope decrypt pipeline
 │   │   └── provisiondata.go       # ProvisionMessage → ProvisionData parsing
-│   ├── signalws/                   # WebSocket framing layer (Phase 2, complete)
-│   │   └── conn.go                # Protobuf-framed read/write/ACK over WebSocket
-│   ├── signalservice/              # Signal server protocol (Phase 2, in progress)
+│   ├── signalws/                   # WebSocket framing layer (complete)
+│   │   ├── conn.go                # Protobuf-framed read/write/ACK over WebSocket
+│   │   └── persistent.go          # PersistentConn: keep-alive + reconnection
+│   ├── signalservice/              # Signal server protocol (complete)
 │   │   ├── linkuri.go             # Device link URI formatting
-│   │   ├── provisioning.go        # Provisioning orchestration (complete)
-│   │   ├── httpclient.go          # HTTP client (REST API) (complete)
-│   │   ├── sender.go              # Message sending + SendNullMessage (complete)
-│   │   ├── receiver.go            # Message receive loop + retry receipts (complete)
-│   │   └── retryreceipt.go        # DecryptionErrorMessage retry flow (complete)
-│   └── store/
-│       └── sqlite/                 # Persistent store (modernc.org/sqlite)
+│   │   ├── provisioning.go        # Provisioning orchestration
+│   │   ├── httpclient.go          # HTTP client (REST API)
+│   │   ├── httptypes.go           # JSON request/response types
+│   │   ├── sender.go              # Message sending + SendNullMessage
+│   │   ├── receiver.go            # Message receive loop + retry receipts + contact sync
+│   │   ├── retryreceipt.go        # DecryptionErrorMessage retry flow
+│   │   ├── attachment.go          # CDN attachment download + AES-CBC decryption
+│   │   ├── contactsync.go         # ParseContactStream, RequestContactSync
+│   │   ├── dump.go                # Raw envelope debug dump
+│   │   ├── keygen.go              # Pre-key set generation
+│   │   ├── registration.go        # RegisterLinkedDevice orchestration
+│   │   └── trustroot.go           # Sealed sender trust root keys
+│   └── store/                      # SQLite persistent storage (modernc.org/sqlite)
+│       ├── store.go               # Open, Close, schema, SetIdentity
+│       ├── account.go             # Account CRUD
+│       ├── session.go             # SessionStore + ArchiveSession
+│       ├── identity.go            # IdentityKeyStore (TOFU)
+│       ├── prekey.go              # PreKeyStore, SignedPreKeyStore, KyberPreKeyStore
+│       └── contact.go             # Contact CRUD (ACI→number/name)
 └── cmd/
-    └── sig/                        # CLI: link + send + receive
+    └── sgnl/                       # CLI: link, send, receive, sync-contacts, devices
 ```
 
 ## Dependencies
@@ -169,12 +189,13 @@ Phase 1 has zero external Go dependencies (CGO only).
 
 Phase 2 adds:
 
-| Dependency | Purpose | Status |
-|---|---|---|
-| `google.golang.org/protobuf` | Protobuf runtime | Added |
-| `github.com/coder/websocket` | WebSocket client | Added |
-| `golang.org/x/crypto` | HKDF (provisioning key derivation) | Added |
-| `modernc.org/sqlite` | Pure-Go SQLite for persistent storage | Not yet |
+| Dependency | Purpose |
+|---|---|
+| `google.golang.org/protobuf` | Protobuf runtime |
+| `github.com/coder/websocket` | WebSocket client |
+| `golang.org/x/crypto` | HKDF (provisioning key derivation) |
+| `modernc.org/sqlite` | Pure-Go SQLite for persistent storage |
+| `github.com/jessevdk/go-flags` | CLI argument parsing |
 
 Note: `nhooyr.io/websocket` was the original plan but it is deprecated — the maintainer moved to `github.com/coder/websocket` (same API).
 

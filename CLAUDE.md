@@ -8,13 +8,13 @@ Go library for Signal messenger, replacing the Java signal-cli dependency. Licen
 
 ## Architecture
 
-- `client.go` — Public API: `Client` with `Link`, `Load`, `Send`, `Close`, `Number`, `DeviceID`
+- `client.go` — Public API: `Client` with `Link`, `Load`, `Send`, `Receive`, `SyncContacts`, `LookupNumber`, `Close`, `Number`, `DeviceID`
 - `internal/libsignal/` — CGO bindings to libsignal's Rust C FFI (Phase 1, complete)
 - `internal/proto/` — Protobuf definitions and generated Go code (Provisioning, WebSocket, DeviceName, SignalService)
 - `internal/provisioncrypto/` — Provisioning envelope encrypt/decrypt (HKDF, AES-CBC, HMAC, PKCS7), device name encryption
 - `internal/signalws/` — Protobuf-framed WebSocket layer with keep-alive and reconnection
-- `internal/signalservice/` — Provisioning orchestration, device registration, HTTP client, pre-key generation, message sending
-- `internal/store/` — SQLite persistent storage (sessions, identity keys, pre-keys, account credentials)
+- `internal/signalservice/` — Provisioning orchestration, device registration, HTTP client, pre-key generation, message sending/receiving, retry receipts, contact sync, attachment download
+- `internal/store/` — SQLite persistent storage (sessions, identity keys, pre-keys, account credentials, contacts)
 - `docs/` — Phase plans and architecture docs
 
 ## Reference implementation
@@ -60,13 +60,14 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 ## Phase status
 
 - **Phase 1 (CGO bindings):** Complete — key generation, session establishment, encrypt/decrypt
-- **Phase 2 (service layer):** In progress — device provisioning + registration complete (steps 1-12), SQLite storage + message sending + message receiving complete, see `docs/phase2-service-layer.md`
+- **Phase 2 (service layer):** Complete — device provisioning + registration, SQLite storage, message sending + receiving, sealed sender, retry receipts. See `docs/phase2-service-layer.md`
+- **Phase 3 (contact sync):** Complete — ACI UUID to phone number resolution via contact sync from primary device. See `docs/phase3-uuid-to-tel-plan.md`
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `client.go` | Public API: Client, Link, Load, Send, Receive, Close, Number, DeviceID |
+| `client.go` | Public API: Client, Link, Load, Send, Receive, SyncContacts, LookupNumber, Close, Number, DeviceID |
 | `libsignal.go` | CGO preamble (LDFLAGS, includes) |
 | `error.go` | FFI error wrapping, owned buffer handling |
 | `privatekey.go` | PrivateKey: generate, serialize, sign, agree |
@@ -94,7 +95,9 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `internal/signalservice/sender.go` | SendTextMessage, SendNullMessage: session establishment + encryption + delivery |
 | `internal/signalservice/retryreceipt.go` | SendRetryReceipt, HandleRetryReceipt: DecryptionErrorMessage retry flow |
 | `internal/signalservice/dump.go` | dumpEnvelope: raw envelope debug dump to file, LoadDump for test replay |
-| `internal/signalservice/receiver.go` | ReceiveMessages: WebSocket receive loop + decryption + retry receipts + iterator |
+| `internal/signalservice/receiver.go` | ReceiveMessages: WebSocket receive loop + decryption + retry receipts + contact sync + iterator |
+| `internal/signalservice/attachment.go` | DownloadAttachment, DecryptAttachment: CDN download + AES-CBC decryption |
+| `internal/signalservice/contactsync.go` | ParseContactStream, RequestContactSync: contact sync request + response parsing |
 | `internal/signalservice/trustroot.go` | Signal sealed sender trust root public keys |
 | `internal/libsignal/decryptionerror.go` | DecryptionErrorMessage: CGO bindings for retry receipts |
 | `internal/libsignal/plaintextcontent.go` | PlaintextContent: CGO bindings for unencrypted retry receipt delivery |
@@ -103,3 +106,4 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 | `internal/store/session.go` | SessionStore + ArchiveSession implementation |
 | `internal/store/identity.go` | IdentityKeyStore implementation (TOFU) |
 | `internal/store/prekey.go` | PreKeyStore, SignedPreKeyStore, KyberPreKeyStore implementations |
+| `internal/store/contact.go` | Contact CRUD: SaveContact, GetContactByACI, SaveContacts (bulk upsert) |

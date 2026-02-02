@@ -17,7 +17,7 @@ Goal: prove that Go can call libsignal's Rust C FFI — generate keys, establish
 ```makefile
 LIBSIGNAL_DIR := ../libsignal
 LIBSIGNAL_FFI := $(LIBSIGNAL_DIR)/target/release/libsignal_ffi.a
-HEADER         := pkg/libsignal/libsignal-ffi.h
+HEADER         := internal/libsignal/libsignal-ffi.h
 NIGHTLY_BIN   := $(HOME)/.rustup/toolchains/nightly-aarch64-apple-darwin/bin
 
 build: $(LIBSIGNAL_FFI) $(HEADER)
@@ -37,9 +37,9 @@ Nightly is required because cbindgen uses `rustc -Zunpretty=expanded` to expand 
 
 Build output:
 - `../libsignal/target/release/libsignal_ffi.a` — 48MB static library
-- `pkg/libsignal/libsignal-ffi.h` — 2080 lines, 102KB
+- `internal/libsignal/libsignal-ffi.h` — 2080 lines, 102KB
 
-### CGO preamble (`pkg/libsignal/libsignal.go`)
+### CGO preamble (`internal/libsignal/libsignal.go`)
 
 ```go
 package libsignal
@@ -251,7 +251,7 @@ func DecryptMessage(
 
 ## MVP test
 
-`pkg/libsignal/protocol_test.go` — the test that proves everything works:
+`internal/libsignal/protocol_test.go` — the test that proves everything works:
 
 ```
 1. Generate identity key pairs for Alice and Bob
@@ -346,5 +346,5 @@ After `ProcessPreKeyBundle`, Alice's first encrypt produces a `PreKeySignalMessa
 
 ## Reference
 
-- `pkg/libsignal/libsignal-ffi.h` — the actual generated header (source of truth for signatures)
+- `internal/libsignal/libsignal-ffi.h` — the actual generated header (source of truth for signatures)
 - `../libsignal/rust/bridge/ffi/` — Rust FFI source and cbindgen config

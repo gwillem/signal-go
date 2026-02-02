@@ -1,6 +1,6 @@
 # Phase 2: Signal Service Layer (Pure Go)
 
-**Status: IN PROGRESS** — Device provisioning and registration complete (steps 1-12). SQLite persistent storage, message sending, message receiving, and sealed sender (UNIDENTIFIED_SENDER) decryption complete.
+**Status: COMPLETE** — Device provisioning and registration (steps 1-12), SQLite persistent storage, message sending, message receiving, sealed sender (UNIDENTIFIED_SENDER) decryption, and retry receipts all complete.
 
 Goal: link as secondary device, send text messages, receive text messages. Pure Go implementation of the Signal server protocol, using Phase 1's CGO bindings for crypto.
 
@@ -120,8 +120,9 @@ Step 12: ✅ Upload pre-keys
          → signalservice.HTTPClient.UploadPreKeys()
          PUT /v2/keys?identity=aci and PUT /v2/keys?identity=pni
 
-Step 13: Request sync data from primary — NOT STARTED
-         Send SyncMessage.Request for: GROUPS, CONTACTS, BLOCKED, CONFIGURATION, KEYS
+Step 13: Request sync data from primary — CONTACTS complete (Phase 3)
+         SyncMessage.Request{Type:CONTACTS} implemented in Phase 3 (contactsync.go)
+         Remaining: GROUPS, BLOCKED, CONFIGURATION, KEYS — NOT STARTED
 ```
 
 ### Implementation details
@@ -138,9 +139,9 @@ Key insight: the link URI uses URL-safe base64 (`base64.URLEncoding`) for the pu
 | ---------------------- | ------------------------------------------------------------------------- |
 | `internal/provisioncrypto/` | PKCS7, HKDF, HMAC, AES-CBC, envelope decrypt, ProvisionData parsing, device name encryption |
 | `internal/signalws/`        | Protobuf-framed WebSocket (Dial, ReadMessage, WriteMessage, SendResponse) |
-| `client.go`                 | Public API: Client with Link, Load, Send, Receive, Close, Number, DeviceID       |
-| `internal/signalservice/`   | Orchestration: RunProvisioning, RegisterLinkedDevice, SendTextMessage, ReceiveMessages, HTTPClient |
-| `internal/store/`           | SQLite persistent storage: all 5 store interfaces + Account CRUD                 |
+| `client.go`                 | Public API: Client with Link, Load, Send, Receive, SyncContacts, LookupNumber, Close |
+| `internal/signalservice/`   | Orchestration: RunProvisioning, RegisterLinkedDevice, SendTextMessage, ReceiveMessages, RequestContactSync, HTTPClient |
+| `internal/store/`           | SQLite persistent storage: all 5 store interfaces + Account CRUD + Contact CRUD  |
 
 Reference files in Signal-Android:
 
@@ -264,6 +265,7 @@ Tables:
 | `signed_pre_key` | id, record BLOB                  | Signed pre-keys               |
 | `kyber_pre_key`  | id, record BLOB, used            | Post-quantum (Kyber) pre-keys |
 | `identity`       | address, public_key BLOB         | Recipient identity keys       |
+| `contact`        | aci (TEXT PK), number, name      | ACI→phone number/name cache (Phase 3) |
 
 Records stored as serialized blobs from libsignal's `Serialize()` methods. Account stored as JSON blob. All 5 store interfaces implemented with compile-time conformance checks. Identity trust uses TOFU (trust-on-first-use).
 
@@ -280,13 +282,19 @@ err := client.Link(ctx, func(uri string) {
 })
 fmt.Println("Linked to", client.Number())
 
-// Send a message (not yet implemented)
-err = client.Send(ctx, "+31612345678", "Hello from signal-go!")
+// Or load existing credentials
+err = client.Load()
 
-// Receive messages (not yet implemented)
-for msg := range client.Receive(ctx) {
-    fmt.Printf("[%s] %s: %s\n", msg.Timestamp, msg.From, msg.Body)
+// Send a message
+err = client.Send(ctx, "recipient-aci-uuid", "Hello from signal-go!")
+
+// Receive messages (iterator stops on context cancel or break)
+for msg, err := range client.Receive(ctx) {
+    fmt.Printf("[%s] %s: %s\n", msg.Timestamp, msg.SenderNumber, msg.Body)
 }
+
+// Sync contacts from primary device (Phase 3)
+err = client.SyncContacts(ctx)
 ```
 
 `Client.Link()` internally calls `signalservice.RunProvisioning()` with the correct WebSocket URL and stores the resulting credentials. The caller only needs to display the QR code URI.
@@ -385,10 +393,10 @@ Note: G1 uses `protoc --go_out` instead of `buf generate`.
 
 | Step | Files              | Test proves                                                    |
 | ---- | ------------------ | -------------------------------------------------------------- |
-| N1   | `cmd/sig/` | CLI scaffolding: subcommands (link, send) with go-flags        |
-| N2   | `cmd/sig/` | Link to real Signal account (manual test, QR code in terminal) |
-| N3   | `cmd/sig/` | Send a real text message                                       |
-| N4   | `cmd/sig/` | Receive and print real text messages                           |
+| N1 ✅ | `cmd/sgnl/` | CLI scaffolding: subcommands (link, send, receive, sync-contacts, devices) with go-flags |
+| N2 ✅ | `cmd/sgnl/` | Link to real Signal account (manual test, QR code in terminal) |
+| N3 ✅ | `cmd/sgnl/` | Send a real text message                                       |
+| N4 ✅ | `cmd/sgnl/` | Receive and print real text messages                           |
 
 ## Implementation notes
 
