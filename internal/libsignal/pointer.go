@@ -1,41 +1,36 @@
 package libsignal
 
 import (
-	"sync"
-	"sync/atomic"
+	"runtime"
+	"runtime/cgo"
 	"unsafe"
 )
 
-// handleMap stores Go values keyed by an incrementing handle, allowing safe
-// passage of Go pointers through C void* without violating cgo pointer rules.
-var (
-	handleMu  sync.RWMutex
-	handleSeq atomic.Uintptr
-	handles   = map[uintptr]any{}
-)
+// handleWrapper holds a cgo.Handle and its Pinner to keep the memory pinned
+// while C code holds a reference to it.
+type handleWrapper struct {
+	h      cgo.Handle
+	pinner runtime.Pinner
+}
 
-// savePointer saves a Go value and returns a C-safe handle as unsafe.Pointer.
+// savePointer saves a Go value and returns a C-safe pointer.
+// The handle is heap-allocated and pinned so C can safely store it.
+// Per cgo.Handle docs, we pass the address of the handle, not the handle value.
 func savePointer(v any) unsafe.Pointer {
-	h := handleSeq.Add(1)
-	handleMu.Lock()
-	handles[h] = v
-	handleMu.Unlock()
-	return unsafe.Pointer(h)
+	w := &handleWrapper{h: cgo.NewHandle(v)}
+	w.pinner.Pin(w)
+	return unsafe.Pointer(w)
 }
 
-// restorePointer retrieves a Go value by its handle.
+// restorePointer retrieves a Go value by dereferencing the handle pointer.
 func restorePointer(p unsafe.Pointer) any {
-	h := uintptr(p)
-	handleMu.RLock()
-	v := handles[h]
-	handleMu.RUnlock()
-	return v
+	w := (*handleWrapper)(p)
+	return w.h.Value()
 }
 
-// deletePointer removes a handle, freeing the reference.
+// deletePointer unpins, deletes the handle, and frees resources.
 func deletePointer(p unsafe.Pointer) {
-	h := uintptr(p)
-	handleMu.Lock()
-	delete(handles, h)
-	handleMu.Unlock()
+	w := (*handleWrapper)(p)
+	w.pinner.Unpin()
+	w.h.Delete()
 }
