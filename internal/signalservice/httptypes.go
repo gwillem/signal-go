@@ -113,3 +113,62 @@ type DeviceInfo struct {
 	Created  int64  `json:"created"`
 	LastSeen int64  `json:"lastSeen"`
 }
+
+// VerificationSessionRequest creates a new verification session for primary registration.
+type VerificationSessionRequest struct {
+	Number    string `json:"number"`
+	PushToken string `json:"pushToken,omitempty"`
+	MCC       string `json:"mcc,omitempty"`
+	MNC       string `json:"mnc,omitempty"`
+}
+
+// VerificationSessionResponse contains the current state of a verification session.
+type VerificationSessionResponse struct {
+	ID                      string   `json:"id"`
+	NextSms                 *int     `json:"nextSms"`
+	NextCall                *int     `json:"nextCall"`
+	NextVerificationAttempt *int     `json:"nextVerificationAttempt"`
+	AllowedToRequestCode    bool     `json:"allowedToRequestCode"`
+	RequestedInformation    []string `json:"requestedInformation"` // e.g., ["captcha", "pushChallenge"]
+	Verified                bool     `json:"verified"`
+}
+
+// RequestVerificationCodeRequest asks for an SMS or voice verification code.
+type RequestVerificationCodeRequest struct {
+	Transport string `json:"transport"` // "sms" or "voice"
+	Client    string `json:"client"`    // e.g., "android-2024-01"
+}
+
+// SubmitVerificationCodeRequest submits the received 6-digit code.
+type SubmitVerificationCodeRequest struct {
+	Code string `json:"code"`
+}
+
+// UpdateSessionRequest submits CAPTCHA or push challenge response.
+type UpdateSessionRequest struct {
+	Captcha       string `json:"captcha,omitempty"`
+	PushChallenge string `json:"pushChallenge,omitempty"`
+}
+
+// PrimaryRegistrationRequest registers a new primary device.
+type PrimaryRegistrationRequest struct {
+	SessionID             string             `json:"sessionId,omitempty"`
+	RecoveryPassword      string             `json:"recoveryPassword,omitempty"`
+	AccountAttributes     AccountAttributes  `json:"accountAttributes"`
+	ACIIdentityKey        string             `json:"aciIdentityKey"`        // base64
+	PNIIdentityKey        string             `json:"pniIdentityKey"`        // base64
+	ACISignedPreKey       SignedPreKeyEntity `json:"aciSignedPreKey"`
+	PNISignedPreKey       SignedPreKeyEntity `json:"pniSignedPreKey"`
+	ACIPqLastResortPreKey KyberPreKeyEntity  `json:"aciPqLastResortPreKey"`
+	PNIPqLastResortPreKey KyberPreKeyEntity  `json:"pniPqLastResortPreKey"`
+	SkipDeviceTransfer    bool               `json:"skipDeviceTransfer"`
+	RequireAtomic         bool               `json:"requireAtomic,omitempty"`
+}
+
+// PrimaryRegistrationResponse is returned from POST /v1/registration.
+type PrimaryRegistrationResponse struct {
+	UUID           string `json:"uuid"`
+	PNI            string `json:"pni"`
+	Number         string `json:"number"`
+	StorageCapable bool   `json:"storageCapable"`
+}

@@ -140,6 +140,135 @@ func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 	return c.saveAccount()
 }
 
+// Register registers a new Signal account as a primary device.
+// The getCode callback is called to prompt the user for the SMS/voice verification code.
+// The getCaptcha callback is called if a CAPTCHA challenge is required.
+func (c *Client) Register(
+	ctx context.Context,
+	number string,
+	transport string, // "sms" or "voice"
+	getCode func() (string, error),
+	getCaptcha func() (string, error),
+) error {
+	reg, err := signalservice.RegisterPrimary(ctx, c.apiURL, number, transport, getCode, getCaptcha, c.tlsConfig, c.logger)
+	if err != nil {
+		return err
+	}
+
+	c.deviceID = reg.DeviceID
+	c.aci = reg.ACI
+	c.pni = reg.PNI
+	c.password = reg.Password
+	c.number = reg.Number
+	c.registrationID = reg.RegistrationID
+	c.pniRegistrationID = reg.PNIRegistrationID
+
+	// Open store and persist credentials.
+	if err := c.openStore(); err != nil {
+		return fmt.Errorf("client: open store: %w", err)
+	}
+
+	// Store pre-keys locally.
+	if err := c.storePrimaryPreKeys(reg); err != nil {
+		return fmt.Errorf("client: store pre-keys: %w", err)
+	}
+
+	// Set up identity key for the store.
+	aciPriv, err := libsignal.DeserializePrivateKey(reg.ACIIdentityKeyPrivate)
+	if err != nil {
+		return fmt.Errorf("client: deserialize identity key: %w", err)
+	}
+	c.store.SetIdentity(aciPriv, uint32(reg.RegistrationID))
+
+	// Save account with locally generated identity keys.
+	acct := &store.Account{
+		Number:                number,
+		ACI:                   reg.ACI,
+		PNI:                   reg.PNI,
+		Password:              reg.Password,
+		DeviceID:              reg.DeviceID,
+		RegistrationID:        reg.RegistrationID,
+		PNIRegistrationID:     reg.PNIRegistrationID,
+		ACIIdentityKeyPrivate: reg.ACIIdentityKeyPrivate,
+		ACIIdentityKeyPublic:  reg.ACIIdentityKeyPublic,
+		PNIIdentityKeyPrivate: reg.PNIIdentityKeyPrivate,
+		PNIIdentityKeyPublic:  reg.PNIIdentityKeyPublic,
+	}
+	return c.store.SaveAccount(acct)
+}
+
+func (c *Client) storePrimaryPreKeys(reg *signalservice.PrimaryRegistrationResult) error {
+	// Store ACI signed pre-key.
+	if len(reg.ACISignedPreKey) > 0 {
+		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.ACISignedPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize ACI signed pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("ACI signed pre-key ID: %w", err)
+		}
+		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store ACI signed pre-key: %w", err)
+		}
+	}
+
+	// Store ACI Kyber pre-key.
+	if len(reg.ACIKyberPreKey) > 0 {
+		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.ACIKyberPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize ACI Kyber pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("ACI Kyber pre-key ID: %w", err)
+		}
+		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store ACI Kyber pre-key: %w", err)
+		}
+	}
+
+	// Store PNI signed pre-key.
+	if len(reg.PNISignedPreKey) > 0 {
+		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.PNISignedPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize PNI signed pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("PNI signed pre-key ID: %w", err)
+		}
+		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store PNI signed pre-key: %w", err)
+		}
+	}
+
+	// Store PNI Kyber pre-key.
+	if len(reg.PNIKyberPreKey) > 0 {
+		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.PNIKyberPreKey)
+		if err != nil {
+			return fmt.Errorf("deserialize PNI Kyber pre-key: %w", err)
+		}
+		id, err := rec.ID()
+		if err != nil {
+			rec.Destroy()
+			return fmt.Errorf("PNI Kyber pre-key ID: %w", err)
+		}
+		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
+			rec.Destroy()
+			return fmt.Errorf("store PNI Kyber pre-key: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // Load opens an existing database and loads credentials without re-linking.
 // If no explicit DB path is set, it discovers the most recent account database
 // in the default data directory.
@@ -178,6 +307,16 @@ func (c *Client) Load() error {
 		return fmt.Errorf("client: deserialize identity key: %w", err)
 	}
 	c.store.SetIdentity(identityPriv, uint32(acct.RegistrationID))
+
+	// Log identity key fingerprint for debugging.
+	if c.logger != nil {
+		if pub, err := identityPriv.PublicKey(); err == nil {
+			if data, err := pub.Serialize(); err == nil && len(data) >= 8 {
+				c.logger.Printf("loaded identity key fingerprint=%x", data[:8])
+			}
+			pub.Destroy()
+		}
+	}
 
 	return nil
 }
@@ -260,6 +399,54 @@ func (c *Client) LookupNumber(aci string) string {
 		return ""
 	}
 	return contact.Number
+}
+
+// VerifyIdentityKey checks if the server has the same identity key as locally stored.
+// Returns (serverKey, localKey, match, error).
+func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []byte, match bool, err error) {
+	if c.store == nil {
+		return nil, nil, false, fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+
+	// Get local identity key
+	acct, err := c.store.LoadAccount()
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("client: load account: %w", err)
+	}
+	localKey = acct.ACIIdentityKeyPublic
+
+	// Query server for our pre-keys (includes identity key)
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	preKeys, err := httpClient.GetPreKeys(ctx, c.aci, c.deviceID, auth)
+	if err != nil {
+		return nil, localKey, false, fmt.Errorf("client: get pre-keys from server: %w", err)
+	}
+
+	serverKey, err = base64.StdEncoding.DecodeString(preKeys.IdentityKey)
+	if err != nil {
+		return nil, localKey, false, fmt.Errorf("client: decode server identity key: %w", err)
+	}
+
+	match = string(serverKey) == string(localKey)
+	return serverKey, localKey, match, nil
+}
+
+// GetDeviceIdentityKey fetches the identity key for a specific device from the server.
+func (c *Client) GetDeviceIdentityKey(ctx context.Context, deviceID int) (string, error) {
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	preKeys, err := httpClient.GetPreKeys(ctx, c.aci, deviceID, auth)
+	if err != nil {
+		return "", err
+	}
+	return preKeys.IdentityKey, nil
 }
 
 // DeviceInfo is the public type for device information.

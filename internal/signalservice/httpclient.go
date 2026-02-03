@@ -333,3 +333,227 @@ func (c *HTTPClient) UploadPreKeys(ctx context.Context, identity string, keys *P
 
 	return nil
 }
+
+// CreateVerificationSession starts a new verification session for primary registration.
+// POST /v1/verification/session
+func (c *HTTPClient) CreateVerificationSession(ctx context.Context, number string) (*VerificationSessionResponse, error) {
+	req := &VerificationSessionRequest{Number: number}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: marshal session request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/verification/session", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: create session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: create session: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result VerificationSessionResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
+	}
+
+	return &result, nil
+}
+
+// GetSessionStatus retrieves the current state of a verification session.
+// GET /v1/verification/session/{sessionId}
+func (c *HTTPClient) GetSessionStatus(ctx context.Context, sessionID string) (*VerificationSessionResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/verification/session/"+sessionID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: get session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get session: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result VerificationSessionResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
+	}
+
+	return &result, nil
+}
+
+// RequestVerificationCode requests an SMS or voice verification code.
+// POST /v1/verification/session/{sessionId}/code
+func (c *HTTPClient) RequestVerificationCode(ctx context.Context, sessionID, transport string) (*VerificationSessionResponse, error) {
+	req := &RequestVerificationCodeRequest{
+		Transport: transport,
+		Client:    "android-2024-01",
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: marshal code request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/verification/session/"+sessionID+"/code", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: request code: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: request code: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result VerificationSessionResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
+	}
+
+	return &result, nil
+}
+
+// SubmitVerificationCode submits the 6-digit verification code.
+// PUT /v1/verification/session/{sessionId}/code
+func (c *HTTPClient) SubmitVerificationCode(ctx context.Context, sessionID, code string) (*VerificationSessionResponse, error) {
+	req := &SubmitVerificationCodeRequest{Code: code}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: marshal submit request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/verification/session/"+sessionID+"/code", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: submit code: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: submit code: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result VerificationSessionResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
+	}
+
+	return &result, nil
+}
+
+// UpdateSession submits a CAPTCHA or push challenge response.
+// PATCH /v1/verification/session/{sessionId}
+func (c *HTTPClient) UpdateSession(ctx context.Context, sessionID string, req *UpdateSessionRequest) (*VerificationSessionResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: marshal update request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.baseURL+"/v1/verification/session/"+sessionID, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: update session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: update session: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result VerificationSessionResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
+	}
+
+	return &result, nil
+}
+
+// RegisterPrimaryDevice registers a new primary device account.
+// POST /v1/registration
+// Auth uses phone number as username and generated password.
+func (c *HTTPClient) RegisterPrimaryDevice(ctx context.Context, req *PrimaryRegistrationRequest, auth BasicAuth) (*PrimaryRegistrationResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: marshal registration: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/registration", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: register primary: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: register primary: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result PrimaryRegistrationResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal registration: %w", err)
+	}
+
+	return &result, nil
+}
