@@ -226,3 +226,128 @@ func SealedSenderDecrypt(
 
 	return result, nil
 }
+
+// ContentHint constants for UnidentifiedSenderMessageContent.
+const (
+	ContentHintDefault    uint32 = 0
+	ContentHintResendable uint32 = 1
+	ContentHintImplicit   uint32 = 2
+)
+
+// ServerCertificate wraps a Signal server certificate for sealed sender.
+type ServerCertificate struct {
+	ptr *C.SignalServerCertificate
+}
+
+// NewServerCertificate creates a new server certificate signed by the trust root.
+func NewServerCertificate(keyID uint32, serverKey *PublicKey, trustRoot *PrivateKey) (*ServerCertificate, error) {
+	var out C.SignalMutPointerServerCertificate
+	cServerKey := C.SignalConstPointerPublicKey{raw: serverKey.ptr}
+	cTrustRoot := C.SignalConstPointerPrivateKey{raw: trustRoot.ptr}
+
+	if err := wrapError(C.signal_server_certificate_new(&out, C.uint32_t(keyID), cServerKey, cTrustRoot)); err != nil {
+		return nil, err
+	}
+	return &ServerCertificate{ptr: out.raw}, nil
+}
+
+// Destroy frees the underlying C resource.
+func (sc *ServerCertificate) Destroy() {
+	if sc.ptr != nil {
+		C.signal_server_certificate_destroy(C.SignalMutPointerServerCertificate{raw: sc.ptr})
+		sc.ptr = nil
+	}
+}
+
+// NewSenderCertificate creates a new sender certificate.
+func NewSenderCertificate(
+	senderUUID string,
+	senderE164 string, // may be empty
+	senderKey *PublicKey,
+	senderDeviceID uint32,
+	expiration uint64,
+	signerCert *ServerCertificate,
+	signerKey *PrivateKey,
+) (*SenderCertificate, error) {
+	var out C.SignalMutPointerSenderCertificate
+
+	cSenderUUID := C.CString(senderUUID)
+	defer C.free(unsafe.Pointer(cSenderUUID))
+
+	var cSenderE164 *C.char
+	if senderE164 != "" {
+		cSenderE164 = C.CString(senderE164)
+		defer C.free(unsafe.Pointer(cSenderE164))
+	}
+
+	cSenderKey := C.SignalConstPointerPublicKey{raw: senderKey.ptr}
+	cSignerCert := C.SignalConstPointerServerCertificate{raw: signerCert.ptr}
+	cSignerKey := C.SignalConstPointerPrivateKey{raw: signerKey.ptr}
+
+	if err := wrapError(C.signal_sender_certificate_new(
+		&out,
+		cSenderUUID,
+		cSenderE164,
+		C.uint32_t(senderDeviceID),
+		cSenderKey,
+		C.uint64_t(expiration),
+		cSignerCert,
+		cSignerKey,
+	)); err != nil {
+		return nil, err
+	}
+	return &SenderCertificate{ptr: out.raw}, nil
+}
+
+// NewUnidentifiedSenderMessageContent creates a new USMC wrapping an encrypted message.
+func NewUnidentifiedSenderMessageContent(
+	message *CiphertextMessage,
+	senderCert *SenderCertificate,
+	contentHint uint32,
+	groupID []byte, // may be nil for non-group messages
+) (*UnidentifiedSenderMessageContent, error) {
+	var out C.SignalMutPointerUnidentifiedSenderMessageContent
+
+	cMessage := C.SignalConstPointerCiphertextMessage{raw: message.ptr}
+	cSenderCert := C.SignalConstPointerSenderCertificate{raw: senderCert.ptr}
+
+	var cGroupID C.SignalBorrowedBuffer
+	if len(groupID) > 0 {
+		cGroupID = borrowedBuffer(groupID)
+	} else {
+		cGroupID = borrowedBuffer(nil)
+	}
+
+	if err := wrapError(C.signal_unidentified_sender_message_content_new(
+		&out,
+		cMessage,
+		cSenderCert,
+		C.uint32_t(contentHint),
+		cGroupID,
+	)); err != nil {
+		return nil, err
+	}
+	return &UnidentifiedSenderMessageContent{ptr: out.raw}, nil
+}
+
+// SealedSenderEncrypt encrypts a USMC using sealed sender (SSv1).
+// Uses the recipient's identity key for ECDH.
+func SealedSenderEncrypt(
+	destination *Address,
+	content *UnidentifiedSenderMessageContent,
+	identityStore IdentityKeyStore,
+) ([]byte, error) {
+	var out C.SignalOwnedBuffer
+
+	cDest := C.SignalConstPointerProtocolAddress{raw: destination.ptr}
+	cContent := C.SignalConstPointerUnidentifiedSenderMessageContent{raw: content.ptr}
+
+	cIdentityStore, cleanupIdentity := wrapIdentityKeyStore(identityStore)
+	defer cleanupIdentity()
+	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: cIdentityStore}
+
+	if err := wrapError(C.signal_sealed_session_cipher_encrypt(&out, cDest, cContent, cIdentity)); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(out), nil
+}

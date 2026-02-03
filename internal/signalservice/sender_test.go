@@ -826,3 +826,149 @@ func TestSend410Then409Then410RemovesStale(t *testing.T) {
 		t.Errorf("expected 4 PUT attempts, got %d", putCount)
 	}
 }
+
+// TestSend409Then410IgnoresStaleOnRe409 reproduces the production oscillation:
+// 1. PUT → 409 missing=[2] (server wants device 2)
+// 2. PUT with [1,2] → 410 stale=[2] (device 2 is broken)
+// 3. PUT with [1] → 409 missing=[2] (server insists on device 2)
+// 4. PUT with [1] → 200 (staleSeen prevents re-adding device 2, server accepts)
+func TestSend409Then410IgnoresStaleOnRe409(t *testing.T) {
+	recipPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recipPriv.Destroy()
+	recipPub, err := recipPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recipPub.Destroy()
+	recipPubBytes, err := recipPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enc := base64.RawStdEncoding.EncodeToString
+
+	makePreKeys := func(deviceID int) PreKeyResponse {
+		spk, _ := libsignal.GeneratePrivateKey()
+		defer spk.Destroy()
+		spkPub, _ := spk.PublicKey()
+		defer spkPub.Destroy()
+		spkPubBytes, _ := spkPub.Serialize()
+		spkSig, _ := recipPriv.Sign(spkPubBytes)
+
+		kyberKP, _ := libsignal.GenerateKyberKeyPair()
+		defer kyberKP.Destroy()
+		kyberPub, _ := kyberKP.PublicKey()
+		defer kyberPub.Destroy()
+		kyberPubBytes, _ := kyberPub.Serialize()
+		kyberSig, _ := recipPriv.Sign(kyberPubBytes)
+
+		pk, _ := libsignal.GeneratePrivateKey()
+		defer pk.Destroy()
+		pkPub, _ := pk.PublicKey()
+		defer pkPub.Destroy()
+		pkPubBytes, _ := pkPub.Serialize()
+
+		return PreKeyResponse{
+			IdentityKey: enc(recipPubBytes),
+			Devices: []PreKeyDeviceInfo{{
+				DeviceID: deviceID, RegistrationID: 1,
+				SignedPreKey: &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
+				PreKey:       &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
+				PqPreKey:     &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
+			}},
+		}
+	}
+
+	putCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/self-aci/1":
+			json.NewEncoder(w).Encode(makePreKeys(1))
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/self-aci/2":
+			json.NewEncoder(w).Encode(makePreKeys(2))
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/self-aci":
+			putCount++
+			body, _ := io.ReadAll(r.Body)
+			var msg OutgoingMessageList
+			json.Unmarshal(body, &msg)
+
+			switch putCount {
+			case 1:
+				// 409: server wants device 2.
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(MismatchedDevicesError{MissingDevices: []int{2}})
+			case 2:
+				// Verify device 2 was added.
+				hasDevice2 := false
+				for _, m := range msg.Messages {
+					if m.DestinationDeviceID == 2 {
+						hasDevice2 = true
+					}
+				}
+				if !hasDevice2 {
+					t.Errorf("PUT #2: expected device 2 to be included")
+				}
+				// 410: device 2 is stale.
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusGone)
+				json.NewEncoder(w).Encode(map[string]any{"staleDevices": []int{2}})
+			case 3:
+				// Verify device 2 was removed.
+				for _, m := range msg.Messages {
+					if m.DestinationDeviceID == 2 {
+						t.Errorf("PUT #3: device 2 should have been removed after 410")
+					}
+				}
+				// 409: server insists on device 2 again — but we should ignore it.
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(MismatchedDevicesError{MissingDevices: []int{2}})
+			case 4:
+				// Verify device 2 was NOT re-added (staleSeen should block it).
+				for _, m := range msg.Messages {
+					if m.DestinationDeviceID == 2 {
+						t.Errorf("PUT #4: device 2 should NOT be re-added after being stale")
+					}
+				}
+				if len(msg.Messages) != 1 {
+					t.Errorf("PUT #4: expected 1 message (device 1 only), got %d", len(msg.Messages))
+				}
+				w.WriteHeader(http.StatusOK)
+			default:
+				t.Errorf("unexpected PUT #%d", putCount)
+				w.WriteHeader(http.StatusOK)
+			}
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	myPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetIdentity(myPriv, 1)
+
+	auth := BasicAuth{Username: "self-aci.4", Password: "pass"}
+
+	err = SendTextMessage(context.Background(), srv.URL, "self-aci", "sync", st, auth, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if putCount != 4 {
+		t.Errorf("expected 4 PUT attempts, got %d", putCount)
+	}
+}
