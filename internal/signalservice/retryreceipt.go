@@ -151,8 +151,11 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 	sendingToSelf := recipient == localACI
 	logf(logger, "send: localDeviceID=%d recipient=%s", localDeviceID, recipient)
 
-	// Start with device 1. The server will tell us about additional devices via 409.
-	deviceIDs := []int{1}
+	// Load cached devices, or start with device 1 if not cached.
+	deviceIDs, _ := st.GetDevices(recipient)
+	if len(deviceIDs) == 0 {
+		deviceIDs = []int{1}
+	}
 	// Track devices that returned 410 (stale) so we don't re-add them
 	// when a subsequent 409 claims they're missing (breaks the 409↔410 loop).
 	staleSeen := map[int]bool{}
@@ -162,6 +165,8 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 		logf(logger, "send: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
 		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth)
 		if err == nil {
+			// Persist the working device list for future sends.
+			_ = st.SetDevices(recipient, deviceIDs)
 			return nil
 		}
 		if attempt == maxAttempts-1 {
@@ -174,10 +179,11 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 		switch {
 		case errors.As(err, &staleErr):
 			logf(logger, "send: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
-			// Archive only the stale sessions (like Signal-Android).
+			// Archive only the stale sessions (like Signal-Android) and update cache.
 			for _, deviceID := range staleErr.StaleDevices {
 				staleSeen[deviceID] = true
 				_ = st.ArchiveSession(recipient, uint32(deviceID))
+				_ = st.RemoveDevice(recipient, deviceID)
 				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
 			}
 			// Always keep at least device 1 (primary).
@@ -203,8 +209,13 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 				skipOwnDevice := sendingToSelf && deviceID == localDeviceID
 				if !skipOwnDevice && !staleSeen[deviceID] {
 					_ = st.ArchiveSession(recipient, uint32(deviceID))
+					_ = st.AddDevice(recipient, deviceID)
 					deviceIDs = append(deviceIDs, deviceID)
 				}
+			}
+			// Remove extra devices from cache.
+			for _, deviceID := range mismatchErr.ExtraDevices {
+				_ = st.RemoveDevice(recipient, deviceID)
 			}
 		default:
 			return err
@@ -251,6 +262,8 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 		logf(logger, "send with devices: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
 		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth)
 		if err == nil {
+			// Persist the working device list for future sends.
+			_ = st.SetDevices(recipient, deviceIDs)
 			return nil
 		}
 		if attempt == maxAttempts-1 {
@@ -266,6 +279,7 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 			for _, deviceID := range staleErr.StaleDevices {
 				staleSeen[deviceID] = true
 				_ = st.ArchiveSession(recipient, uint32(deviceID))
+				_ = st.RemoveDevice(recipient, deviceID)
 				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
 			}
 			if len(deviceIDs) == 0 {
@@ -286,8 +300,13 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 				skipOwnDevice := sendingToSelf && deviceID == localDeviceID
 				if !skipOwnDevice && !staleSeen[deviceID] {
 					_ = st.ArchiveSession(recipient, uint32(deviceID))
+					_ = st.AddDevice(recipient, deviceID)
 					deviceIDs = append(deviceIDs, deviceID)
 				}
+			}
+			// Remove extra devices from cache.
+			for _, deviceID := range mismatchErr.ExtraDevices {
+				_ = st.RemoveDevice(recipient, deviceID)
 			}
 		default:
 			return err

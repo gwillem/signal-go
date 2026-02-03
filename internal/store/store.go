@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS contact (
 	number TEXT NOT NULL DEFAULT '',
 	name TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS recipient_device (
+	aci TEXT NOT NULL,
+	device_id INTEGER NOT NULL,
+	last_seen INTEGER NOT NULL,
+	PRIMARY KEY (aci, device_id)
+);
 `
 
 // DefaultDataDir returns the default data directory for signal-go databases.
