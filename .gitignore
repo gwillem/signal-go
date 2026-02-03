@@ -2,3 +2,4 @@ internal/libsignal/libsignal-ffi.h
 .vscode
 /debug
 .envrc
+/NOTES.md

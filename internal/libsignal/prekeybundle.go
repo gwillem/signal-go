@@ -45,10 +45,6 @@ func NewPreKeyBundle(
 		cKyberPreKeyID = kyberPreKeyID
 	}
 
-	// Debug
-	println("DEBUG NewPreKeyBundle: preKeyID=", preKeyID, "preKey=", preKey != nil, "cPreKeyID=", cPreKeyID, "cPreKey.raw=", cPreKey.raw != nil)
-	println("DEBUG NewPreKeyBundle: kyberID=", kyberPreKeyID, "kyber=", kyberPreKey != nil, "cKyberID=", cKyberPreKeyID, "cKyber.raw=", cKyberPreKey.raw != nil)
-
 	if err := wrapError(C.signal_pre_key_bundle_new(
 		&out,
 		C.uint32_t(registrationID),

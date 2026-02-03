@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -85,10 +86,11 @@ func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.
 		return nil, fmt.Errorf("decode signed pre-key signature: %w", err)
 	}
 
-	// One-time pre-key (optional).
+	// One-time pre-key (optional). Only use if both key and ID are valid.
+	// KeyID=0 means "no pre-key" even if the struct is present.
 	var preKey *libsignal.PublicKey
-	var preKeyID uint32
-	if dev.PreKey != nil {
+	preKeyID := uint32(math.MaxUint32)
+	if dev.PreKey != nil && dev.PreKey.KeyID > 0 && dev.PreKey.PublicKey != "" {
 		pkBytes, err := base64.RawStdEncoding.DecodeString(dev.PreKey.PublicKey)
 		if err != nil {
 			return nil, fmt.Errorf("decode pre-key: %w", err)
@@ -101,11 +103,11 @@ func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.
 		preKeyID = uint32(dev.PreKey.KeyID)
 	}
 
-	// Kyber pre-key (optional but expected).
+	// Kyber pre-key (optional). Only use if both key and ID are valid.
 	var kyberPub *libsignal.KyberPublicKey
-	var kyberPreKeyID uint32
+	kyberPreKeyID := uint32(math.MaxUint32)
 	var kyberSig []byte
-	if dev.PqPreKey != nil {
+	if dev.PqPreKey != nil && dev.PqPreKey.KeyID > 0 && dev.PqPreKey.PublicKey != "" {
 		kpkBytes, err := base64.RawStdEncoding.DecodeString(dev.PqPreKey.PublicKey)
 		if err != nil {
 			return nil, fmt.Errorf("decode kyber pre-key: %w", err)
