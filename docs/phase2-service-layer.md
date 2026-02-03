@@ -173,6 +173,11 @@ Step 6:  Build OutgoingPushMessage
 
 Step 7:  PUT /v1/messages/{destination}
          Body: { messages: [OutgoingPushMessage], timestamp, online: false }
+
+Step 8:  Handle 409/410 errors (retry loop)
+         - 410 (stale): Archive sessions, retry (fetch fresh keys)
+         - 409 (mismatch): Add missing devices, remove extra, retry
+         See docs/phase8-device-caching.md for details
 ```
 
 Reference: `../Signal-Android/lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageSender.java`

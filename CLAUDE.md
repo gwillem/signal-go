@@ -19,12 +19,15 @@ Go library for Signal messenger, replacing the Java signal-cli dependency. Licen
 
 ## Reference implementation
 
-When debugging or implementing new functionality, consult the Signal-Android source at `../Signal-Android`. Key locations:
+When debugging or implementing new functionality, consult the Signal-Android source at `../Signal-Android`. **Signal-Android is the source of truth** for expected protocol behavior — verify assumptions against it before writing tests.
+
+Key locations:
 
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/websocket/` — WebSocket connection (OkHttpWebSocketConnection, LibSignalChatConnection)
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/websocket/` — SignalWebSocket, message batching
-- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/push/` — PushServiceSocket (REST API calls)
+- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/push/` — PushServiceSocket (REST API calls, 409/410 error throwing)
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/` — High-level service APIs
+- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageSender.java` — Message sending, 409/410 retry handling (handleMismatchedDevices, handleStaleDevices)
 
 ## Prerequisites
 

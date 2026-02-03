@@ -156,10 +156,11 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 	if len(deviceIDs) == 0 {
 		deviceIDs = []int{1}
 	}
-	// Track devices that returned 410 (stale) so we don't re-add them
-	// when a subsequent 409 claims they're missing (breaks the 409↔410 loop).
-	staleSeen := map[int]bool{}
 
+	// Signal-Android behavior: retry up to 4 times, no special tracking.
+	// 410: archive sessions (will fetch fresh keys on retry)
+	// 409 extra: archive sessions, remove from list
+	// 409 missing: add to list (will fetch keys in encryptAndSend)
 	const maxAttempts = 5
 	for attempt := range maxAttempts {
 		logf(logger, "send: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
@@ -178,45 +179,34 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 
 		switch {
 		case errors.As(err, &staleErr):
+			// 410: sessions are stale. Archive them so retry fetches fresh keys.
+			// Don't remove devices - they're still valid, just need new sessions.
 			logf(logger, "send: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
-			// Archive only the stale sessions (like Signal-Android) and update cache.
 			for _, deviceID := range staleErr.StaleDevices {
-				staleSeen[deviceID] = true
 				_ = st.ArchiveSession(recipient, uint32(deviceID))
-				_ = st.RemoveDevice(recipient, deviceID)
-				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
-			}
-			// Always keep at least device 1 (primary).
-			if len(deviceIDs) == 0 {
-				deviceIDs = []int{1}
 			}
 		case errors.As(err, &mismatchErr):
+			// 409: device list mismatch.
 			logf(logger, "send: 409 missing=%v extra=%v devices=%v",
 				mismatchErr.MissingDevices, mismatchErr.ExtraDevices, deviceIDs)
-			// The server rejected the entire batch. Our local sessions advanced
-			// during Encrypt(), so we must archive and re-establish to ensure
-			// we send PreKey messages (not Whisper messages with out-of-sync sessions).
+			// Archive all current sessions (our local state advanced during Encrypt).
 			for _, deviceID := range deviceIDs {
 				_ = st.ArchiveSession(recipient, uint32(deviceID))
 			}
-			// Remove extra devices.
+			// Remove extra devices (no longer registered).
 			for _, deviceID := range mismatchErr.ExtraDevices {
 				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
 			}
-			// Add missing devices (skip own device when sending to self, skip previously-stale devices).
-			// Archive any existing sessions for these devices to force fresh pre-key fetch.
+			// Add missing devices (newly registered).
 			for _, deviceID := range mismatchErr.MissingDevices {
 				skipOwnDevice := sendingToSelf && deviceID == localDeviceID
-				if !skipOwnDevice && !staleSeen[deviceID] {
-					_ = st.ArchiveSession(recipient, uint32(deviceID))
-					_ = st.AddDevice(recipient, deviceID)
+				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
 					deviceIDs = append(deviceIDs, deviceID)
 				}
 			}
-			// Remove extra devices from cache.
-			for _, deviceID := range mismatchErr.ExtraDevices {
-				_ = st.RemoveDevice(recipient, deviceID)
-			}
+			// Persist the updated device list immediately. This ensures the cache
+			// is consistent even if the send is cancelled mid-retry.
+			_ = st.SetDevices(recipient, deviceIDs)
 		default:
 			return err
 		}
@@ -255,8 +245,6 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 
 	logf(logger, "send with devices: recipient=%s devices=%v", recipient, deviceIDs)
 
-	staleSeen := map[int]bool{}
-
 	const maxAttempts = 5
 	for attempt := range maxAttempts {
 		logf(logger, "send with devices: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
@@ -275,39 +263,31 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 
 		switch {
 		case errors.As(err, &staleErr):
+			// 410: sessions are stale. Archive them so retry fetches fresh keys.
 			logf(logger, "send with devices: 410 stale=%v", staleErr.StaleDevices)
 			for _, deviceID := range staleErr.StaleDevices {
-				staleSeen[deviceID] = true
 				_ = st.ArchiveSession(recipient, uint32(deviceID))
-				_ = st.RemoveDevice(recipient, deviceID)
-				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
-			}
-			if len(deviceIDs) == 0 {
-				deviceIDs = []int{1}
 			}
 		case errors.As(err, &mismatchErr):
+			// 409: device list mismatch.
 			logf(logger, "send with devices: 409 missing=%v extra=%v",
 				mismatchErr.MissingDevices, mismatchErr.ExtraDevices)
-			// Archive all sessions - our local state advanced during Encrypt().
 			for _, deviceID := range deviceIDs {
 				_ = st.ArchiveSession(recipient, uint32(deviceID))
 			}
+			// Remove extra devices.
 			for _, deviceID := range mismatchErr.ExtraDevices {
 				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
 			}
-			// Archive any existing sessions for missing devices to force fresh pre-key fetch.
+			// Add missing devices.
 			for _, deviceID := range mismatchErr.MissingDevices {
 				skipOwnDevice := sendingToSelf && deviceID == localDeviceID
-				if !skipOwnDevice && !staleSeen[deviceID] {
-					_ = st.ArchiveSession(recipient, uint32(deviceID))
-					_ = st.AddDevice(recipient, deviceID)
+				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
 					deviceIDs = append(deviceIDs, deviceID)
 				}
 			}
-			// Remove extra devices from cache.
-			for _, deviceID := range mismatchErr.ExtraDevices {
-				_ = st.RemoveDevice(recipient, deviceID)
-			}
+			// Persist the updated device list immediately.
+			_ = st.SetDevices(recipient, deviceIDs)
 		default:
 			return err
 		}
