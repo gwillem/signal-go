@@ -274,3 +274,204 @@ func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.
 		kyberPreKeyID, kyberPub, kyberSig,
 	)
 }
+
+// SendSealedSenderMessage sends a text message using sealed sender (UNIDENTIFIED_SENDER).
+// This hides the sender's identity from the server. Requires:
+// - Recipient has a profile key stored (for deriving unidentified access key)
+// - Recipient allows unidentified senders
+func SendSealedSenderMessage(ctx context.Context, apiURL string, recipient string, text string,
+	st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
+) error {
+	timestamp := uint64(time.Now().UnixMilli())
+
+	// Build Content protobuf
+	acct, err := st.LoadAccount()
+	if err != nil {
+		return fmt.Errorf("sealed sender: load account: %w", err)
+	}
+
+	expireTimer := uint32(0)
+	requiredProtocolVersion := uint32(0)
+	expireTimerVersion := uint32(1)
+
+	dm := &proto.DataMessage{
+		Body:                    &text,
+		Timestamp:               &timestamp,
+		ExpireTimer:             &expireTimer,
+		RequiredProtocolVersion: &requiredProtocolVersion,
+		ExpireTimerVersion:      &expireTimerVersion,
+	}
+
+	if acct != nil && len(acct.ProfileKey) > 0 {
+		dm.ProfileKey = acct.ProfileKey
+	}
+
+	content := &proto.Content{
+		DataMessage: dm,
+	}
+
+	contentBytes, err := pb.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("sealed sender: marshal content: %w", err)
+	}
+
+	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
+
+	// Step 1: Get sender certificate from server
+	senderCertBytes, err := httpClient.GetSenderCertificate(ctx, auth)
+	if err != nil {
+		return fmt.Errorf("sealed sender: get sender certificate: %w", err)
+	}
+
+	senderCert, err := libsignal.DeserializeSenderCertificate(senderCertBytes)
+	if err != nil {
+		return fmt.Errorf("sealed sender: deserialize sender certificate: %w", err)
+	}
+	defer senderCert.Destroy()
+
+	logf(logger, "sealed sender: got sender certificate")
+
+	// Step 2: Get recipient's profile key to derive the access key
+	// Profile keys are learned from received messages (sender includes their profile key).
+	contact, err := st.GetContactByACI(recipient)
+	if err != nil {
+		return fmt.Errorf("sealed sender: get contact: %w", err)
+	}
+	if contact == nil || len(contact.ProfileKey) == 0 {
+		return fmt.Errorf("sealed sender: no profile key for recipient %s (need to receive a message from them first, or use regular send)", recipient)
+	}
+
+	// Step 3: Derive unidentified access key from recipient's profile key
+	accessKey, err := DeriveAccessKey(contact.ProfileKey)
+	if err != nil {
+		return fmt.Errorf("sealed sender: derive access key: %w", err)
+	}
+
+	logf(logger, "sealed sender: derived access key from profile key")
+
+	// Step 4: Encrypt and send using sealed sender
+	return sendSealedEncrypted(ctx, httpClient, recipient, contentBytes, senderCert, accessKey, st, logger)
+}
+
+// sendSealedEncrypted encrypts content with sealed sender and sends it.
+func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient string,
+	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
+	st *store.Store, logger *log.Logger,
+) error {
+	now := time.Now()
+	timestamp := uint64(now.UnixMilli())
+
+	// Add Signal transport padding
+	paddedContent := padMessage(contentBytes)
+
+	// Get recipient's devices (start with device 1 if unknown)
+	deviceIDs, _ := st.GetDevices(recipient)
+	if len(deviceIDs) == 0 {
+		deviceIDs = []int{1}
+	}
+
+	var messages []OutgoingMessage
+
+	for _, deviceID := range deviceIDs {
+		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
+		if err != nil {
+			return fmt.Errorf("sealed sender: create address: %w", err)
+		}
+
+		// Establish session if needed
+		session, err := st.LoadSession(addr)
+		if err != nil {
+			addr.Destroy()
+			return fmt.Errorf("sealed sender: load session: %w", err)
+		}
+
+		var registrationID int
+
+		if session == nil {
+			// Fetch pre-keys and establish session
+			// For sealed sender, we need the identity key to seal the message
+			preKeyResp, err := httpClient.GetPreKeys(ctx, recipient, deviceID, BasicAuth{})
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: get pre-keys: %w", err)
+			}
+			if len(preKeyResp.Devices) == 0 {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: no devices in pre-key response")
+			}
+
+			dev := preKeyResp.Devices[0]
+			registrationID = dev.RegistrationID
+
+			bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, dev)
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: build pre-key bundle: %w", err)
+			}
+
+			if err := libsignal.ProcessPreKeyBundle(bundle, addr, st, st, now); err != nil {
+				bundle.Destroy()
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: process pre-key bundle: %w", err)
+			}
+			bundle.Destroy()
+		} else {
+			regID, err := session.RemoteRegistrationID()
+			session.Destroy()
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: get registration id: %w", err)
+			}
+			registrationID = int(regID)
+		}
+
+		// Encrypt the inner message
+		ciphertext, err := libsignal.Encrypt(paddedContent, addr, st, st, now)
+		if err != nil {
+			addr.Destroy()
+			return fmt.Errorf("sealed sender: encrypt: %w", err)
+		}
+
+		// Create USMC wrapping the encrypted message with sender certificate
+		usmc, err := libsignal.NewUnidentifiedSenderMessageContent(
+			ciphertext,
+			senderCert,
+			libsignal.ContentHintResendable,
+			nil, // no group ID for 1:1 messages
+		)
+		ciphertext.Destroy()
+		if err != nil {
+			addr.Destroy()
+			return fmt.Errorf("sealed sender: create USMC: %w", err)
+		}
+
+		// Seal the message (encrypt outer layer with recipient's identity key)
+		sealed, err := libsignal.SealedSenderEncrypt(addr, usmc, st)
+		usmc.Destroy()
+		addr.Destroy()
+		if err != nil {
+			return fmt.Errorf("sealed sender: seal: %w", err)
+		}
+
+		messages = append(messages, OutgoingMessage{
+			Type:                      proto.Envelope_UNIDENTIFIED_SENDER,
+			DestinationDeviceID:       deviceID,
+			DestinationRegistrationID: registrationID,
+			Content:                   base64.StdEncoding.EncodeToString(sealed),
+		})
+
+		logf(logger, "sealed sender: prepared message for device %d", deviceID)
+	}
+
+	// Send via sealed sender endpoint
+	msgList := &OutgoingMessageList{
+		Destination: recipient,
+		Timestamp:   timestamp,
+		Messages:    messages,
+		Urgent:      true,
+	}
+
+	logf(logger, "sealed sender: sending to %s (%d devices)", recipient, len(messages))
+
+	return httpClient.SendSealedMessage(ctx, recipient, msgList, accessKey)
+}

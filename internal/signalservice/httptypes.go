@@ -191,11 +191,16 @@ type ProfileWrite struct {
 
 // ProfileResponse is the JSON response from GET /v1/profile/{aci}/{version}.
 type ProfileResponse struct {
-	IdentityKey                   string `json:"identityKey"`
-	Name                          string `json:"name"`                          // base64 encrypted
-	About                         string `json:"about"`                         // base64 encrypted
-	AboutEmoji                    string `json:"aboutEmoji"`                    // base64 encrypted
-	Avatar                        string `json:"avatar"`                        // CDN path
-	UnidentifiedAccess            string `json:"unidentifiedAccess"`            // base64
-	UnrestrictedUnidentifiedAccess bool  `json:"unrestrictedUnidentifiedAccess"`
+	IdentityKey                    string `json:"identityKey"`
+	Name                           string `json:"name"`                          // base64 encrypted
+	About                          string `json:"about"`                         // base64 encrypted
+	AboutEmoji                     string `json:"aboutEmoji"`                    // base64 encrypted
+	Avatar                         string `json:"avatar"`                        // CDN path
+	UnidentifiedAccess             string `json:"unidentifiedAccess"`            // base64
+	UnrestrictedUnidentifiedAccess bool   `json:"unrestrictedUnidentifiedAccess"`
+}
+
+// SenderCertificateResponse is the JSON response from GET /v1/certificate/delivery.
+type SenderCertificateResponse struct {
+	Certificate string `json:"certificate"` // base64-encoded SenderCertificate protobuf
 }

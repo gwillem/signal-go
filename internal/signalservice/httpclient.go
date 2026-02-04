@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -716,4 +717,131 @@ func (c *HTTPClient) GetProfile(ctx context.Context, aci string, profileKey []by
 	}
 
 	return &profile, nil
+}
+
+// GetSenderCertificate fetches a sender certificate for sealed sender messages.
+// GET /v1/certificate/delivery
+// The certificate is valid for about 24 hours and should be cached.
+func (c *HTTPClient) GetSenderCertificate(ctx context.Context, auth BasicAuth) ([]byte, error) {
+	url := fmt.Sprintf("%s/v1/certificate/delivery", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	req.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: get sender certificate: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get sender certificate: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var certResp SenderCertificateResponse
+	if err := json.Unmarshal(respBody, &certResp); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal sender certificate: %w", err)
+	}
+
+	logf(c.logger, "sender cert base64 len=%d value=%s", len(certResp.Certificate), certResp.Certificate)
+
+	// Decode base64 certificate
+	certBytes, err := decodeBase64(certResp.Certificate)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: decode sender certificate: %w", err)
+	}
+
+	logf(c.logger, "sender cert bytes len=%d first20=%x", len(certBytes), truncateBytes(certBytes, 20))
+
+	return certBytes, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+func truncateBytes(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return b[:n]
+}
+
+// SendSealedMessage sends a sealed sender message.
+// PUT /v1/messages/{destination}
+// Uses the Unidentified-Access-Key header for sealed sender authentication.
+func (c *HTTPClient) SendSealedMessage(ctx context.Context, destination string, msg *OutgoingMessageList, unidentifiedAccessKey []byte) error {
+	url := fmt.Sprintf("%s/v1/messages/%s", c.baseURL, destination)
+
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("httpclient: marshal sealed message: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("httpclient: new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Use Unidentified-Access-Key header instead of Basic Auth
+	accessKeyB64 := encodeBase64(unidentifiedAccessKey)
+	req.Header.Set("Unidentified-Access-Key", accessKeyB64)
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("httpclient: send sealed message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
+		return nil
+	case http.StatusConflict: // 409: mismatched devices
+		var mismatch MismatchedDevicesError
+		if err := json.Unmarshal(respBody, &mismatch); err != nil {
+			return fmt.Errorf("httpclient: unmarshal 409: %w", err)
+		}
+		return &mismatch
+	case http.StatusGone: // 410: stale devices
+		var stale StaleDevicesError
+		if err := json.Unmarshal(respBody, &stale); err != nil {
+			return fmt.Errorf("httpclient: unmarshal 410: %w", err)
+		}
+		return &stale
+	case http.StatusUnauthorized: // 401: access key rejected
+		return fmt.Errorf("httpclient: sealed sender: access key rejected (401): recipient may have sealed sender disabled")
+	default:
+		return fmt.Errorf("httpclient: send sealed message: status %d: %s", resp.StatusCode, respBody)
+	}
+}
+
+// decodeBase64 decodes a base64 string (with or without padding).
+func decodeBase64(s string) ([]byte, error) {
+	// Try standard base64 first, then raw (no padding)
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return b, nil
+	}
+	return base64.RawStdEncoding.DecodeString(s)
+}
+
+// encodeBase64 encodes bytes to base64 with padding.
+func encodeBase64(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
 }

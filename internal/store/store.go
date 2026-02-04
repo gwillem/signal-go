@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -110,7 +111,32 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("store: create schema: %w", err)
 	}
 
+	// Run migrations for schema changes
+	if err := runMigrations(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: run migrations: %w", err)
+	}
+
 	return &Store{db: db}, nil
+}
+
+// runMigrations applies any necessary schema changes.
+func runMigrations(db *sql.DB) error {
+	// Migration: Add profile_key column to contact table if it doesn't exist
+	_, err := db.Exec("ALTER TABLE contact ADD COLUMN profile_key BLOB")
+	if err != nil && !isColumnExistsError(err) {
+		return fmt.Errorf("add profile_key column: %w", err)
+	}
+	return nil
+}
+
+// isColumnExistsError checks if the error is due to column already existing.
+func isColumnExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column") || strings.Contains(msg, "already exists")
 }
 
 // Close closes the database connection.

@@ -4,16 +4,17 @@ import "fmt"
 
 // Contact represents a Signal contact with ACI-to-phone-number mapping.
 type Contact struct {
-	ACI    string
-	Number string
-	Name   string
+	ACI        string
+	Number     string
+	Name       string
+	ProfileKey []byte // 32-byte profile key for unidentified access
 }
 
 // SaveContact upserts a single contact.
 func (s *Store) SaveContact(c *Contact) error {
 	_, err := s.db.Exec(
-		"INSERT OR REPLACE INTO contact (aci, number, name) VALUES (?, ?, ?)",
-		c.ACI, c.Number, c.Name,
+		"INSERT OR REPLACE INTO contact (aci, number, name, profile_key) VALUES (?, ?, ?, ?)",
+		c.ACI, c.Number, c.Name, c.ProfileKey,
 	)
 	if err != nil {
 		return fmt.Errorf("store: save contact: %w", err)
@@ -25,8 +26,8 @@ func (s *Store) SaveContact(c *Contact) error {
 func (s *Store) GetContactByACI(aci string) (*Contact, error) {
 	var c Contact
 	err := s.db.QueryRow(
-		"SELECT aci, number, name FROM contact WHERE aci = ?", aci,
-	).Scan(&c.ACI, &c.Number, &c.Name)
+		"SELECT aci, number, name, profile_key FROM contact WHERE aci = ?", aci,
+	).Scan(&c.ACI, &c.Number, &c.Name, &c.ProfileKey)
 	if err != nil {
 		if err.Error() == "sql: no rows in result set" {
 			return nil, nil
@@ -47,14 +48,14 @@ func (s *Store) SaveContacts(contacts []*Contact) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("INSERT OR REPLACE INTO contact (aci, number, name) VALUES (?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT OR REPLACE INTO contact (aci, number, name, profile_key) VALUES (?, ?, ?, ?)")
 	if err != nil {
 		return fmt.Errorf("store: prepare: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, c := range contacts {
-		if _, err := stmt.Exec(c.ACI, c.Number, c.Name); err != nil {
+		if _, err := stmt.Exec(c.ACI, c.Number, c.Name, c.ProfileKey); err != nil {
 			return fmt.Errorf("store: save contact %q: %w", c.ACI, err)
 		}
 	}

@@ -38,6 +38,8 @@ type globalOpts struct {
 	InspectPreKey  inspectPreKeyCommand  `command:"inspect-prekey" description:"Decode and inspect a base64 pre-key message (debug)"`
 	Profile        profileCommand        `command:"profile" description:"Show or set profile information"`
 	AnalyzeSealed  analyzeSealedCommand  `command:"analyze-sealed" description:"Analyze a captured sealed sender envelope (debug)"`
+	DebugSealed    debugSealedCommand    `command:"debug-sealed" description:"Debug sealed sender decryption with detailed output"`
+	SafetyNumber   safetyNumberCommand   `command:"safety-number" description:"Compute safety number with a contact"`
 }
 
 var opts globalOpts

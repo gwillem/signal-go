@@ -26,6 +26,113 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Server certificate used to sign sender certificates.
+type ServerCertificate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Certificate   []byte                 `protobuf:"bytes,1,opt,name=certificate" json:"certificate,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,2,opt,name=signature" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServerCertificate) Reset() {
+	*x = ServerCertificate{}
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServerCertificate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServerCertificate) ProtoMessage() {}
+
+func (x *ServerCertificate) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServerCertificate.ProtoReflect.Descriptor instead.
+func (*ServerCertificate) Descriptor() ([]byte, []int) {
+	return file_internal_proto_SealedSender_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *ServerCertificate) GetCertificate() []byte {
+	if x != nil {
+		return x.Certificate
+	}
+	return nil
+}
+
+func (x *ServerCertificate) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+// Sender certificate for sealed sender messages.
+// Contains sender's identity, signed by server certificate.
+type SenderCertificate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Certificate   []byte                 `protobuf:"bytes,1,opt,name=certificate" json:"certificate,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,2,opt,name=signature" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SenderCertificate) Reset() {
+	*x = SenderCertificate{}
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SenderCertificate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SenderCertificate) ProtoMessage() {}
+
+func (x *SenderCertificate) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SenderCertificate.ProtoReflect.Descriptor instead.
+func (*SenderCertificate) Descriptor() ([]byte, []int) {
+	return file_internal_proto_SealedSender_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SenderCertificate) GetCertificate() []byte {
+	if x != nil {
+		return x.Certificate
+	}
+	return nil
+}
+
+func (x *SenderCertificate) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
 // Outer structure of a Sealed Sender v1 message.
 // This is parsed BEFORE decryption to extract the encrypted components.
 type UnidentifiedSenderMessage struct {
@@ -39,7 +146,7 @@ type UnidentifiedSenderMessage struct {
 
 func (x *UnidentifiedSenderMessage) Reset() {
 	*x = UnidentifiedSenderMessage{}
-	mi := &file_internal_proto_SealedSender_proto_msgTypes[0]
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -51,7 +158,7 @@ func (x *UnidentifiedSenderMessage) String() string {
 func (*UnidentifiedSenderMessage) ProtoMessage() {}
 
 func (x *UnidentifiedSenderMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_proto_SealedSender_proto_msgTypes[0]
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -64,7 +171,7 @@ func (x *UnidentifiedSenderMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnidentifiedSenderMessage.ProtoReflect.Descriptor instead.
 func (*UnidentifiedSenderMessage) Descriptor() ([]byte, []int) {
-	return file_internal_proto_SealedSender_proto_rawDescGZIP(), []int{0}
+	return file_internal_proto_SealedSender_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *UnidentifiedSenderMessage) GetEphemeralPublic() []byte {
@@ -88,11 +195,248 @@ func (x *UnidentifiedSenderMessage) GetEncryptedMessage() []byte {
 	return nil
 }
 
+type ServerCertificate_Certificate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            *uint32                `protobuf:"varint,1,opt,name=id" json:"id,omitempty"`
+	Key           []byte                 `protobuf:"bytes,2,opt,name=key" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServerCertificate_Certificate) Reset() {
+	*x = ServerCertificate_Certificate{}
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServerCertificate_Certificate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServerCertificate_Certificate) ProtoMessage() {}
+
+func (x *ServerCertificate_Certificate) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServerCertificate_Certificate.ProtoReflect.Descriptor instead.
+func (*ServerCertificate_Certificate) Descriptor() ([]byte, []int) {
+	return file_internal_proto_SealedSender_proto_rawDescGZIP(), []int{0, 0}
+}
+
+func (x *ServerCertificate_Certificate) GetId() uint32 {
+	if x != nil && x.Id != nil {
+		return *x.Id
+	}
+	return 0
+}
+
+func (x *ServerCertificate_Certificate) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+type SenderCertificate_Certificate struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	SenderE164 *string                `protobuf:"bytes,1,opt,name=senderE164" json:"senderE164,omitempty"`
+	// Types that are valid to be assigned to SenderUuid:
+	//
+	//	*SenderCertificate_Certificate_UuidString
+	//	*SenderCertificate_Certificate_UuidBytes
+	SenderUuid   isSenderCertificate_Certificate_SenderUuid `protobuf_oneof:"senderUuid"`
+	SenderDevice *uint32                                    `protobuf:"varint,2,opt,name=senderDevice" json:"senderDevice,omitempty"`
+	Expires      *uint64                                    `protobuf:"fixed64,3,opt,name=expires" json:"expires,omitempty"`
+	IdentityKey  []byte                                     `protobuf:"bytes,4,opt,name=identityKey" json:"identityKey,omitempty"`
+	// Types that are valid to be assigned to Signer:
+	//
+	//	*SenderCertificate_Certificate_SignerCertificate
+	//	*SenderCertificate_Certificate_SignerId
+	Signer        isSenderCertificate_Certificate_Signer `protobuf_oneof:"signer"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SenderCertificate_Certificate) Reset() {
+	*x = SenderCertificate_Certificate{}
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SenderCertificate_Certificate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SenderCertificate_Certificate) ProtoMessage() {}
+
+func (x *SenderCertificate_Certificate) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_SealedSender_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SenderCertificate_Certificate.ProtoReflect.Descriptor instead.
+func (*SenderCertificate_Certificate) Descriptor() ([]byte, []int) {
+	return file_internal_proto_SealedSender_proto_rawDescGZIP(), []int{1, 0}
+}
+
+func (x *SenderCertificate_Certificate) GetSenderE164() string {
+	if x != nil && x.SenderE164 != nil {
+		return *x.SenderE164
+	}
+	return ""
+}
+
+func (x *SenderCertificate_Certificate) GetSenderUuid() isSenderCertificate_Certificate_SenderUuid {
+	if x != nil {
+		return x.SenderUuid
+	}
+	return nil
+}
+
+func (x *SenderCertificate_Certificate) GetUuidString() string {
+	if x != nil {
+		if x, ok := x.SenderUuid.(*SenderCertificate_Certificate_UuidString); ok {
+			return x.UuidString
+		}
+	}
+	return ""
+}
+
+func (x *SenderCertificate_Certificate) GetUuidBytes() []byte {
+	if x != nil {
+		if x, ok := x.SenderUuid.(*SenderCertificate_Certificate_UuidBytes); ok {
+			return x.UuidBytes
+		}
+	}
+	return nil
+}
+
+func (x *SenderCertificate_Certificate) GetSenderDevice() uint32 {
+	if x != nil && x.SenderDevice != nil {
+		return *x.SenderDevice
+	}
+	return 0
+}
+
+func (x *SenderCertificate_Certificate) GetExpires() uint64 {
+	if x != nil && x.Expires != nil {
+		return *x.Expires
+	}
+	return 0
+}
+
+func (x *SenderCertificate_Certificate) GetIdentityKey() []byte {
+	if x != nil {
+		return x.IdentityKey
+	}
+	return nil
+}
+
+func (x *SenderCertificate_Certificate) GetSigner() isSenderCertificate_Certificate_Signer {
+	if x != nil {
+		return x.Signer
+	}
+	return nil
+}
+
+func (x *SenderCertificate_Certificate) GetSignerCertificate() []byte {
+	if x != nil {
+		if x, ok := x.Signer.(*SenderCertificate_Certificate_SignerCertificate); ok {
+			return x.SignerCertificate
+		}
+	}
+	return nil
+}
+
+func (x *SenderCertificate_Certificate) GetSignerId() uint32 {
+	if x != nil {
+		if x, ok := x.Signer.(*SenderCertificate_Certificate_SignerId); ok {
+			return x.SignerId
+		}
+	}
+	return 0
+}
+
+type isSenderCertificate_Certificate_SenderUuid interface {
+	isSenderCertificate_Certificate_SenderUuid()
+}
+
+type SenderCertificate_Certificate_UuidString struct {
+	UuidString string `protobuf:"bytes,6,opt,name=uuidString,oneof"`
+}
+
+type SenderCertificate_Certificate_UuidBytes struct {
+	UuidBytes []byte `protobuf:"bytes,7,opt,name=uuidBytes,oneof"`
+}
+
+func (*SenderCertificate_Certificate_UuidString) isSenderCertificate_Certificate_SenderUuid() {}
+
+func (*SenderCertificate_Certificate_UuidBytes) isSenderCertificate_Certificate_SenderUuid() {}
+
+type isSenderCertificate_Certificate_Signer interface {
+	isSenderCertificate_Certificate_Signer()
+}
+
+type SenderCertificate_Certificate_SignerCertificate struct {
+	SignerCertificate []byte `protobuf:"bytes,5,opt,name=signerCertificate,oneof"`
+}
+
+type SenderCertificate_Certificate_SignerId struct {
+	SignerId uint32 `protobuf:"varint,8,opt,name=signerId,oneof"`
+}
+
+func (*SenderCertificate_Certificate_SignerCertificate) isSenderCertificate_Certificate_Signer() {}
+
+func (*SenderCertificate_Certificate_SignerId) isSenderCertificate_Certificate_Signer() {}
+
 var File_internal_proto_SealedSender_proto protoreflect.FileDescriptor
 
 const file_internal_proto_SealedSender_proto_rawDesc = "" +
 	"\n" +
-	"!internal/proto/SealedSender.proto\x12\fsignal.proto\"\x9e\x01\n" +
+	"!internal/proto/SealedSender.proto\x12\fsignal.proto\"\x84\x01\n" +
+	"\x11ServerCertificate\x12 \n" +
+	"\vcertificate\x18\x01 \x01(\fR\vcertificate\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\x1a/\n" +
+	"\vCertificate\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\rR\x02id\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\fR\x03key\"\x8b\x03\n" +
+	"\x11SenderCertificate\x12 \n" +
+	"\vcertificate\x18\x01 \x01(\fR\vcertificate\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\x1a\xb5\x02\n" +
+	"\vCertificate\x12\x1e\n" +
+	"\n" +
+	"senderE164\x18\x01 \x01(\tR\n" +
+	"senderE164\x12 \n" +
+	"\n" +
+	"uuidString\x18\x06 \x01(\tH\x00R\n" +
+	"uuidString\x12\x1e\n" +
+	"\tuuidBytes\x18\a \x01(\fH\x00R\tuuidBytes\x12\"\n" +
+	"\fsenderDevice\x18\x02 \x01(\rR\fsenderDevice\x12\x18\n" +
+	"\aexpires\x18\x03 \x01(\x06R\aexpires\x12 \n" +
+	"\videntityKey\x18\x04 \x01(\fR\videntityKey\x12.\n" +
+	"\x11signerCertificate\x18\x05 \x01(\fH\x01R\x11signerCertificate\x12\x1c\n" +
+	"\bsignerId\x18\b \x01(\rH\x01R\bsignerIdB\f\n" +
+	"\n" +
+	"senderUuidB\b\n" +
+	"\x06signer\"\x9e\x01\n" +
 	"\x19UnidentifiedSenderMessage\x12)\n" +
 	"\x10ephemeral_public\x18\x01 \x01(\fR\x0fephemeralPublic\x12)\n" +
 	"\x10encrypted_static\x18\x02 \x01(\fR\x0fencryptedStatic\x12+\n" +
@@ -110,9 +454,13 @@ func file_internal_proto_SealedSender_proto_rawDescGZIP() []byte {
 	return file_internal_proto_SealedSender_proto_rawDescData
 }
 
-var file_internal_proto_SealedSender_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_internal_proto_SealedSender_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_internal_proto_SealedSender_proto_goTypes = []any{
-	(*UnidentifiedSenderMessage)(nil), // 0: signal.proto.UnidentifiedSenderMessage
+	(*ServerCertificate)(nil),             // 0: signal.proto.ServerCertificate
+	(*SenderCertificate)(nil),             // 1: signal.proto.SenderCertificate
+	(*UnidentifiedSenderMessage)(nil),     // 2: signal.proto.UnidentifiedSenderMessage
+	(*ServerCertificate_Certificate)(nil), // 3: signal.proto.ServerCertificate.Certificate
+	(*SenderCertificate_Certificate)(nil), // 4: signal.proto.SenderCertificate.Certificate
 }
 var file_internal_proto_SealedSender_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -127,13 +475,19 @@ func file_internal_proto_SealedSender_proto_init() {
 	if File_internal_proto_SealedSender_proto != nil {
 		return
 	}
+	file_internal_proto_SealedSender_proto_msgTypes[4].OneofWrappers = []any{
+		(*SenderCertificate_Certificate_UuidString)(nil),
+		(*SenderCertificate_Certificate_UuidBytes)(nil),
+		(*SenderCertificate_Certificate_SignerCertificate)(nil),
+		(*SenderCertificate_Certificate_SignerId)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_proto_SealedSender_proto_rawDesc), len(file_internal_proto_SealedSender_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

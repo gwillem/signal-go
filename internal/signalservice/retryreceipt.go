@@ -149,12 +149,20 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 		fmt.Sscanf(parts[1], "%d", &localDeviceID)
 	}
 	sendingToSelf := recipient == localACI
-	logf(logger, "send: localDeviceID=%d recipient=%s", localDeviceID, recipient)
+	logf(logger, "send: localDeviceID=%d recipient=%s sendingToSelf=%v", localDeviceID, recipient, sendingToSelf)
 
 	// Load cached devices, or start with device 1 if not cached.
 	deviceIDs, _ := st.GetDevices(recipient)
 	if len(deviceIDs) == 0 {
 		deviceIDs = []int{1}
+	}
+
+	// When sending to self, filter out our own device from the initial list.
+	if sendingToSelf {
+		deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == localDeviceID })
+		if len(deviceIDs) == 0 {
+			return fmt.Errorf("send: no other devices to send to (you only have device %d)", localDeviceID)
+		}
 	}
 
 	// Signal-Android behavior: retry up to 4 times, no special tracking.

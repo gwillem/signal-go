@@ -259,6 +259,16 @@ func (sc *ServerCertificate) Destroy() {
 	}
 }
 
+// DeserializeSenderCertificate deserializes a sender certificate from bytes.
+// This is used to parse sender certificates received from the Signal server.
+func DeserializeSenderCertificate(data []byte) (*SenderCertificate, error) {
+	var out C.SignalMutPointerSenderCertificate
+	if err := wrapError(C.signal_sender_certificate_deserialize(&out, borrowedBuffer(data))); err != nil {
+		return nil, err
+	}
+	return &SenderCertificate{ptr: out.raw}, nil
+}
+
 // NewSenderCertificate creates a new sender certificate.
 func NewSenderCertificate(
 	senderUUID string,

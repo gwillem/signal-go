@@ -356,6 +356,52 @@ func (c *Client) DeviceID() int {
 	return c.deviceID
 }
 
+// ACI returns the Account Identity UUID.
+func (c *Client) ACI() string {
+	return c.aci
+}
+
+// IdentityKey returns our public identity key bytes.
+func (c *Client) IdentityKey() ([]byte, error) {
+	if c.store == nil {
+		return nil, fmt.Errorf("client: not loaded")
+	}
+	priv, err := c.store.GetIdentityKeyPair()
+	if err != nil {
+		return nil, err
+	}
+	pub, err := priv.PublicKey()
+	priv.Destroy()
+	if err != nil {
+		return nil, err
+	}
+	defer pub.Destroy()
+	return pub.Serialize()
+}
+
+// GetIdentityKey returns the stored identity key for a remote party.
+func (c *Client) GetIdentityKey(theirUUID string) ([]byte, error) {
+	if c.store == nil {
+		return nil, fmt.Errorf("client: not loaded")
+	}
+	// Create address with device 1 (identity keys are per-account, not per-device)
+	addr, err := libsignal.NewAddress(theirUUID, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer addr.Destroy()
+
+	pub, err := c.store.GetIdentityKey(addr)
+	if err != nil {
+		return nil, err
+	}
+	if pub == nil {
+		return nil, fmt.Errorf("no identity key stored for %s", theirUUID)
+	}
+	defer pub.Destroy()
+	return pub.Serialize()
+}
+
 // Send sends a text message to the given recipient (ACI UUID).
 // Use SendWithPNI for recipients who discovered you via phone number lookup.
 func (c *Client) Send(ctx context.Context, recipient string, text string) error {
@@ -367,6 +413,20 @@ func (c *Client) Send(ctx context.Context, recipient string, text string) error 
 // initiated the conversation by sending to your PNI.
 func (c *Client) SendWithPNI(ctx context.Context, recipient string, text string) error {
 	return c.sendInternal(ctx, recipient, text, true)
+}
+
+// SendSealed sends a text message using sealed sender (UNIDENTIFIED_SENDER).
+// This hides the sender's identity from the Signal server.
+// Requires the recipient's profile key to be stored (for deriving unidentified access key).
+func (c *Client) SendSealed(ctx context.Context, recipient string, text string) error {
+	if c.store == nil {
+		return fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+	return signalservice.SendSealedSenderMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig, c.logger)
 }
 
 func (c *Client) sendInternal(ctx context.Context, recipient string, text string, usePNI bool) error {

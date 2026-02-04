@@ -380,6 +380,13 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 	// Extract text body from DataMessage (direct message).
 	if dm := contentProto.GetDataMessage(); dm != nil && dm.Body != nil {
+		// Store sender's profile key if provided (needed for sealed sender replies).
+		if len(dm.ProfileKey) == 32 {
+			if err := saveContactProfileKey(st, senderACI, dm.ProfileKey, logger); err != nil {
+				logf(logger, "failed to save profile key: %v", err)
+			}
+		}
+
 		msg := &Message{
 			Sender:    senderACI,
 			Device:    senderDevice,
@@ -533,6 +540,41 @@ func populateContactInfo(msg *Message, st *store.Store) {
 			msg.SyncToNumber = c.Number
 		}
 	}
+}
+
+// saveContactProfileKey stores or updates a contact's profile key.
+// This is needed for sealed sender - we derive the unidentified access key from it.
+func saveContactProfileKey(st *store.Store, aci string, profileKey []byte, logger *log.Logger) error {
+	// Get existing contact or create new one
+	contact, err := st.GetContactByACI(aci)
+	if err != nil {
+		return err
+	}
+	if contact == nil {
+		contact = &store.Contact{ACI: aci}
+	}
+
+	// Only update if we don't have a profile key or it changed
+	if len(contact.ProfileKey) == 0 || !bytesEqual(contact.ProfileKey, profileKey) {
+		contact.ProfileKey = profileKey
+		if err := st.SaveContact(contact); err != nil {
+			return err
+		}
+		logf(logger, "saved profile key for %s", aci)
+	}
+	return nil
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // logf logs a formatted message if the logger is non-nil.
