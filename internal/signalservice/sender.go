@@ -20,11 +20,25 @@ import (
 // Automatically retries on 410 (stale devices).
 func SendTextMessage(ctx context.Context, apiURL string, recipient string, text string, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger) error {
 	timestamp := uint64(time.Now().UnixMilli())
+
+	// Load account to get profile key for the message.
+	acct, err := st.LoadAccount()
+	if err != nil {
+		return fmt.Errorf("sender: load account: %w", err)
+	}
+
+	dm := &proto.DataMessage{
+		Body:      &text,
+		Timestamp: &timestamp,
+	}
+
+	// Include profile key if available (required for iOS compatibility).
+	if acct != nil && len(acct.ProfileKey) > 0 {
+		dm.ProfileKey = acct.ProfileKey
+	}
+
 	content := &proto.Content{
-		DataMessage: &proto.DataMessage{
-			Body:      &text,
-			Timestamp: &timestamp,
-		},
+		DataMessage: dm,
 	}
 	contentBytes, err := pb.Marshal(content)
 	if err != nil {
