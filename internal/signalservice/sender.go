@@ -18,18 +18,27 @@ import (
 // SendTextMessage sends a text message to a recipient. It handles session
 // establishment (fetching pre-keys if needed), encryption, and HTTP delivery.
 // Automatically retries on 410 (stale devices).
-func SendTextMessage(ctx context.Context, apiURL string, recipient string, text string, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger) error {
+// If debugDir is non-empty, the Content protobuf is dumped before encryption.
+func SendTextMessage(ctx context.Context, apiURL string, recipient string, text string, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger, debugDir string) error {
 	timestamp := uint64(time.Now().UnixMilli())
 
-	// Load account to get profile key for the message.
+	// Load account to get profile key and PNI for the message.
 	acct, err := st.LoadAccount()
 	if err != nil {
 		return fmt.Errorf("sender: load account: %w", err)
 	}
 
+	// Include fields that iOS requires for proper message display.
+	expireTimer := uint32(0)
+	requiredProtocolVersion := uint32(0)
+	expireTimerVersion := uint32(1)
+
 	dm := &proto.DataMessage{
-		Body:      &text,
-		Timestamp: &timestamp,
+		Body:                    &text,
+		Timestamp:               &timestamp,
+		ExpireTimer:             &expireTimer,
+		RequiredProtocolVersion: &requiredProtocolVersion,
+		ExpireTimerVersion:      &expireTimerVersion,
 	}
 
 	// Include profile key if available (required for iOS compatibility).
@@ -40,12 +49,107 @@ func SendTextMessage(ctx context.Context, apiURL string, recipient string, text 
 	content := &proto.Content{
 		DataMessage: dm,
 	}
+
+	// Include PNI signature to help recipients link our ACI and PNI identities.
+	// This is required when the recipient discovered us via phone number (PNI).
+	pniSig, err := createPniSignatureMessage(st, acct, logger)
+	if err != nil {
+		logf(logger, "sender: failed to create PNI signature (continuing without): %v", err)
+	} else if pniSig != nil {
+		content.PniSignatureMessage = pniSig
+		logf(logger, "sender: including PNI signature in message")
+	}
+
 	contentBytes, err := pb.Marshal(content)
 	if err != nil {
 		return fmt.Errorf("sender: marshal content: %w", err)
 	}
 
+	// Dump Content for debugging comparison with received messages.
+	dumpContent(debugDir, "send", recipient, timestamp, contentBytes, logger)
+
 	return sendEncryptedMessage(ctx, apiURL, recipient, contentBytes, st, auth, tlsConf, logger)
+}
+
+// createPniSignatureMessage creates a PniSignatureMessage that proves our ACI and PNI
+// identities belong to the same account. The PNI identity key signs the ACI public key.
+func createPniSignatureMessage(st *store.Store, acct *store.Account, logger *log.Logger) (*proto.PniSignatureMessage, error) {
+	if acct == nil || acct.PNI == "" {
+		return nil, nil // No PNI available
+	}
+
+	// Get ACI identity public key.
+	aciPriv, err := st.GetIdentityKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("get ACI identity: %w", err)
+	}
+	aciPub, err := aciPriv.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("derive ACI public key: %w", err)
+	}
+	defer aciPub.Destroy()
+
+	// Switch to PNI identity.
+	st.UsePNI(true)
+	defer st.UsePNI(false)
+
+	// Get PNI identity key pair.
+	pniPriv, err := st.GetIdentityKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("get PNI identity: %w", err)
+	}
+	pniPub, err := pniPriv.PublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("derive PNI public key: %w", err)
+	}
+	defer pniPub.Destroy()
+
+	// Create IdentityKeyPair for signing.
+	pniKeyPair := &libsignal.IdentityKeyPair{
+		PublicKey:  pniPub,
+		PrivateKey: pniPriv,
+	}
+
+	// Sign ACI public key with PNI identity.
+	signature, err := pniKeyPair.SignAlternateIdentity(aciPub)
+	if err != nil {
+		return nil, fmt.Errorf("sign alternate identity: %w", err)
+	}
+
+	// Parse PNI UUID to bytes (16 bytes).
+	pniBytes, err := uuidToBytes(acct.PNI)
+	if err != nil {
+		return nil, fmt.Errorf("parse PNI UUID: %w", err)
+	}
+
+	return &proto.PniSignatureMessage{
+		Pni:       pniBytes,
+		Signature: signature,
+	}, nil
+}
+
+// uuidToBytes converts a UUID string (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) to 16 bytes.
+func uuidToBytes(uuidStr string) ([]byte, error) {
+	// Remove dashes and decode hex.
+	hex := ""
+	for _, c := range uuidStr {
+		if c != '-' {
+			hex += string(c)
+		}
+	}
+	if len(hex) != 32 {
+		return nil, fmt.Errorf("invalid UUID length: %d", len(hex))
+	}
+	result := make([]byte, 16)
+	for i := 0; i < 16; i++ {
+		var b byte
+		_, err := fmt.Sscanf(hex[i*2:i*2+2], "%02x", &b)
+		if err != nil {
+			return nil, fmt.Errorf("invalid UUID hex at %d: %w", i, err)
+		}
+		result[i] = b
+	}
+	return result, nil
 }
 
 // envelopeTypeForCiphertext maps libsignal CiphertextMessage types to Signal

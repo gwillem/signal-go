@@ -64,3 +64,17 @@ func (kp *IdentityKeyPair) Destroy() {
 		kp.PrivateKey.Destroy()
 	}
 }
+
+// SignAlternateIdentity creates a signature proving ownership of another identity.
+// Used to link ACI and PNI identities: the PNI identity key pair signs the ACI public key.
+// The recipient can verify this signature to confirm both identities belong to the same account.
+func (kp *IdentityKeyPair) SignAlternateIdentity(otherIdentity *PublicKey) ([]byte, error) {
+	var buf C.SignalOwnedBuffer
+	pubPtr := C.SignalConstPointerPublicKey{raw: kp.PublicKey.ptr}
+	privPtr := C.SignalConstPointerPrivateKey{raw: kp.PrivateKey.ptr}
+	otherPtr := C.SignalConstPointerPublicKey{raw: otherIdentity.ptr}
+	if err := wrapError(C.signal_identitykeypair_sign_alternate_identity(&buf, pubPtr, privPtr, otherPtr)); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(buf), nil
+}

@@ -343,28 +343,35 @@ func TestDumpEnvelope(t *testing.T) {
 		t.Fatalf("unexpected message: %+v", msg)
 	}
 
-	// Verify a .bin file was written with the correct raw bytes.
+	// Verify dump files were written: one for envelope, one for content.
 	entries, err := os.ReadDir(debugDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 dump file, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 dump files (envelope + content), got %d", len(entries))
 	}
 
-	name := entries[0].Name()
-	if !strings.HasSuffix(name, ".bin") {
-		t.Errorf("expected .bin extension, got %q", name)
+	// Find envelope dump file.
+	var envDumpName string
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "PREKEY_BUNDLE") {
+			envDumpName = e.Name()
+			break
+		}
 	}
-	if !strings.Contains(name, "PREKEY_BUNDLE") {
-		t.Errorf("expected filename to contain PREKEY_BUNDLE, got %q", name)
+	if envDumpName == "" {
+		t.Fatal("no envelope dump file found")
 	}
-	if !strings.Contains(name, senderACI[:8]) {
-		t.Errorf("expected filename to contain sender prefix, got %q", name)
+	if !strings.HasSuffix(envDumpName, ".bin") {
+		t.Errorf("expected .bin extension, got %q", envDumpName)
+	}
+	if !strings.Contains(envDumpName, senderACI[:8]) {
+		t.Errorf("expected filename to contain sender prefix, got %q", envDumpName)
 	}
 
-	// Verify contents match the raw envelope bytes.
-	dumped, err := LoadDump(filepath.Join(debugDir, name))
+	// Verify envelope dump contents match the raw envelope bytes.
+	dumped, err := LoadDump(filepath.Join(debugDir, envDumpName))
 	if err != nil {
 		t.Fatal(err)
 	}

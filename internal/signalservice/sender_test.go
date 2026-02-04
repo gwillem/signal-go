@@ -164,7 +164,7 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
 
 	// Send a message — this should fetch pre-keys, establish session, encrypt, and send.
-	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello Bob!", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello Bob!", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 
 	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
 
-	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello again!", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello again!", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +496,7 @@ func TestSendSessionReuse(t *testing.T) {
 	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
 
 	// First send: should fetch pre-keys to establish session.
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello1", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello1", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ func TestSendSessionReuse(t *testing.T) {
 	}
 
 	// Second send: should NOT fetch pre-keys (session exists with registration ID).
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello2", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello2", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +688,7 @@ func TestSendToSelf409ThenRetry(t *testing.T) {
 
 	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
 
-	err = SendTextMessage(context.Background(), srv.URL, "my-aci", "sync", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "my-aci", "sync", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,7 +796,7 @@ func TestSend410ThenRetrySucceeds(t *testing.T) {
 
 	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
 
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,7 +949,7 @@ func TestSend410OnlyArchivesSessions(t *testing.T) {
 	// Device 4 = our device (like the production user).
 	auth := BasicAuth{Username: "self-aci.4", Password: "pass"}
 
-	err = SendTextMessage(context.Background(), srv.URL, "self-aci", "sync", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "self-aci", "sync", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1057,7 +1057,7 @@ func TestSend409PersistsDefaultDevice1(t *testing.T) {
 
 	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
 
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1204,7 +1204,7 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 
 	auth := BasicAuth{Username: "my-aci.4", Password: "pass"}
 
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil)
+	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

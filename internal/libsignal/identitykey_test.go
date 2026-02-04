@@ -53,3 +53,33 @@ func TestIdentityKeyPairSerializeRoundTrip(t *testing.T) {
 		t.Fatal("private key mismatch after round-trip")
 	}
 }
+
+// TestSignAlternateIdentity tests the PNI-ACI identity linking signature.
+func TestSignAlternateIdentity(t *testing.T) {
+	// Create two identity key pairs (simulating ACI and PNI identities)
+	aciKeyPair, err := GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateIdentityKeyPair (ACI): %v", err)
+	}
+	defer aciKeyPair.Destroy()
+
+	pniKeyPair, err := GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateIdentityKeyPair (PNI): %v", err)
+	}
+	defer pniKeyPair.Destroy()
+
+	// PNI identity signs the ACI public key
+	signature, err := pniKeyPair.SignAlternateIdentity(aciKeyPair.PublicKey)
+	if err != nil {
+		t.Fatalf("SignAlternateIdentity: %v", err)
+	}
+	if len(signature) == 0 {
+		t.Fatal("signature should not be empty")
+	}
+
+	// Signature should be 64 bytes (Ed25519 signature)
+	if len(signature) != 64 {
+		t.Errorf("expected 64-byte signature, got %d bytes", len(signature))
+	}
+}

@@ -118,6 +118,16 @@ func (m *PreKeySignalMessage) Version() (uint32, error) {
 	return uint32(out), nil
 }
 
+// IdentityKey returns the sender's identity public key from the message.
+func (m *PreKeySignalMessage) IdentityKey() (*PublicKey, error) {
+	var out C.SignalMutPointerPublicKey
+	cPtr := C.SignalConstPointerPreKeySignalMessage{raw: m.ptr}
+	if err := wrapError(C.signal_pre_key_signal_message_get_identity_key(&out, cPtr)); err != nil {
+		return nil, err
+	}
+	return &PublicKey{ptr: out.raw}, nil
+}
+
 // SignalMessage wraps a regular signal message (after session is established).
 type SignalMessage struct {
 	ptr *C.SignalMessage

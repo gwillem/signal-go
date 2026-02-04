@@ -212,6 +212,9 @@ func (c *HTTPClient) SendMessage(ctx context.Context, destination string, msg *O
 		return fmt.Errorf("httpclient: marshal message: %w", err)
 	}
 
+	// Log the full request JSON for debugging.
+	logf(c.logger, "http PUT /v1/messages/%s body=%s", destination, string(body))
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/messages/"+destination, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("httpclient: new request: %w", err)

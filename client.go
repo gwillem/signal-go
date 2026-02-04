@@ -357,15 +357,35 @@ func (c *Client) DeviceID() int {
 }
 
 // Send sends a text message to the given recipient (ACI UUID).
+// Use SendWithPNI for recipients who discovered you via phone number lookup.
 func (c *Client) Send(ctx context.Context, recipient string, text string) error {
+	return c.sendInternal(ctx, recipient, text, false)
+}
+
+// SendWithPNI sends a text message using PNI identity for encryption.
+// Use this when the recipient discovered you via phone number (CDSI) and
+// initiated the conversation by sending to your PNI.
+func (c *Client) SendWithPNI(ctx context.Context, recipient string, text string) error {
+	return c.sendInternal(ctx, recipient, text, true)
+}
+
+func (c *Client) sendInternal(ctx context.Context, recipient string, text string, usePNI bool) error {
 	if c.store == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
+	// Note: Server only accepts ACI for authentication, not PNI.
+	// When usePNI=true, we use PNI identity for encryption but ACI for auth.
+	// This creates a mismatch that recipients may not handle correctly.
+	// The proper solution is sealed sender (not yet implemented).
 	auth := signalservice.BasicAuth{
 		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
 		Password: c.password,
 	}
-	return signalservice.SendTextMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig, c.logger)
+	if usePNI {
+		c.store.UsePNI(true)
+		defer c.store.UsePNI(false)
+	}
+	return signalservice.SendTextMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig, c.logger, c.debugDir)
 }
 
 // Receive returns an iterator that yields incoming text messages.

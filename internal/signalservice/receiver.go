@@ -336,6 +336,9 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	// Strip Signal transport padding: content is followed by 0x80 then 0x00 bytes.
 	plaintext = stripPadding(plaintext)
 
+	// Dump received Content for debugging comparison with sent messages.
+	dumpContent(rc.debugDir, "recv", senderACI, env.GetTimestamp(), plaintext, logger)
+
 	// Parse decrypted Content protobuf.
 	var contentProto proto.Content
 	if err := pb.Unmarshal(plaintext, &contentProto); err != nil {
@@ -347,6 +350,13 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		contentProto.DataMessage != nil, contentProto.SyncMessage != nil,
 		contentProto.TypingMessage != nil, contentProto.ReceiptMessage != nil,
 		contentProto.CallMessage != nil)
+
+	// Log DataMessage details for debugging.
+	if dm := contentProto.GetDataMessage(); dm != nil {
+		logf(logger, "RECV DataMessage: timestamp=%d bodyLen=%d hasProfileKey=%v hasGroupContext=%v hasQuote=%v hasExpireTimer=%v",
+			dm.GetTimestamp(), len(dm.GetBody()), len(dm.ProfileKey) > 0,
+			dm.GetGroupV2() != nil, dm.GetQuote() != nil, dm.ExpireTimer != nil)
+	}
 
 	// Extract text body from DataMessage (direct message).
 	if dm := contentProto.GetDataMessage(); dm != nil && dm.Body != nil {
