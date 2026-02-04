@@ -6,21 +6,31 @@ import (
 	"github.com/gwillem/signal-go/internal/libsignal"
 )
 
-// GetIdentityKeyPair returns the local identity key pair.
+// GetIdentityKeyPair returns the local identity key pair (ACI or PNI based on UsePNI setting).
 func (s *Store) GetIdentityKeyPair() (*libsignal.PrivateKey, error) {
-	if s.identityKeyPair == nil {
+	keyPair := s.identityKeyPair
+	if s.usePNI {
+		keyPair = s.pniKeyPair
+	}
+	if keyPair == nil {
+		if s.usePNI {
+			return nil, fmt.Errorf("store: PNI identity key pair not set")
+		}
 		return nil, fmt.Errorf("store: identity key pair not set")
 	}
 	// Return a clone via serialize/deserialize.
-	data, err := s.identityKeyPair.Serialize()
+	data, err := keyPair.Serialize()
 	if err != nil {
 		return nil, err
 	}
 	return libsignal.DeserializePrivateKey(data)
 }
 
-// GetLocalRegistrationID returns the local registration ID.
+// GetLocalRegistrationID returns the local registration ID (ACI or PNI based on UsePNI setting).
 func (s *Store) GetLocalRegistrationID() (uint32, error) {
+	if s.usePNI {
+		return s.pniRegID, nil
+	}
 	return s.registrationID, nil
 }
 

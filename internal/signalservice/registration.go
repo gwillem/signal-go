@@ -85,22 +85,22 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 	encodedName := base64.StdEncoding.EncodeToString(encryptedName)
 
 	// Build signed pre-key entities.
-	aciSPK, err := signedPreKeyEntity(aciKeys.SignedPreKey)
+	aciSPK, err := SignedPreKeyToEntity(aciKeys.SignedPreKey)
 	if err != nil {
 		return nil, fmt.Errorf("registration: ACI signed pre-key entity: %w", err)
 	}
 
-	pniSPK, err := signedPreKeyEntity(pniKeys.SignedPreKey)
+	pniSPK, err := SignedPreKeyToEntity(pniKeys.SignedPreKey)
 	if err != nil {
 		return nil, fmt.Errorf("registration: PNI signed pre-key entity: %w", err)
 	}
 
-	aciKPK, err := kyberPreKeyEntity(aciKeys.KyberLastResort)
+	aciKPK, err := KyberPreKeyToEntity(aciKeys.KyberLastResort)
 	if err != nil {
 		return nil, fmt.Errorf("registration: ACI Kyber entity: %w", err)
 	}
 
-	pniKPK, err := kyberPreKeyEntity(pniKeys.KyberLastResort)
+	pniKPK, err := KyberPreKeyToEntity(pniKeys.KyberLastResort)
 	if err != nil {
 		return nil, fmt.Errorf("registration: PNI Kyber entity: %w", err)
 	}
@@ -218,7 +218,8 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 	}, nil
 }
 
-func signedPreKeyEntity(rec *libsignal.SignedPreKeyRecord) (*SignedPreKeyEntity, error) {
+// SignedPreKeyEntity converts a SignedPreKeyRecord to a SignedPreKeyEntity for upload.
+func SignedPreKeyToEntity(rec *libsignal.SignedPreKeyRecord) (*SignedPreKeyEntity, error) {
 	id, err := rec.ID()
 	if err != nil {
 		return nil, err
@@ -247,7 +248,8 @@ func signedPreKeyEntity(rec *libsignal.SignedPreKeyRecord) (*SignedPreKeyEntity,
 	}, nil
 }
 
-func kyberPreKeyEntity(rec *libsignal.KyberPreKeyRecord) (*KyberPreKeyEntity, error) {
+// KyberPreKeyToEntity converts a KyberPreKeyRecord to a KyberPreKeyEntity for upload.
+func KyberPreKeyToEntity(rec *libsignal.KyberPreKeyRecord) (*KyberPreKeyEntity, error) {
 	id, err := rec.ID()
 	if err != nil {
 		return nil, err

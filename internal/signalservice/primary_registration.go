@@ -174,19 +174,19 @@ func RegisterPrimary(
 	defer pniKeys.KyberLastResort.Destroy()
 
 	// Build pre-key entities.
-	aciSPK, err := signedPreKeyEntity(aciKeys.SignedPreKey)
+	aciSPK, err := SignedPreKeyToEntity(aciKeys.SignedPreKey)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: ACI signed pre-key entity: %w", err)
 	}
-	pniSPK, err := signedPreKeyEntity(pniKeys.SignedPreKey)
+	pniSPK, err := SignedPreKeyToEntity(pniKeys.SignedPreKey)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: PNI signed pre-key entity: %w", err)
 	}
-	aciKPK, err := kyberPreKeyEntity(aciKeys.KyberLastResort)
+	aciKPK, err := KyberPreKeyToEntity(aciKeys.KyberLastResort)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: ACI Kyber entity: %w", err)
 	}
-	pniKPK, err := kyberPreKeyEntity(pniKeys.KyberLastResort)
+	pniKPK, err := KyberPreKeyToEntity(pniKeys.KyberLastResort)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: PNI Kyber entity: %w", err)
 	}

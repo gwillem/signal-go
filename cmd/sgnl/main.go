@@ -29,6 +29,8 @@ type globalOpts struct {
 	Devices        devicesCommand        `command:"devices" description:"List registered devices for this account"`
 	AccountCmd     accountCommand        `command:"account" description:"Show or update account settings"`
 	UpdateAttr     updateAttrCommand     `command:"update-attributes" description:"Update account attributes on server (can fix message delivery)"`
+	RefreshKeys    refreshKeysCommand    `command:"refresh-keys" description:"Re-upload local pre-keys to server (fix pre-key mismatch)"`
+	CheckPreKeys   checkPreKeysCommand   `command:"check-prekeys" description:"Verify local pre-keys match identity key (debug)"`
 	SyncContacts   syncContactsCommand   `command:"sync-contacts" description:"Request contact sync from primary device"`
 	VerifyIdentity verifyIdentityCommand `command:"verify-identity" description:"Compare local identity key with server (debug sealed sender)"`
 	CheckAllKeys   checkAllKeysCommand   `command:"check-all-keys" description:"Check identity key for all devices on server"`

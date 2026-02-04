@@ -78,6 +78,46 @@ func (m *PreKeySignalMessage) Destroy() {
 	}
 }
 
+// PreKeyID returns the one-time pre-key ID, or 0 if none.
+func (m *PreKeySignalMessage) PreKeyID() (uint32, error) {
+	var out C.uint32_t
+	cPtr := C.SignalConstPointerPreKeySignalMessage{raw: m.ptr}
+	if err := wrapError(C.signal_pre_key_signal_message_get_pre_key_id(&out, cPtr)); err != nil {
+		return 0, err
+	}
+	return uint32(out), nil
+}
+
+// SignedPreKeyID returns the signed pre-key ID.
+func (m *PreKeySignalMessage) SignedPreKeyID() (uint32, error) {
+	var out C.uint32_t
+	cPtr := C.SignalConstPointerPreKeySignalMessage{raw: m.ptr}
+	if err := wrapError(C.signal_pre_key_signal_message_get_signed_pre_key_id(&out, cPtr)); err != nil {
+		return 0, err
+	}
+	return uint32(out), nil
+}
+
+// RegistrationID returns the sender's registration ID.
+func (m *PreKeySignalMessage) RegistrationID() (uint32, error) {
+	var out C.uint32_t
+	cPtr := C.SignalConstPointerPreKeySignalMessage{raw: m.ptr}
+	if err := wrapError(C.signal_pre_key_signal_message_get_registration_id(&out, cPtr)); err != nil {
+		return 0, err
+	}
+	return uint32(out), nil
+}
+
+// Version returns the protocol version.
+func (m *PreKeySignalMessage) Version() (uint32, error) {
+	var out C.uint32_t
+	cPtr := C.SignalConstPointerPreKeySignalMessage{raw: m.ptr}
+	if err := wrapError(C.signal_pre_key_signal_message_get_version(&out, cPtr)); err != nil {
+		return 0, err
+	}
+	return uint32(out), nil
+}
+
 // SignalMessage wraps a regular signal message (after session is established).
 type SignalMessage struct {
 	ptr *C.SignalMessage

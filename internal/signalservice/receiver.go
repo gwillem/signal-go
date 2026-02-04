@@ -8,6 +8,7 @@ import (
 	"iter"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -141,8 +142,17 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	dumpEnvelope(rc.debugDir, data, &env, logger)
 
 	envType := env.GetType()
-	logf(logger, "envelope type=%v sender=%s device=%d timestamp=%d contentLen=%d",
-		envType, env.GetSourceServiceId(), env.GetSourceDevice(), env.GetTimestamp(), len(env.GetContent()))
+	logf(logger, "envelope type=%v sender=%s device=%d timestamp=%d contentLen=%d destination=%s",
+		envType, env.GetSourceServiceId(), env.GetSourceDevice(), env.GetTimestamp(), len(env.GetContent()), env.GetDestinationServiceId())
+
+	// Switch to PNI identity if message is addressed to our PNI.
+	// iPhone sends messages to PNI when the contact was discovered via phone number lookup (CDSI).
+	destServiceID := env.GetDestinationServiceId()
+	if strings.HasPrefix(destServiceID, "PNI:") {
+		logf(logger, "message addressed to PNI, switching to PNI identity for decryption")
+		st.UsePNI(true)
+		defer st.UsePNI(false)
+	}
 
 	// Only handle known envelope types.
 	switch envType {
@@ -291,6 +301,17 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 				return nil, fmt.Errorf("deserialize pre-key message: %w", err)
 			}
 			defer preKeyMsg.Destroy()
+
+			// Log pre-key message details for debugging
+			if signedPreKeyID, err := preKeyMsg.SignedPreKeyID(); err == nil {
+				logf(logger, "pre-key message signed_pre_key_id=%d", signedPreKeyID)
+			}
+			if preKeyID, err := preKeyMsg.PreKeyID(); err == nil {
+				logf(logger, "pre-key message pre_key_id=%d (0 means none)", preKeyID)
+			}
+			if version, err := preKeyMsg.Version(); err == nil {
+				logf(logger, "pre-key message version=%d", version)
+			}
 
 			plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
 			if err != nil {

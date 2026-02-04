@@ -15,8 +15,11 @@ import (
 // plus account credential management.
 type Store struct {
 	db              *sql.DB
-	identityKeyPair *libsignal.PrivateKey // cached from account table
-	registrationID  uint32                // cached from account table
+	identityKeyPair *libsignal.PrivateKey // cached ACI identity from account table
+	registrationID  uint32                // cached ACI registration ID from account table
+	pniKeyPair      *libsignal.PrivateKey // cached PNI identity from account table
+	pniRegID        uint32                // cached PNI registration ID from account table
+	usePNI          bool                  // if true, use PNI identity for operations
 }
 
 // Compile-time interface checks.
@@ -119,9 +122,20 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// SetIdentity sets the local identity key pair and registration ID.
+// SetIdentity sets the local ACI identity key pair and registration ID.
 // These are cached in memory and used by IdentityKeyStore methods.
 func (s *Store) SetIdentity(keyPair *libsignal.PrivateKey, registrationID uint32) {
 	s.identityKeyPair = keyPair
 	s.registrationID = registrationID
+}
+
+// SetPNIIdentity sets the local PNI identity key pair and registration ID.
+func (s *Store) SetPNIIdentity(keyPair *libsignal.PrivateKey, registrationID uint32) {
+	s.pniKeyPair = keyPair
+	s.pniRegID = registrationID
+}
+
+// UsePNI switches the store to use PNI identity for subsequent operations.
+func (s *Store) UsePNI(use bool) {
+	s.usePNI = use
 }
