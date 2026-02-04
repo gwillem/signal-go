@@ -37,6 +37,7 @@ type globalOpts struct {
 	SelfTest       selftestCommand       `command:"selftest" description:"Send message to self and verify receipt (debug)"`
 	InspectPreKey  inspectPreKeyCommand  `command:"inspect-prekey" description:"Decode and inspect a base64 pre-key message (debug)"`
 	Profile        profileCommand        `command:"profile" description:"Show or set profile information"`
+	AnalyzeSealed  analyzeSealedCommand  `command:"analyze-sealed" description:"Analyze a captured sealed sender envelope (debug)"`
 }
 
 var opts globalOpts

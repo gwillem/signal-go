@@ -186,7 +186,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		if identityKey, err := st.GetIdentityKeyPair(); err == nil {
 			if pub, err := identityKey.PublicKey(); err == nil {
 				if data, err := pub.Serialize(); err == nil && len(data) >= 8 {
-					logf(logger, "sealed sender: using identity key fingerprint=%x", data[:8])
+					logf(logger, "sealed sender: trying ACI identity key fingerprint=%x", data[:8])
 				}
 				pub.Destroy()
 			}
@@ -194,12 +194,32 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		}
 
 		// Step 1: Decrypt outer sealed sender layer → USMC (uses only identity key for ECDH).
-		// If the sender cached our old identity key (e.g. after re-link), this fails.
-		// We can't send a retry receipt here because the sender's identity is encrypted
-		// inside the failed outer layer — we don't know who to send it to.
+		// Try ACI identity first, then PNI identity as fallback.
+		// The sender may have encrypted for either identity depending on how they discovered us.
 		usmc, err := libsignal.SealedSenderDecryptToUSMC(content, st)
 		if err != nil {
-			return nil, fmt.Errorf("sealed sender decrypt outer (sender unknown, cannot send retry receipt): %w", err)
+			logf(logger, "sealed sender: ACI identity failed: %v", err)
+			logf(logger, "sealed sender: trying PNI identity as fallback...")
+
+			// Try PNI identity
+			st.UsePNI(true)
+			if pniKey, pniErr := st.GetIdentityKeyPair(); pniErr == nil {
+				if pub, pubErr := pniKey.PublicKey(); pubErr == nil {
+					if data, serErr := pub.Serialize(); serErr == nil && len(data) >= 8 {
+						logf(logger, "sealed sender: trying PNI identity key fingerprint=%x", data[:8])
+					}
+					pub.Destroy()
+				}
+				pniKey.Destroy()
+			}
+
+			usmc, err = libsignal.SealedSenderDecryptToUSMC(content, st)
+			st.UsePNI(false)
+
+			if err != nil {
+				return nil, fmt.Errorf("sealed sender decrypt outer failed with both ACI and PNI identities: %w", err)
+			}
+			logf(logger, "sealed sender: PNI identity succeeded!")
 		}
 		defer usmc.Destroy()
 

@@ -2,12 +2,111 @@ package libsignal
 
 import (
 	"encoding/hex"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/gwillem/signal-go/internal/proto"
 	pb "google.golang.org/protobuf/proto"
 )
+
+// AnalyzeSealedSenderPayload parses a sealed sender payload and returns debug info
+// without attempting decryption. This helps diagnose whether failures are due to
+// malformed outer structure vs decryption issues.
+func AnalyzeSealedSenderPayload(payload []byte) (string, error) {
+	if len(payload) == 0 {
+		return "", fmt.Errorf("empty payload")
+	}
+
+	versionByte := payload[0]
+	version := versionByte >> 4
+	remaining := payload[1:]
+
+	result := fmt.Sprintf("Version byte: 0x%02x (major version %d)\n", versionByte, version)
+	result += fmt.Sprintf("Payload length: %d bytes (after version: %d)\n", len(payload), len(remaining))
+
+	switch version {
+	case 0, 1:
+		// SSv1: parse as UnidentifiedSenderMessage protobuf
+		result += "Format: Sealed Sender v1\n"
+
+		// Try parsing as protobuf
+		var ssMsg proto.UnidentifiedSenderMessage
+		if err := pb.Unmarshal(remaining, &ssMsg); err != nil {
+			result += fmt.Sprintf("Protobuf parse FAILED: %v\n", err)
+			result += fmt.Sprintf("First 32 bytes after version: %x\n", remaining[:min(32, len(remaining))])
+			return result, fmt.Errorf("SSv1 protobuf parse failed: %w", err)
+		}
+
+		result += "Protobuf parse: SUCCESS\n"
+		result += fmt.Sprintf("  ephemeralPublic: %d bytes\n", len(ssMsg.GetEphemeralPublic()))
+		result += fmt.Sprintf("  encryptedStatic: %d bytes\n", len(ssMsg.GetEncryptedStatic()))
+		result += fmt.Sprintf("  encryptedMessage: %d bytes\n", len(ssMsg.GetEncryptedMessage()))
+
+		// Validate ephemeral public key format
+		ephPub := ssMsg.GetEphemeralPublic()
+		if len(ephPub) > 0 {
+			result += fmt.Sprintf("  ephemeralPublic first byte: 0x%02x ", ephPub[0])
+			if ephPub[0] == 0x05 {
+				result += "(valid Curve25519 key prefix)\n"
+			} else {
+				result += "(UNEXPECTED - should be 0x05 for Curve25519)\n"
+			}
+		}
+
+	case 2:
+		// SSv2
+		result += "Format: Sealed Sender v2\n"
+		if versionByte == 0x22 {
+			result += "  Variant: UUID (0x22)\n"
+		} else if versionByte == 0x23 {
+			result += "  Variant: ServiceId (0x23)\n"
+		}
+		// SSv2 uses fixed-size binary format, not protobuf for outer layer
+		if len(remaining) < 33+48+16 { // minimum: ephemeral key + encrypted key + auth tag
+			return result, fmt.Errorf("SSv2 payload too short: %d bytes", len(remaining))
+		}
+		result += fmt.Sprintf("  Remaining bytes: %d\n", len(remaining))
+
+	default:
+		return result, fmt.Errorf("unknown sealed sender version %d", version)
+	}
+
+	return result, nil
+}
+
+// TestAnalyzeSealedSenderPayload parses the outer sealed sender structure
+// without decryption, to diagnose whether failures are due to malformed
+// outer structure vs decryption issues.
+func TestAnalyzeSealedSenderPayload(t *testing.T) {
+	// Try to load a real envelope
+	envelopePath := "../../debug/1770112832577_UNIDENTIFIED_SENDER_sealed_0.bin"
+	if _, err := os.Stat(envelopePath); os.IsNotExist(err) {
+		t.Skip("Debug envelope not found, skipping analysis test")
+	}
+
+	envelopeData, err := os.ReadFile(envelopePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// Parse envelope protobuf
+	var env proto.Envelope
+	if err := pb.Unmarshal(envelopeData, &env); err != nil {
+		t.Fatalf("Unmarshal envelope: %v", err)
+	}
+
+	content := env.GetContent()
+	t.Logf("Envelope type: %v", env.GetType())
+	t.Logf("Content length: %d bytes", len(content))
+
+	// Analyze the sealed sender payload
+	analysis, err := AnalyzeSealedSenderPayload(content)
+	t.Log(analysis)
+	if err != nil {
+		t.Logf("Analysis error: %v", err)
+	}
+}
 
 // TestDebugRealSealedSender attempts to decrypt a real failing envelope
 // using the identity key from the user's database.

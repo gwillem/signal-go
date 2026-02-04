@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+//
+// Copyright 2020 Signal Messenger, LLC.
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+
+package signal.proto;
+
+option go_package = "github.com/gwillem/signal-go/internal/proto";
+
+// Outer structure of a Sealed Sender v1 message.
+// This is parsed BEFORE decryption to extract the encrypted components.
+message UnidentifiedSenderMessage {
+    optional bytes ephemeral_public = 1;   // 33-byte Curve25519 public key (0x05 prefix)
+    optional bytes encrypted_static = 2;   // Encrypted static key (48 bytes: 32 key + 16 MAC)
+    optional bytes encrypted_message = 3;  // Encrypted message content
+}
