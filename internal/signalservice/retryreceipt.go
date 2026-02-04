@@ -302,6 +302,10 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 	now := time.Now()
 	timestamp := uint64(now.UnixMilli())
 
+	// Add Signal transport padding before encryption.
+	// Format: [content] [0x80] [0x00...] padded to 80-byte blocks.
+	paddedContent := padMessage(contentBytes)
+
 	var messages []OutgoingMessage
 
 	for _, deviceID := range deviceIDs {
@@ -319,6 +323,7 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 		var registrationID int
 
 		if session == nil {
+			// No session exists, fetch pre-keys and establish one.
 			preKeyResp, err := httpClient.GetPreKeys(ctx, recipient, deviceID, auth)
 			if err != nil {
 				addr.Destroy()
@@ -345,10 +350,17 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 			}
 			bundle.Destroy()
 		} else {
+			// Session exists, get registration ID from the session record.
+			regID, err := session.RemoteRegistrationID()
 			session.Destroy()
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("send: get registration id for device %d: %w", deviceID, err)
+			}
+			registrationID = int(regID)
 		}
 
-		ciphertext, err := libsignal.Encrypt(contentBytes, addr, st, st, now)
+		ciphertext, err := libsignal.Encrypt(paddedContent, addr, st, st, now)
 		addr.Destroy()
 		if err != nil {
 			return fmt.Errorf("send: encrypt for device %d: %w", deviceID, err)

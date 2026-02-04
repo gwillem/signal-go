@@ -27,16 +27,20 @@ Cache known devices per recipient to reduce round-trips and pre-key consumption.
 
 ### Storage Schema
 
-Add a `recipient_devices` table to the SQLite store:
+Add a `recipient_device` table to the SQLite store:
 
 ```sql
-CREATE TABLE recipient_devices (
+CREATE TABLE recipient_device (
     aci TEXT NOT NULL,
     device_id INTEGER NOT NULL,
     last_seen INTEGER NOT NULL,  -- Unix timestamp
     PRIMARY KEY (aci, device_id)
 );
 ```
+
+### Registration ID
+
+The `registration_id` is stored inside the session record by libsignal, not in a separate cache. When sending with an existing session, we call `session.RemoteRegistrationID()` to get the correct value. This matches Signal-Android's behavior (`sessionCipher.getRemoteRegistrationId()`).
 
 ### API
 
@@ -168,8 +172,7 @@ Our implementation in `retryreceipt.go` matches Signal-Android's behavior:
 - **409 missing:** Add to device list
 - **After 409:** Persist complete device list via `SetDevices` (ensures cache consistency even if send is cancelled mid-retry)
 - **Retry:** Up to 5 attempts, no special cycle detection
-
-**Important:** We persist the device list immediately after handling 409, not just on successful send. This ensures that if the user cancels mid-retry (Ctrl+C) or the send fails for other reasons, the cache still contains the complete updated device list including any default device 1 that was never explicitly cached.
+- **Registration ID:** Read from session record via `session.RemoteRegistrationID()` (FFI), matching Signal-Android's approach
 
 ## Implementation Tasks
 

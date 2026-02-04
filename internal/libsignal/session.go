@@ -35,6 +35,17 @@ func (r *SessionRecord) ArchiveCurrentState() error {
 	return wrapError(C.signal_session_record_archive_current_state(mPtr))
 }
 
+// RemoteRegistrationID returns the registration ID of the remote party.
+// This is the ID that was provided during session establishment.
+func (r *SessionRecord) RemoteRegistrationID() (uint32, error) {
+	var out C.uint32_t
+	cPtr := C.SignalConstPointerSessionRecord{raw: r.ptr}
+	if err := wrapError(C.signal_session_record_get_remote_registration_id(&out, cPtr)); err != nil {
+		return 0, err
+	}
+	return uint32(out), nil
+}
+
 // Destroy frees the underlying C resource.
 func (r *SessionRecord) Destroy() {
 	if r.ptr != nil {

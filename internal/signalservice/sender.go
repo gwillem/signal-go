@@ -55,6 +55,29 @@ func envelopeTypeForCiphertext(ciphertextType uint8) proto.Envelope_Type {
 	}
 }
 
+const paddingBlockSize = 80
+
+// padMessage adds Signal transport padding to a message body.
+// Format: [content] [0x80] [0x00...] padded to 80-byte blocks.
+// This matches Signal-Android's PushTransportDetails.getPaddedMessageBody().
+func padMessage(messageBody []byte) []byte {
+	// Calculate padded length. The +1 -1 accounts for the cipher's own padding.
+	paddedLen := getPaddedMessageLength(len(messageBody)+1) - 1
+	padded := make([]byte, paddedLen)
+	copy(padded, messageBody)
+	padded[len(messageBody)] = 0x80
+	return padded
+}
+
+func getPaddedMessageLength(messageLength int) int {
+	messageLengthWithTerminator := messageLength + 1
+	messagePartCount := messageLengthWithTerminator / paddingBlockSize
+	if messageLengthWithTerminator%paddingBlockSize != 0 {
+		messagePartCount++
+	}
+	return messagePartCount * paddingBlockSize
+}
+
 // buildPreKeyBundle constructs a libsignal PreKeyBundle from server response data.
 func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.PreKeyBundle, error) {
 	identityKeyBytes, err := base64.RawStdEncoding.DecodeString(identityKeyB64)

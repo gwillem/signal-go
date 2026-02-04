@@ -244,9 +244,10 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Parse the decrypted Content protobuf.
+	// Strip Signal transport padding and parse the decrypted Content protobuf.
+	unpadded := stripPadding(plaintext)
 	var content proto.Content
-	if err := pb.Unmarshal(plaintext, &content); err != nil {
+	if err := pb.Unmarshal(unpadded, &content); err != nil {
 		t.Fatal(err)
 	}
 	if content.GetDataMessage().GetBody() != "Hello Bob!" {
@@ -364,6 +365,7 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	}
 
 	// Mock server — should NOT get a GET /v2/keys request since session exists.
+	// The registration ID is stored inside the session record by ProcessPreKeyBundle.
 	preKeysFetched := false
 	var receivedMsg *OutgoingMessageList
 
@@ -405,6 +407,116 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	if receivedMsg.Messages[0].Type != proto.Envelope_PREKEY_BUNDLE {
 		// First message after ProcessPreKeyBundle is still PreKey type.
 		// This is expected — subsequent messages would be Whisper type.
+	}
+}
+
+// TestSendSessionReuse verifies that after a successful send,
+// subsequent sends reuse the session and don't fetch pre-keys again.
+// The registration ID is stored in the session record itself.
+func TestSendSessionReuse(t *testing.T) {
+	recipPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recipPriv.Destroy()
+	recipPub, err := recipPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recipPub.Destroy()
+	recipPubBytes, err := recipPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enc := base64.RawStdEncoding.EncodeToString
+
+	makePreKeys := func(deviceID int) PreKeyResponse {
+		spk, _ := libsignal.GeneratePrivateKey()
+		defer spk.Destroy()
+		spkPub, _ := spk.PublicKey()
+		defer spkPub.Destroy()
+		spkPubBytes, _ := spkPub.Serialize()
+		spkSig, _ := recipPriv.Sign(spkPubBytes)
+
+		kyberKP, _ := libsignal.GenerateKyberKeyPair()
+		defer kyberKP.Destroy()
+		kyberPub, _ := kyberKP.PublicKey()
+		defer kyberPub.Destroy()
+		kyberPubBytes, _ := kyberPub.Serialize()
+		kyberSig, _ := recipPriv.Sign(kyberPubBytes)
+
+		pk, _ := libsignal.GeneratePrivateKey()
+		defer pk.Destroy()
+		pkPub, _ := pk.PublicKey()
+		defer pkPub.Destroy()
+		pkPubBytes, _ := pkPub.Serialize()
+
+		return PreKeyResponse{
+			IdentityKey: enc(recipPubBytes),
+			Devices: []PreKeyDeviceInfo{{
+				DeviceID: deviceID, RegistrationID: 42,
+				SignedPreKey: &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
+				PreKey:       &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
+				PqPreKey:     &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
+			}},
+		}
+	}
+
+	getPreKeysCount := 0
+	putCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/recip-aci/1":
+			getPreKeysCount++
+			json.NewEncoder(w).Encode(makePreKeys(1))
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/recip-aci":
+			putCount++
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	myPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetIdentity(myPriv, 1)
+
+	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
+
+	// First send: should fetch pre-keys to establish session.
+	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello1", st, auth, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getPreKeysCount != 1 {
+		t.Errorf("first send: expected 1 pre-key fetch, got %d", getPreKeysCount)
+	}
+	if putCount != 1 {
+		t.Errorf("first send: expected 1 PUT, got %d", putCount)
+	}
+
+	// Second send: should NOT fetch pre-keys (session exists with registration ID).
+	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello2", st, auth, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getPreKeysCount != 1 {
+		t.Errorf("second send: expected 1 pre-key fetch total (no new fetch), got %d", getPreKeysCount)
+	}
+	if putCount != 2 {
+		t.Errorf("second send: expected 2 PUTs total, got %d", putCount)
 	}
 }
 
