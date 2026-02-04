@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/gwillem/signal-go/internal/libsignal"
 )
 
 // HTTPClient communicates with the Signal server REST API.
@@ -556,4 +558,139 @@ func (c *HTTPClient) RegisterPrimaryDevice(ctx context.Context, req *PrimaryRegi
 	}
 
 	return &result, nil
+}
+
+// SetProfile updates the user's profile on the Signal server.
+// PUT /v1/profile
+func (c *HTTPClient) SetProfile(ctx context.Context, aci string, profileKey []byte, name string, auth BasicAuth) error {
+	cipher, err := NewProfileCipher(profileKey)
+	if err != nil {
+		return fmt.Errorf("httpclient: create profile cipher: %w", err)
+	}
+
+	// Encrypt profile fields
+	encryptedName, err := cipher.EncryptString(name, GetTargetNameLength(name))
+	if err != nil {
+		return fmt.Errorf("httpclient: encrypt name: %w", err)
+	}
+
+	encryptedAbout, err := cipher.EncryptString("", GetTargetAboutLength(""))
+	if err != nil {
+		return fmt.Errorf("httpclient: encrypt about: %w", err)
+	}
+
+	encryptedEmoji, err := cipher.EncryptString("", 32) // EMOJI_PADDED_LENGTH
+	if err != nil {
+		return fmt.Errorf("httpclient: encrypt emoji: %w", err)
+	}
+
+	encryptedPhoneSharing, err := cipher.EncryptBoolean(false)
+	if err != nil {
+		return fmt.Errorf("httpclient: encrypt phone sharing: %w", err)
+	}
+
+	// Get profile key version and commitment from libsignal
+	version, err := getProfileKeyVersion(profileKey, aci)
+	if err != nil {
+		return fmt.Errorf("httpclient: get profile key version: %w", err)
+	}
+
+	commitment, err := getProfileKeyCommitment(profileKey, aci)
+	if err != nil {
+		return fmt.Errorf("httpclient: get profile key commitment: %w", err)
+	}
+
+	profileWrite := &ProfileWrite{
+		Version:            version,
+		Name:               encryptedName,
+		About:              encryptedAbout,
+		AboutEmoji:         encryptedEmoji,
+		PhoneNumberSharing: encryptedPhoneSharing,
+		Avatar:             false,
+		SameAvatar:         true,
+		Commitment:         commitment,
+		BadgeIDs:           []string{},
+	}
+
+	body, err := json.Marshal(profileWrite)
+	if err != nil {
+		return fmt.Errorf("httpclient: marshal profile: %w", err)
+	}
+
+	logf(c.logger, "setting profile: version=%s name=%q", version, name)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/profile", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("httpclient: new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("httpclient: set profile: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("httpclient: set profile: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	logf(c.logger, "profile set successfully")
+	return nil
+}
+
+// getProfileKeyVersion wraps libsignal's profile key version derivation.
+func getProfileKeyVersion(profileKey []byte, aci string) (string, error) {
+	return libsignal.ProfileKeyGetVersion(profileKey, aci)
+}
+
+// getProfileKeyCommitment wraps libsignal's profile key commitment derivation.
+func getProfileKeyCommitment(profileKey []byte, aci string) ([]byte, error) {
+	return libsignal.ProfileKeyGetCommitment(profileKey, aci)
+}
+
+// GetProfile fetches a user's profile from the server.
+// GET /v1/profile/{aci}/{version}
+func (c *HTTPClient) GetProfile(ctx context.Context, aci string, profileKey []byte, auth BasicAuth) (*ProfileResponse, error) {
+	version, err := getProfileKeyVersion(profileKey, aci)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: get profile key version: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/v1/profile/%s/%s", c.baseURL, aci, version)
+	logf(c.logger, "fetching profile: aci=%s version=%s", aci, version)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: new request: %w", err)
+	}
+	req.SetBasicAuth(auth.Username, auth.Password)
+
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: get profile: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get profile: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var profile ProfileResponse
+	if err := json.Unmarshal(respBody, &profile); err != nil {
+		return nil, fmt.Errorf("httpclient: unmarshal profile: %w", err)
+	}
+
+	return &profile, nil
 }

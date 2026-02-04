@@ -172,3 +172,27 @@ type PrimaryRegistrationResponse struct {
 	Number         string `json:"number"`
 	StorageCapable bool   `json:"storageCapable"`
 }
+
+// ProfileWrite is the JSON body for PUT /v1/profile.
+type ProfileWrite struct {
+	Version            string   `json:"version"`            // hex-encoded profile key version
+	Name               []byte   `json:"name"`               // encrypted name
+	About              []byte   `json:"about"`              // encrypted about text
+	AboutEmoji         []byte   `json:"aboutEmoji"`         // encrypted emoji
+	PhoneNumberSharing []byte   `json:"phoneNumberSharing"` // encrypted boolean
+	Avatar             bool     `json:"avatar"`             // whether to set avatar
+	SameAvatar         bool     `json:"sameAvatar"`         // keep existing avatar
+	Commitment         []byte   `json:"commitment"`         // profile key commitment
+	BadgeIDs           []string `json:"badgeIds"`           // visible badge IDs
+}
+
+// ProfileResponse is the JSON response from GET /v1/profile/{aci}/{version}.
+type ProfileResponse struct {
+	IdentityKey                   string `json:"identityKey"`
+	Name                          string `json:"name"`                          // base64 encrypted
+	About                         string `json:"about"`                         // base64 encrypted
+	AboutEmoji                    string `json:"aboutEmoji"`                    // base64 encrypted
+	Avatar                        string `json:"avatar"`                        // CDN path
+	UnidentifiedAccess            string `json:"unidentifiedAccess"`            // base64
+	UnrestrictedUnidentifiedAccess bool  `json:"unrestrictedUnidentifiedAccess"`
+}

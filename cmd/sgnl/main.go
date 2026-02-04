@@ -32,6 +32,7 @@ type globalOpts struct {
 	VerifyIdentity verifyIdentityCommand `command:"verify-identity" description:"Compare local identity key with server (debug sealed sender)"`
 	CheckAllKeys   checkAllKeysCommand   `command:"check-all-keys" description:"Check identity key for all devices on server"`
 	SelfTest       selftestCommand       `command:"selftest" description:"Send message to self and verify receipt (debug)"`
+	Profile        profileCommand        `command:"profile" description:"Show or set profile information"`
 }
 
 var opts globalOpts

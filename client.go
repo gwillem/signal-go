@@ -181,7 +181,7 @@ func (c *Client) Register(
 	}
 	c.store.SetIdentity(aciPriv, uint32(reg.RegistrationID))
 
-	// Save account with locally generated identity keys.
+	// Save account with locally generated identity keys and profile key.
 	acct := &store.Account{
 		Number:                number,
 		ACI:                   reg.ACI,
@@ -194,6 +194,7 @@ func (c *Client) Register(
 		ACIIdentityKeyPublic:  reg.ACIIdentityKeyPublic,
 		PNIIdentityKeyPrivate: reg.PNIIdentityKeyPrivate,
 		PNIIdentityKeyPublic:  reg.PNIIdentityKeyPublic,
+		ProfileKey:            signalservice.GenerateProfileKey(),
 	}
 	return c.store.SaveAccount(acct)
 }
@@ -629,6 +630,146 @@ func (c *Client) saveAccount() error {
 	}
 
 	return c.store.SaveAccount(acct)
+}
+
+// ProfileInfo contains basic profile information for display.
+type ProfileInfo struct {
+	Number     string
+	ACI        string
+	PNI        string
+	DeviceID   int
+	ProfileKey []byte
+}
+
+// ServerProfile contains decrypted profile data from the server.
+type ServerProfile struct {
+	Name       string
+	About      string
+	AboutEmoji string
+	Avatar     string // CDN path, empty if no avatar
+}
+
+// ProfileInfo returns the current account's profile information.
+func (c *Client) ProfileInfo() (*ProfileInfo, error) {
+	if c.store == nil {
+		return nil, fmt.Errorf("client not loaded")
+	}
+
+	acct, err := c.store.LoadAccount()
+	if err != nil {
+		return nil, fmt.Errorf("load account: %w", err)
+	}
+	if acct == nil {
+		return nil, fmt.Errorf("no account found")
+	}
+
+	return &ProfileInfo{
+		Number:     acct.Number,
+		ACI:        acct.ACI,
+		PNI:        acct.PNI,
+		DeviceID:   acct.DeviceID,
+		ProfileKey: acct.ProfileKey,
+	}, nil
+}
+
+// GetServerProfile fetches and decrypts the user's profile from the server.
+func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
+	if c.store == nil {
+		return nil, fmt.Errorf("client not loaded")
+	}
+
+	acct, err := c.store.LoadAccount()
+	if err != nil {
+		return nil, fmt.Errorf("load account: %w", err)
+	}
+	if acct == nil {
+		return nil, fmt.Errorf("no account found")
+	}
+	if len(acct.ProfileKey) == 0 {
+		return nil, fmt.Errorf("no profile key available")
+	}
+
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", acct.ACI, acct.DeviceID),
+		Password: acct.Password,
+	}
+
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	resp, err := httpClient.GetProfile(ctx, acct.ACI, acct.ProfileKey, auth)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decrypt profile fields
+	cipher, err := signalservice.NewProfileCipher(acct.ProfileKey)
+	if err != nil {
+		return nil, fmt.Errorf("create profile cipher: %w", err)
+	}
+
+	profile := &ServerProfile{
+		Avatar: resp.Avatar,
+	}
+
+	// Decrypt name (base64 encoded)
+	if resp.Name != "" {
+		nameBytes, err := base64.StdEncoding.DecodeString(resp.Name)
+		if err == nil {
+			profile.Name, _ = cipher.DecryptString(nameBytes)
+		}
+	}
+
+	// Decrypt about
+	if resp.About != "" {
+		aboutBytes, err := base64.StdEncoding.DecodeString(resp.About)
+		if err == nil {
+			profile.About, _ = cipher.DecryptString(aboutBytes)
+		}
+	}
+
+	// Decrypt emoji
+	if resp.AboutEmoji != "" {
+		emojiBytes, err := base64.StdEncoding.DecodeString(resp.AboutEmoji)
+		if err == nil {
+			profile.AboutEmoji, _ = cipher.DecryptString(emojiBytes)
+		}
+	}
+
+	return profile, nil
+}
+
+// SetProfileName sets the profile name on the Signal server.
+// If the account doesn't have a profile key, one is generated and saved.
+func (c *Client) SetProfileName(ctx context.Context, name string) error {
+	if c.store == nil {
+		return fmt.Errorf("client not loaded")
+	}
+
+	acct, err := c.store.LoadAccount()
+	if err != nil {
+		return fmt.Errorf("load account: %w", err)
+	}
+	if acct == nil {
+		return fmt.Errorf("no account found")
+	}
+
+	// Generate profile key if missing (for accounts registered before profile key support).
+	if len(acct.ProfileKey) == 0 {
+		if c.logger != nil {
+			c.logger.Printf("generating new profile key for account")
+		}
+		acct.ProfileKey = signalservice.GenerateProfileKey()
+		if err := c.store.SaveAccount(acct); err != nil {
+			return fmt.Errorf("save account with profile key: %w", err)
+		}
+	}
+
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", acct.ACI, acct.DeviceID),
+		Password: acct.Password,
+	}
+
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	return httpClient.SetProfile(ctx, acct.ACI, acct.ProfileKey, name, auth)
 }
 
 // discoverDB finds the .db file in the default data directory.

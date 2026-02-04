@@ -288,6 +288,13 @@ func generatePassword() string {
 	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
+// GenerateProfileKey generates a random 32-byte profile key.
+func GenerateProfileKey() []byte {
+	buf := make([]byte, 32)
+	rand.Read(buf)
+	return buf
+}
+
 // DeriveUnidentifiedAccessKey derives the sealed-sender access key from a profile key.
 // It uses AES-256-GCM with a zero nonce on a 16-byte zero plaintext, returning the
 // first 16 bytes of ciphertext.
