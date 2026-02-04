@@ -20,13 +20,16 @@ type RegisterRequest struct {
 
 // AccountAttributes describes the account properties for registration.
 type AccountAttributes struct {
-	RegistrationID                int          `json:"registrationId"`
-	PNIRegistrationID             int          `json:"pniRegistrationId"`
-	FetchesMessages               bool         `json:"fetchesMessages"`
-	Name                          string       `json:"name"` // base64 encrypted device name
-	Capabilities                  Capabilities `json:"capabilities"`
-	UnidentifiedAccessKey         string       `json:"unidentifiedAccessKey,omitempty"`         // base64, 16 bytes
-	UnrestrictedUnidentifiedAccess bool        `json:"unrestrictedUnidentifiedAccess,omitempty"` // allow sealed sender from anyone
+	RegistrationID                 int          `json:"registrationId"`
+	PNIRegistrationID              int          `json:"pniRegistrationId"`
+	Voice                          bool         `json:"voice"`
+	Video                          bool         `json:"video"`
+	FetchesMessages                bool         `json:"fetchesMessages"`
+	Name                           string       `json:"name,omitempty"` // base64 encrypted device name
+	Capabilities                   Capabilities `json:"capabilities"`
+	UnidentifiedAccessKey          string       `json:"unidentifiedAccessKey,omitempty"`          // base64, 16 bytes
+	UnrestrictedUnidentifiedAccess bool         `json:"unrestrictedUnidentifiedAccess,omitempty"` // allow sealed sender from anyone
+	DiscoverableByPhoneNumber      *bool        `json:"discoverableByPhoneNumber,omitempty"`      // allow finding via CDSI
 }
 
 // Capabilities declares supported features.

@@ -11,7 +11,8 @@ import (
 )
 
 type profileCommand struct {
-	Name string `long:"name" description:"Set profile name"`
+	Name          string       `long:"name" description:"Set profile name"`
+	NumberSharing optionalBool `long:"number-sharing" description:"Enable/disable phone number sharing in profile {true,false}"`
 }
 
 func (cmd *profileCommand) Execute(args []string) error {
@@ -25,12 +26,18 @@ func (cmd *profileCommand) Execute(args []string) error {
 	}
 	defer c.Close()
 
-	// If --name is provided, set the profile
-	if cmd.Name != "" {
-		if err := c.SetProfileName(ctx, cmd.Name); err != nil {
+	// If any options are provided, update profile
+	if cmd.Name != "" || cmd.NumberSharing.value != nil {
+		if err := c.SetProfile(ctx, cmd.Name, cmd.NumberSharing.value); err != nil {
 			return fmt.Errorf("set profile: %w", err)
 		}
-		fmt.Printf("Profile name set to %q\n", cmd.Name)
+		fmt.Println("Profile updated:")
+		if cmd.Name != "" {
+			fmt.Printf("  name: %q\n", cmd.Name)
+		}
+		if cmd.NumberSharing.value != nil {
+			fmt.Printf("  number-sharing: %v\n", *cmd.NumberSharing.value)
+		}
 		return nil
 	}
 

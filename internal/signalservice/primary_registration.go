@@ -202,12 +202,16 @@ func RegisterPrimary(
 	}
 
 	logf(logger, "registering account")
+	discoverable := true
 	regReq := &PrimaryRegistrationRequest{
 		SessionID: session.ID,
 		AccountAttributes: AccountAttributes{
-			RegistrationID:    registrationID,
-			PNIRegistrationID: pniRegistrationID,
-			FetchesMessages:   true,
+			RegistrationID:            registrationID,
+			PNIRegistrationID:         pniRegistrationID,
+			Voice:                     true,
+			Video:                     true,
+			FetchesMessages:           true,
+			DiscoverableByPhoneNumber: &discoverable,
 			Capabilities: Capabilities{
 				Storage:                  true,
 				VersionedExpirationTimer: true,

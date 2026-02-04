@@ -127,6 +127,8 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 		AccountAttributes: AccountAttributes{
 			RegistrationID:                 registrationID,
 			PNIRegistrationID:              pniRegistrationID,
+			Voice:                          true,
+			Video:                          true,
 			FetchesMessages:                true,
 			Name:                           encodedName,
 			UnidentifiedAccessKey:          uakB64,

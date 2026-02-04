@@ -27,6 +27,7 @@ type globalOpts struct {
 	Send           sendCommand           `command:"send" description:"Send a text message"`
 	Receive        receiveCommand        `command:"receive" description:"Receive and print incoming messages"`
 	Devices        devicesCommand        `command:"devices" description:"List registered devices for this account"`
+	AccountCmd     accountCommand        `command:"account" description:"Show or update account settings"`
 	UpdateAttr     updateAttrCommand     `command:"update-attributes" description:"Update account attributes on server (can fix message delivery)"`
 	SyncContacts   syncContactsCommand   `command:"sync-contacts" description:"Request contact sync from primary device"`
 	VerifyIdentity verifyIdentityCommand `command:"verify-identity" description:"Compare local identity key with server (debug sealed sender)"`

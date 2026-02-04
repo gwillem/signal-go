@@ -486,6 +486,8 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 	attrs := &signalservice.AccountAttributes{
 		RegistrationID:    acct.RegistrationID,
 		PNIRegistrationID: acct.PNIRegistrationID,
+		Voice:             true,
+		Video:             true,
 		FetchesMessages:   true,
 		Capabilities: signalservice.Capabilities{
 			Storage:                  true,
@@ -505,6 +507,84 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 
 	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
 	return httpClient.SetAccountAttributes(ctx, attrs, auth)
+}
+
+// AccountSettings contains configurable account settings.
+type AccountSettings struct {
+	// DiscoverableByPhoneNumber controls whether your number can be found via Contact Discovery.
+	DiscoverableByPhoneNumber *bool
+	// UnrestrictedUnidentifiedAccess allows anyone to send you sealed sender messages.
+	UnrestrictedUnidentifiedAccess *bool
+}
+
+// UpdateAccountSettings updates account attributes and/or profile settings on the server.
+// Only non-nil fields in settings are updated.
+func (c *Client) UpdateAccountSettings(ctx context.Context, settings *AccountSettings) error {
+	if c.store == nil {
+		return fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	acct, err := c.store.LoadAccount()
+	if err != nil {
+		return fmt.Errorf("client: load account: %w", err)
+	}
+	if acct == nil {
+		return fmt.Errorf("client: no account found")
+	}
+
+	// Generate profile key if missing (needed for UnidentifiedAccessKey).
+	if len(acct.ProfileKey) == 0 {
+		if c.logger != nil {
+			c.logger.Printf("generating new profile key for account")
+		}
+		acct.ProfileKey = signalservice.GenerateProfileKey()
+		if err := c.store.SaveAccount(acct); err != nil {
+			return fmt.Errorf("client: save account with profile key: %w", err)
+		}
+	}
+
+	auth := signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+
+	// Update account attributes if any attribute settings are provided.
+	if settings.DiscoverableByPhoneNumber != nil || settings.UnrestrictedUnidentifiedAccess != nil {
+		attrs := &signalservice.AccountAttributes{
+			RegistrationID:    acct.RegistrationID,
+			PNIRegistrationID: acct.PNIRegistrationID,
+			Voice:             true,
+			Video:             true,
+			FetchesMessages:   true,
+			Capabilities: signalservice.Capabilities{
+				Storage:                  true,
+				VersionedExpirationTimer: true,
+				AttachmentBackfill:       true,
+			},
+		}
+
+		// Derive unidentified access key from profile key.
+		if len(acct.ProfileKey) > 0 {
+			uak, err := signalservice.DeriveUnidentifiedAccessKey(acct.ProfileKey)
+			if err != nil {
+				return fmt.Errorf("client: derive access key: %w", err)
+			}
+			attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
+		}
+
+		if settings.DiscoverableByPhoneNumber != nil {
+			attrs.DiscoverableByPhoneNumber = settings.DiscoverableByPhoneNumber
+		}
+		if settings.UnrestrictedUnidentifiedAccess != nil {
+			attrs.UnrestrictedUnidentifiedAccess = *settings.UnrestrictedUnidentifiedAccess
+		}
+
+		if err := httpClient.SetAccountAttributes(ctx, attrs, auth); err != nil {
+			return fmt.Errorf("client: set account attributes: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (c *Client) storePreKeys(reg *signalservice.RegistrationResult) error {
@@ -740,6 +820,13 @@ func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
 // SetProfileName sets the profile name on the Signal server.
 // If the account doesn't have a profile key, one is generated and saved.
 func (c *Client) SetProfileName(ctx context.Context, name string) error {
+	return c.SetProfile(ctx, name, nil)
+}
+
+// SetProfile updates profile settings on the Signal server.
+// If name is empty and numberSharing is nil, this is a no-op.
+// If the account doesn't have a profile key, one is generated and saved.
+func (c *Client) SetProfile(ctx context.Context, name string, numberSharing *bool) error {
 	if c.store == nil {
 		return fmt.Errorf("client not loaded")
 	}
@@ -769,7 +856,31 @@ func (c *Client) SetProfileName(ctx context.Context, name string) error {
 	}
 
 	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
-	return httpClient.SetProfile(ctx, acct.ACI, acct.ProfileKey, name, auth)
+
+	// Build profile options, fetching current name if not provided
+	var profileName *string
+	if name != "" {
+		profileName = &name
+	} else {
+		// Fetch current name to preserve it
+		resp, err := httpClient.GetProfile(ctx, acct.ACI, acct.ProfileKey, auth)
+		if err == nil && resp.Name != "" {
+			cipher, err := signalservice.NewProfileCipher(acct.ProfileKey)
+			if err == nil {
+				nameBytes, err := base64.StdEncoding.DecodeString(resp.Name)
+				if err == nil {
+					currentName, _ := cipher.DecryptString(nameBytes)
+					profileName = &currentName
+				}
+			}
+		}
+	}
+
+	opts := &signalservice.ProfileOptions{
+		Name:               profileName,
+		PhoneNumberSharing: numberSharing,
+	}
+	return httpClient.SetProfileWithOptions(ctx, acct.ACI, acct.ProfileKey, opts, auth)
 }
 
 // discoverDB finds the .db file in the default data directory.

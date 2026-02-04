@@ -560,15 +560,31 @@ func (c *HTTPClient) RegisterPrimaryDevice(ctx context.Context, req *PrimaryRegi
 	return &result, nil
 }
 
+// ProfileOptions configures which profile fields to update.
+type ProfileOptions struct {
+	Name              *string // nil = don't change, non-nil = set to this value
+	PhoneNumberSharing *bool   // nil = don't change, non-nil = set to this value
+}
+
 // SetProfile updates the user's profile on the Signal server.
 // PUT /v1/profile
 func (c *HTTPClient) SetProfile(ctx context.Context, aci string, profileKey []byte, name string, auth BasicAuth) error {
+	return c.SetProfileWithOptions(ctx, aci, profileKey, &ProfileOptions{Name: &name}, auth)
+}
+
+// SetProfileWithOptions updates the user's profile on the Signal server with configurable options.
+// PUT /v1/profile
+func (c *HTTPClient) SetProfileWithOptions(ctx context.Context, aci string, profileKey []byte, opts *ProfileOptions, auth BasicAuth) error {
 	cipher, err := NewProfileCipher(profileKey)
 	if err != nil {
 		return fmt.Errorf("httpclient: create profile cipher: %w", err)
 	}
 
-	// Encrypt profile fields
+	// Encrypt profile fields - use provided values or defaults
+	name := ""
+	if opts != nil && opts.Name != nil {
+		name = *opts.Name
+	}
 	encryptedName, err := cipher.EncryptString(name, GetTargetNameLength(name))
 	if err != nil {
 		return fmt.Errorf("httpclient: encrypt name: %w", err)
@@ -584,7 +600,11 @@ func (c *HTTPClient) SetProfile(ctx context.Context, aci string, profileKey []by
 		return fmt.Errorf("httpclient: encrypt emoji: %w", err)
 	}
 
-	encryptedPhoneSharing, err := cipher.EncryptBoolean(false)
+	phoneSharing := false
+	if opts != nil && opts.PhoneNumberSharing != nil {
+		phoneSharing = *opts.PhoneNumberSharing
+	}
+	encryptedPhoneSharing, err := cipher.EncryptBoolean(phoneSharing)
 	if err != nil {
 		return fmt.Errorf("httpclient: encrypt phone sharing: %w", err)
 	}
