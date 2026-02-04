@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/provisioncrypto"
@@ -630,34 +631,94 @@ func (c *Client) saveAccount() error {
 	return c.store.SaveAccount(acct)
 }
 
-// discoverDB finds the most recently modified .db file in the default data directory.
-// Returns an error if no database files exist.
+// discoverDB finds the .db file in the default data directory.
+// Returns an error if no database files exist or if multiple exist (ambiguous).
 func discoverDB() (string, error) {
+	dbFiles, err := listDBFiles()
+	if err != nil {
+		return "", err
+	}
+
+	if len(dbFiles) == 0 {
+		return "", fmt.Errorf("no account database found in %s (run 'sgnl link' first)", store.DefaultDataDir())
+	}
+	if len(dbFiles) > 1 {
+		// List accounts with phone numbers for better UX
+		var lines []string
+		for _, path := range dbFiles {
+			number := getAccountNumber(path)
+			if number != "" {
+				lines = append(lines, fmt.Sprintf("%s (%s)", number, filepath.Base(path)))
+			} else {
+				lines = append(lines, filepath.Base(path))
+			}
+		}
+		return "", fmt.Errorf("multiple accounts found, specify which one with --account <number> or --db <path>:\n  %s",
+			strings.Join(lines, "\n  "))
+	}
+	return dbFiles[0], nil
+}
+
+// DiscoverDBByNumber finds a database file by phone number.
+// Returns empty string if not found.
+func DiscoverDBByNumber(number string) (string, error) {
+	// Normalize number (ensure + prefix)
+	if !strings.HasPrefix(number, "+") {
+		number = "+" + number
+	}
+
+	dbFiles, err := listDBFiles()
+	if err != nil {
+		return "", err
+	}
+
+	for _, path := range dbFiles {
+		if getAccountNumber(path) == number {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no account found for number %s", number)
+}
+
+// listDBFiles returns all .db files in the default data directory.
+func listDBFiles() ([]string, error) {
 	dir := store.DefaultDataDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", fmt.Errorf("read data dir %s: %w", dir, err)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read data dir %s: %w", dir, err)
 	}
 
-	var bestPath string
-	var bestTime int64
+	var dbFiles []string
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".db" {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
+		// Skip WAL and SHM files
+		name := e.Name()
+		if strings.HasSuffix(name, "-wal") || strings.HasSuffix(name, "-shm") {
 			continue
 		}
-		if t := info.ModTime().UnixNano(); t > bestTime {
-			bestTime = t
-			bestPath = filepath.Join(dir, e.Name())
-		}
+		dbFiles = append(dbFiles, filepath.Join(dir, name))
 	}
-	if bestPath == "" {
-		return "", fmt.Errorf("no account database found in %s (run 'sig link' first)", dir)
+	return dbFiles, nil
+}
+
+// getAccountNumber opens a database and returns the phone number, or empty string on error.
+func getAccountNumber(dbPath string) string {
+	s, err := store.Open(dbPath)
+	if err != nil {
+		return ""
 	}
-	return bestPath, nil
+	defer s.Close()
+
+	acct, err := s.LoadAccount()
+	if err != nil || acct == nil {
+		return ""
+	}
+	return acct.Number
 }
 
 type linkCallbacks struct {

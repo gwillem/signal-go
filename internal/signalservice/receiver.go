@@ -172,6 +172,17 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	case proto.Envelope_UNIDENTIFIED_SENDER:
 		logf(logger, "decrypting sealed sender message (version byte=0x%02x, len=%d)", content[0], len(content))
 
+		// Log identity key fingerprint for debugging sealed sender decryption failures.
+		if identityKey, err := st.GetIdentityKeyPair(); err == nil {
+			if pub, err := identityKey.PublicKey(); err == nil {
+				if data, err := pub.Serialize(); err == nil && len(data) >= 8 {
+					logf(logger, "sealed sender: using identity key fingerprint=%x", data[:8])
+				}
+				pub.Destroy()
+			}
+			identityKey.Destroy()
+		}
+
 		// Step 1: Decrypt outer sealed sender layer → USMC (uses only identity key for ECDH).
 		// If the sender cached our old identity key (e.g. after re-link), this fails.
 		// We can't send a retry receipt here because the sender's identity is encrypted
@@ -386,6 +397,13 @@ func handlePlaintextContent(ctx context.Context, content []byte, senderACI strin
 	ts, _ := dem.Timestamp()
 	devID, _ := dem.DeviceID()
 	logf(rc.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
+
+	// Ignore old retry receipts (older than 1 minute) to break retry loops.
+	ageMs := uint64(time.Now().UnixMilli()) - ts
+	if ageMs > 60*1000 {
+		logf(rc.logger, "ignoring old retry receipt (age=%dms)", ageMs)
+		return nil, nil
+	}
 
 	// Handle the retry receipt: archive session and send null message.
 	if err := HandleRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice, rc.logger); err != nil {

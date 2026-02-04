@@ -164,7 +164,7 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 	const maxAttempts = 5
 	for attempt := range maxAttempts {
 		logf(logger, "send: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
-		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth)
+		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth, logger)
 		if err == nil {
 			// Persist the working device list for future sends.
 			_ = st.SetDevices(recipient, deviceIDs)
@@ -248,7 +248,7 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 	const maxAttempts = 5
 	for attempt := range maxAttempts {
 		logf(logger, "send with devices: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
-		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth)
+		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth, logger)
 		if err == nil {
 			// Persist the working device list for future sends.
 			_ = st.SetDevices(recipient, deviceIDs)
@@ -297,7 +297,7 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 
 // encryptAndSend performs a single encrypt-and-send attempt for the given device IDs.
 func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient string,
-	contentBytes []byte, deviceIDs []int, st *store.Store, auth BasicAuth,
+	contentBytes []byte, deviceIDs []int, st *store.Store, auth BasicAuth, logger *log.Logger,
 ) error {
 	now := time.Now()
 	timestamp := uint64(now.UnixMilli())
@@ -391,6 +391,12 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 		Timestamp:   timestamp,
 		Messages:    messages,
 		Urgent:      true,
+	}
+
+	// Log outgoing message details for debugging.
+	for _, m := range messages {
+		logf(logger, "outgoing: device=%d type=%v regID=%d contentLen=%d paddedLen=%d",
+			m.DestinationDeviceID, m.Type, m.DestinationRegistrationID, len(contentBytes), len(paddedContent))
 	}
 
 	return httpClient.SendMessage(ctx, recipient, msgList, auth)

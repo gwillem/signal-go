@@ -1,8 +1,9 @@
 # signal-go
 
-Go library for [Signal](https://signal.org) messenger, replacing the Java `signal-cli` dependency.
+Go library for [Signal](https://signal.org) messenger:
 
-Uses CGO bindings to the Rust C FFI.
+- CGO bindings to the Rust C FFI
+- Partial service implementation of Signal-Android
 
 > **Status:** Early development. Device linking, message sending, and message receiving work.
 
