@@ -36,6 +36,7 @@ type Message struct {
 	Body         string    // text content
 	SyncTo       string    // recipient ACI if this is a SyncMessage (sent by our other device)
 	SyncToNumber string    // recipient phone number (if known from contacts)
+	SyncToName   string    // recipient display name (if known from contacts)
 }
 
 // receiveMessages connects to the authenticated WebSocket and returns an iterator
@@ -501,7 +502,7 @@ func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts
 	return nil
 }
 
-// populateContactInfo fills SenderNumber/SenderName/SyncToNumber from the contact store.
+// populateContactInfo fills SenderNumber/SenderName/SyncToNumber/SyncToName from the contact store.
 // If a contact has a profile key but no cached name, it fetches the profile from the server.
 func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, service *Service) {
 	logger := service.logger
@@ -519,6 +520,14 @@ func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, ser
 	if msg.SyncTo != "" {
 		if c, _ := st.GetContactByACI(msg.SyncTo); c != nil {
 			msg.SyncToNumber = c.Number
+			msg.SyncToName = c.Name
+			// If we have profile key but no name, try fetching from server
+			if msg.SyncToName == "" && len(c.ProfileKey) == 32 {
+				name := fetchAndCacheProfileName(ctx, msg.SyncTo, c.ProfileKey, st, service, logger)
+				if name != "" {
+					msg.SyncToName = name
+				}
+			}
 		}
 	}
 }
@@ -526,7 +535,7 @@ func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, ser
 // fetchAndCacheProfileName fetches a user's profile from the server, decrypts the name,
 // and caches it in the contact store. Returns the name or empty string on failure.
 func fetchAndCacheProfileName(ctx context.Context, aci string, profileKey []byte, st *store.Store, service *Service, logger *log.Logger) string {
-	logf(logger, "fetching profile for unknown sender %s", aci)
+	logf(logger, "fetching profile for %s", aci)
 
 	// Fetch profile from server
 	profile, err := service.GetProfile(ctx, aci, profileKey)

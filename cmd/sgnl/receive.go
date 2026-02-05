@@ -49,7 +49,7 @@ func (cmd *receiveCommand) Execute(args []string) error {
 		ts := msg.Timestamp.Format("2006-01-02 15:04:05")
 		sender := displayName(msg.SenderName, msg.SenderNumber, msg.Sender)
 		if msg.SyncTo != "" {
-			recipient := displayName("", msg.SyncToNumber, msg.SyncTo)
+			recipient := displayName(msg.SyncToName, msg.SyncToNumber, msg.SyncTo)
 			fmt.Printf("[%s] (you) → %s: %s\n", ts, recipient, msg.Body)
 		} else {
 			fmt.Printf("[%s] %s: %s\n", ts, sender, msg.Body)

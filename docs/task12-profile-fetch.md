@@ -129,4 +129,8 @@ When receiving a message from an unknown sender:
 2. If contact has `ProfileKey` but no `Name` → fetch profile, decrypt name, cache it
 3. If contact has neither → display ACI (fallback)
 
-Profile names are cached, so subsequent messages from the same sender won't trigger additional fetches.
+The same logic applies to **outbound messages** synced from other devices (SyncMessage.Sent):
+- Added `SyncToName` field to Message struct
+- Profile fetching works for recipients too, not just senders
+
+Profile names are cached, so subsequent messages won't trigger additional fetches.
