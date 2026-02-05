@@ -2,10 +2,8 @@ package signalservice
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"math"
 	"time"
 
@@ -15,15 +13,15 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-// SendTextMessage sends a text message to a recipient. It handles session
+// sendTextMessage sends a text message to a recipient. It handles session
 // establishment (fetching pre-keys if needed), encryption, and HTTP delivery.
 // Automatically retries on 410 (stale devices).
 // If debugDir is non-empty, the Content protobuf is dumped before encryption.
-func SendTextMessage(ctx context.Context, apiURL string, recipient string, text string, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger, debugDir string) error {
+func (s *Service) sendTextMessage(ctx context.Context, recipient string, text string) error {
 	timestamp := uint64(time.Now().UnixMilli())
 
 	// Load account to get profile key and PNI for the message.
-	acct, err := st.LoadAccount()
+	acct, err := s.store.LoadAccount()
 	if err != nil {
 		return fmt.Errorf("sender: load account: %w", err)
 	}
@@ -52,12 +50,12 @@ func SendTextMessage(ctx context.Context, apiURL string, recipient string, text 
 
 	// Include PNI signature to help recipients link our ACI and PNI identities.
 	// This is required when the recipient discovered us via phone number (PNI).
-	pniSig, err := createPniSignatureMessage(st, acct, logger)
+	pniSig, err := s.createPniSignatureMessage(acct)
 	if err != nil {
-		logf(logger, "sender: failed to create PNI signature (continuing without): %v", err)
+		logf(s.logger, "sender: failed to create PNI signature (continuing without): %v", err)
 	} else if pniSig != nil {
 		content.PniSignatureMessage = pniSig
-		logf(logger, "sender: including PNI signature in message")
+		logf(s.logger, "sender: including PNI signature in message")
 	}
 
 	contentBytes, err := pb.Marshal(content)
@@ -66,20 +64,20 @@ func SendTextMessage(ctx context.Context, apiURL string, recipient string, text 
 	}
 
 	// Dump Content for debugging comparison with received messages.
-	dumpContent(debugDir, "send", recipient, timestamp, contentBytes, logger)
+	dumpContent(s.debugDir, "send", recipient, timestamp, contentBytes, s.logger)
 
-	return sendEncryptedMessage(ctx, apiURL, recipient, contentBytes, st, auth, tlsConf, logger)
+	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
 }
 
 // createPniSignatureMessage creates a PniSignatureMessage that proves our ACI and PNI
 // identities belong to the same account. The PNI identity key signs the ACI public key.
-func createPniSignatureMessage(st *store.Store, acct *store.Account, logger *log.Logger) (*proto.PniSignatureMessage, error) {
+func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSignatureMessage, error) {
 	if acct == nil || acct.PNI == "" {
 		return nil, nil // No PNI available
 	}
 
 	// Get ACI identity public key.
-	aciPriv, err := st.GetIdentityKeyPair()
+	aciPriv, err := s.store.GetIdentityKeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("get ACI identity: %w", err)
 	}
@@ -90,11 +88,11 @@ func createPniSignatureMessage(st *store.Store, acct *store.Account, logger *log
 	defer aciPub.Destroy()
 
 	// Switch to PNI identity.
-	st.UsePNI(true)
-	defer st.UsePNI(false)
+	s.store.UsePNI(true)
+	defer s.store.UsePNI(false)
 
 	// Get PNI identity key pair.
-	pniPriv, err := st.GetIdentityKeyPair()
+	pniPriv, err := s.store.GetIdentityKeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("get PNI identity: %w", err)
 	}
@@ -275,17 +273,15 @@ func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.
 	)
 }
 
-// SendSealedSenderMessage sends a text message using sealed sender (UNIDENTIFIED_SENDER).
+// sendSealedSenderMessage sends a text message using sealed sender (UNIDENTIFIED_SENDER).
 // This hides the sender's identity from the server. Requires:
 // - Recipient has a profile key stored (for deriving unidentified access key)
 // - Recipient allows unidentified senders
-func SendSealedSenderMessage(ctx context.Context, apiURL string, recipient string, text string,
-	st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
-) error {
+func (s *Service) sendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
 	timestamp := uint64(time.Now().UnixMilli())
 
 	// Build Content protobuf
-	acct, err := st.LoadAccount()
+	acct, err := s.store.LoadAccount()
 	if err != nil {
 		return fmt.Errorf("sealed sender: load account: %w", err)
 	}
@@ -315,10 +311,8 @@ func SendSealedSenderMessage(ctx context.Context, apiURL string, recipient strin
 		return fmt.Errorf("sealed sender: marshal content: %w", err)
 	}
 
-	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
-
 	// Step 1: Get sender certificate from server
-	senderCertBytes, err := httpClient.GetSenderCertificate(ctx, auth)
+	senderCertBytes, err := s.GetSenderCertificate(ctx)
 	if err != nil {
 		return fmt.Errorf("sealed sender: get sender certificate: %w", err)
 	}
@@ -329,11 +323,11 @@ func SendSealedSenderMessage(ctx context.Context, apiURL string, recipient strin
 	}
 	defer senderCert.Destroy()
 
-	logf(logger, "sealed sender: got sender certificate")
+	logf(s.logger, "sealed sender: got sender certificate")
 
 	// Step 2: Get recipient's profile key to derive the access key
 	// Profile keys are learned from received messages (sender includes their profile key).
-	contact, err := st.GetContactByACI(recipient)
+	contact, err := s.store.GetContactByACI(recipient)
 	if err != nil {
 		return fmt.Errorf("sealed sender: get contact: %w", err)
 	}
@@ -347,16 +341,15 @@ func SendSealedSenderMessage(ctx context.Context, apiURL string, recipient strin
 		return fmt.Errorf("sealed sender: derive access key: %w", err)
 	}
 
-	logf(logger, "sealed sender: derived access key from profile key")
+	logf(s.logger, "sealed sender: derived access key from profile key")
 
 	// Step 4: Encrypt and send using sealed sender
-	return sendSealedEncrypted(ctx, httpClient, recipient, contentBytes, senderCert, accessKey, st, logger)
+	return s.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
 }
 
 // sendSealedEncrypted encrypts content with sealed sender and sends it.
-func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient string,
+func (s *Service) sendSealedEncrypted(ctx context.Context, recipient string,
 	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
-	st *store.Store, logger *log.Logger,
 ) error {
 	now := time.Now()
 	timestamp := uint64(now.UnixMilli())
@@ -365,7 +358,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 	paddedContent := padMessage(contentBytes)
 
 	// Get recipient's devices (start with device 1 if unknown)
-	deviceIDs, _ := st.GetDevices(recipient)
+	deviceIDs, _ := s.store.GetDevices(recipient)
 	if len(deviceIDs) == 0 {
 		deviceIDs = []int{1}
 	}
@@ -379,7 +372,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 		}
 
 		// Establish session if needed
-		session, err := st.LoadSession(addr)
+		session, err := s.store.LoadSession(addr)
 		if err != nil {
 			addr.Destroy()
 			return fmt.Errorf("sealed sender: load session: %w", err)
@@ -390,7 +383,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 		if session == nil {
 			// Fetch pre-keys and establish session
 			// For sealed sender, we need the identity key to seal the message
-			preKeyResp, err := httpClient.GetPreKeys(ctx, recipient, deviceID, BasicAuth{})
+			preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
 			if err != nil {
 				addr.Destroy()
 				return fmt.Errorf("sealed sender: get pre-keys: %w", err)
@@ -409,7 +402,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 				return fmt.Errorf("sealed sender: build pre-key bundle: %w", err)
 			}
 
-			if err := libsignal.ProcessPreKeyBundle(bundle, addr, st, st, now); err != nil {
+			if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, s.store, now); err != nil {
 				bundle.Destroy()
 				addr.Destroy()
 				return fmt.Errorf("sealed sender: process pre-key bundle: %w", err)
@@ -426,7 +419,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 		}
 
 		// Encrypt the inner message
-		ciphertext, err := libsignal.Encrypt(paddedContent, addr, st, st, now)
+		ciphertext, err := libsignal.Encrypt(paddedContent, addr, s.store, s.store, now)
 		if err != nil {
 			addr.Destroy()
 			return fmt.Errorf("sealed sender: encrypt: %w", err)
@@ -446,7 +439,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 		}
 
 		// Seal the message (encrypt outer layer with recipient's identity key)
-		sealed, err := libsignal.SealedSenderEncrypt(addr, usmc, st)
+		sealed, err := libsignal.SealedSenderEncrypt(addr, usmc, s.store)
 		usmc.Destroy()
 		addr.Destroy()
 		if err != nil {
@@ -460,7 +453,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 			Content:                   base64.StdEncoding.EncodeToString(sealed),
 		})
 
-		logf(logger, "sealed sender: prepared message for device %d", deviceID)
+		logf(s.logger, "sealed sender: prepared message for device %d", deviceID)
 	}
 
 	// Send via sealed sender endpoint
@@ -471,7 +464,7 @@ func sendSealedEncrypted(ctx context.Context, httpClient *HTTPClient, recipient 
 		Urgent:      true,
 	}
 
-	logf(logger, "sealed sender: sending to %s (%d devices)", recipient, len(messages))
+	logf(s.logger, "sealed sender: sending to %s (%d devices)", recipient, len(messages))
 
-	return httpClient.SendSealedMessage(ctx, recipient, msgList, accessKey)
+	return s.SendSealedMessage(ctx, recipient, msgList, accessKey)
 }

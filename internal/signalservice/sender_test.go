@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +18,25 @@ import (
 	"github.com/gwillem/signal-go/internal/store"
 	pb "google.golang.org/protobuf/proto"
 )
+
+// newSenderTestService creates a Service for sender tests.
+func newSenderTestService(t *testing.T, st *store.Store, apiURL string, auth BasicAuth) *Service {
+	t.Helper()
+	// Parse localACI and localDeviceID from auth.Username (format: "aci.deviceId")
+	parts := strings.SplitN(auth.Username, ".", 2)
+	localACI := parts[0]
+	localDeviceID := 1
+	if len(parts) == 2 {
+		_, _ = fmt.Sscanf(parts[1], "%d", &localDeviceID)
+	}
+	return NewService(ServiceConfig{
+		APIURL:        apiURL,
+		Store:         st,
+		Auth:          auth,
+		LocalACI:      localACI,
+		LocalDeviceID: localDeviceID,
+	})
+}
 
 func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	// Set up Bob (recipient) with keys.
@@ -164,7 +185,8 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
 
 	// Send a message — this should fetch pre-keys, establish session, encrypt, and send.
-	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello Bob!", st, auth, nil, nil, "")
+	svc := newSenderTestService(t, st, srv.URL, auth)
+	err = svc.SendTextMessage(context.Background(), "bob-aci", "Hello Bob!")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,8 +411,9 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	defer srv.Close()
 
 	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
+	svc := newSenderTestService(t, st, srv.URL, auth)
 
-	err = SendTextMessage(context.Background(), srv.URL, "bob-aci", "Hello again!", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "bob-aci", "Hello again!")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,9 +517,10 @@ func TestSendSessionReuse(t *testing.T) {
 	st.SetIdentity(myPriv, 1)
 
 	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
+	svc := newSenderTestService(t, st, srv.URL, auth)
 
 	// First send: should fetch pre-keys to establish session.
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello1", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +532,7 @@ func TestSendSessionReuse(t *testing.T) {
 	}
 
 	// Second send: should NOT fetch pre-keys (session exists with registration ID).
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello2", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,8 +711,9 @@ func TestSendToSelf409ThenRetry(t *testing.T) {
 	st.SetIdentity(myPriv, 1)
 
 	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
+	svc := newSenderTestService(t, st, srv.URL, auth)
 
-	err = SendTextMessage(context.Background(), srv.URL, "my-aci", "sync", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "my-aci", "sync")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,8 +820,9 @@ func TestSend410ThenRetrySucceeds(t *testing.T) {
 	st.SetIdentity(myPriv, 1)
 
 	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
+	svc := newSenderTestService(t, st, srv.URL, auth)
 
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,8 +974,9 @@ func TestSend410OnlyArchivesSessions(t *testing.T) {
 
 	// Device 4 = our device (like the production user).
 	auth := BasicAuth{Username: "self-aci.4", Password: "pass"}
+	svc := newSenderTestService(t, st, srv.URL, auth)
 
-	err = SendTextMessage(context.Background(), srv.URL, "self-aci", "sync", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "self-aci", "sync")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1056,8 +1083,9 @@ func TestSend409PersistsDefaultDevice1(t *testing.T) {
 	}
 
 	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
+	svc := newSenderTestService(t, st, srv.URL, auth)
 
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1203,8 +1231,9 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 	_ = st.SetDevices("recip-aci", []int{1, 2})
 
 	auth := BasicAuth{Username: "my-aci.4", Password: "pass"}
+	svc := newSenderTestService(t, st, srv.URL, auth)
 
-	err = SendTextMessage(context.Background(), srv.URL, "recip-aci", "hello", st, auth, nil, nil, "")
+	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello")
 	if err != nil {
 		t.Fatal(err)
 	}

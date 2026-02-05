@@ -338,20 +338,20 @@ func (s *Service) SetProfile(ctx context.Context, aci string, profileKey []byte,
 
 // SendTextMessage sends a text message to a recipient.
 func (s *Service) SendTextMessage(ctx context.Context, recipient, text string) error {
-	return SendTextMessage(ctx, s.transport.baseURL, recipient, text, s.store, s.auth, s.tlsConfig, s.logger, s.debugDir)
+	return s.sendTextMessage(ctx, recipient, text)
 }
 
 // SendSealedSenderMessage sends a sealed sender message to a recipient.
 func (s *Service) SendSealedSenderMessage(ctx context.Context, recipient, text string) error {
-	return SendSealedSenderMessage(ctx, s.transport.baseURL, recipient, text, s.store, s.auth, s.tlsConfig, s.logger)
+	return s.sendSealedSenderMessage(ctx, recipient, text)
 }
 
 // RequestContactSync sends a contact sync request to the primary device.
 func (s *Service) RequestContactSync(ctx context.Context) error {
-	return RequestContactSync(ctx, s.transport.baseURL, s.store, s.auth, s.localACI, s.tlsConfig, s.logger)
+	return s.requestContactSync(ctx)
 }
 
 // ReceiveMessages returns an iterator that yields incoming messages.
 func (s *Service) ReceiveMessages(ctx context.Context) iter.Seq2[Message, error] {
-	return ReceiveMessages(ctx, s.wsURL, s.transport.baseURL, s.store, s.auth, s.localACI, uint32(s.localDeviceID), s.tlsConfig, s.logger, s.debugDir)
+	return s.receiveMessages(ctx)
 }

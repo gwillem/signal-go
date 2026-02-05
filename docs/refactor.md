@@ -19,6 +19,17 @@ Every HTTP method repeats: create request, set headers, set auth, do request, re
 func (c *HTTPClient) doRequest(ctx context.Context, method, url string, body []byte, auth *BasicAuth) ([]byte, int, error)
 ```
 
+#### 1.7 Sender/Retry Functions with Bloated Signatures ✅ FIXED
+~~`sender.go` and `retryreceipt.go` had bloated function signatures (8-11 params) and created new HTTPClient per call instead of reusing existing transport.~~
+
+**Fixed:** Converted standalone functions to Service methods:
+- `SendTextMessage(ctx, apiURL, recipient, text, st, auth, tlsConf, logger, debugDir)` → `(s *Service) sendTextMessage(ctx, recipient, text)`
+- `SendSealedSenderMessage(...)` → `(s *Service) sendSealedSenderMessage(...)`
+- `sendEncryptedMessage(...)` → `(s *Service) sendEncryptedMessage(ctx, recipient, contentBytes)`
+- All retry receipt functions now use Service methods
+- `receiverContext` updated to hold `*Service` instead of individual fields
+- `NewHTTPClient` now only used in registration flows (one-time operations)
+
 ### Medium Priority
 
 #### 1.3 BasicAuth Creation (client.go - 12 occurrences) ✅ FIXED
@@ -36,10 +47,10 @@ func (c *HTTPClient) doRequest(ctx context.Context, method, url string, body []b
 
 **Suggestion:** Generic store method with table name parameter.
 
-#### 1.6 Profile Field Decryption (client.go:968-990)
-Repeated base64 decode + cipher decrypt for Name, About, Emoji fields.
+#### 1.6 Profile Field Decryption (client.go:968-990) ✅ FIXED
+~~Repeated base64 decode + cipher decrypt for Name, About, Emoji fields.~~
 
-**Suggestion:** Extract `decryptProfileField(encoded string, cipher *ProfileCipher) string`
+**Fixed:** Extracted `decryptProfileField(encoded string, cipher *ProfileCipher) string` helper.
 
 ---
 

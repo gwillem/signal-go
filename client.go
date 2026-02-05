@@ -870,34 +870,27 @@ func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
 	}
 
 	profile := &ServerProfile{
-		Avatar: resp.Avatar,
-	}
-
-	// Decrypt name (base64 encoded)
-	if resp.Name != "" {
-		nameBytes, err := base64.StdEncoding.DecodeString(resp.Name)
-		if err == nil {
-			profile.Name, _ = cipher.DecryptString(nameBytes)
-		}
-	}
-
-	// Decrypt about
-	if resp.About != "" {
-		aboutBytes, err := base64.StdEncoding.DecodeString(resp.About)
-		if err == nil {
-			profile.About, _ = cipher.DecryptString(aboutBytes)
-		}
-	}
-
-	// Decrypt emoji
-	if resp.AboutEmoji != "" {
-		emojiBytes, err := base64.StdEncoding.DecodeString(resp.AboutEmoji)
-		if err == nil {
-			profile.AboutEmoji, _ = cipher.DecryptString(emojiBytes)
-		}
+		Avatar:     resp.Avatar,
+		Name:       decryptProfileField(resp.Name, cipher),
+		About:      decryptProfileField(resp.About, cipher),
+		AboutEmoji: decryptProfileField(resp.AboutEmoji, cipher),
 	}
 
 	return profile, nil
+}
+
+// decryptProfileField decodes base64 and decrypts a profile field.
+// Returns empty string on any error (decode or decrypt).
+func decryptProfileField(encoded string, cipher *signalservice.ProfileCipher) string {
+	if encoded == "" {
+		return ""
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return ""
+	}
+	decrypted, _ := cipher.DecryptString(data)
+	return decrypted
 }
 
 // SetProfileName sets the profile name on the Signal server.
@@ -941,11 +934,10 @@ func (c *Client) SetProfile(ctx context.Context, name string, numberSharing *boo
 		// Fetch current name to preserve it
 		resp, err := c.service.GetProfile(ctx, acct.ACI, acct.ProfileKey)
 		if err == nil && resp.Name != "" {
-			cipher, err := signalservice.NewProfileCipher(acct.ProfileKey)
-			if err == nil {
-				nameBytes, err := base64.StdEncoding.DecodeString(resp.Name)
-				if err == nil {
-					currentName, _ := cipher.DecryptString(nameBytes)
+			cipher, _ := signalservice.NewProfileCipher(acct.ProfileKey)
+			if cipher != nil {
+				currentName := decryptProfileField(resp.Name, cipher)
+				if currentName != "" {
 					profileName = &currentName
 				}
 			}

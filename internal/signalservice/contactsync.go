@@ -2,13 +2,10 @@ package signalservice
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"fmt"
-	"log"
 
 	"github.com/gwillem/signal-go/internal/proto"
-	"github.com/gwillem/signal-go/internal/store"
 	pb "google.golang.org/protobuf/proto"
 )
 
@@ -52,9 +49,9 @@ func ParseContactStream(data []byte) ([]*proto.ContactDetails, error) {
 	return contacts, nil
 }
 
-// RequestContactSync sends a SyncMessage.Request{Type:CONTACTS} to our own
+// requestContactSync sends a SyncMessage.Request{Type:CONTACTS} to our own
 // primary device (device 1) to trigger a contact sync response.
-func RequestContactSync(ctx context.Context, apiURL string, st *store.Store, auth BasicAuth, localACI string, tlsConf *tls.Config, logger *log.Logger) error {
+func (s *Service) requestContactSync(ctx context.Context) error {
 	reqType := proto.SyncMessage_Request_CONTACTS
 	content := &proto.Content{
 		SyncMessage: &proto.SyncMessage{
@@ -69,6 +66,6 @@ func RequestContactSync(ctx context.Context, apiURL string, st *store.Store, aut
 		return fmt.Errorf("contactsync: marshal content: %w", err)
 	}
 
-	logf(logger, "requesting contact sync from primary device")
-	return sendEncryptedMessage(ctx, apiURL, localACI, contentBytes, st, auth, tlsConf, logger)
+	logf(s.logger, "requesting contact sync from primary device")
+	return s.sendEncryptedMessage(ctx, s.localACI, contentBytes)
 }

@@ -153,7 +153,14 @@ func TestSendRetryReceipt(t *testing.T) {
 	auth := BasicAuth{Username: "me.1", Password: "pass"}
 	var timestamp uint64 = 1700000000000
 
-	err = SendRetryReceipt(context.Background(), srv.URL, st, auth, nil, "sender-aci", 1, ctBytes, msgType, timestamp, nil)
+	svc := NewService(ServiceConfig{
+		APIURL:        srv.URL,
+		Store:         st,
+		Auth:          auth,
+		LocalACI:      "me",
+		LocalDeviceID: 1,
+	})
+	err = svc.sendRetryReceipt(context.Background(), "sender-aci", 1, ctBytes, msgType, timestamp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,8 +347,15 @@ func TestHandleRetryReceipt(t *testing.T) {
 	defer srv.Close()
 
 	auth := BasicAuth{Username: "me.1", Password: "pass"}
+	svc := NewService(ServiceConfig{
+		APIURL:        srv.URL,
+		Store:         st,
+		Auth:          auth,
+		LocalACI:      "me",
+		LocalDeviceID: 1,
+	})
 
-	err = HandleRetryReceipt(context.Background(), srv.URL, st, auth, nil, "requester-aci", 1, nil)
+	err = svc.handleRetryReceipt(context.Background(), "requester-aci", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

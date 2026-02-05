@@ -21,14 +21,9 @@ import (
 
 // receiverContext groups the parameters needed by handleEnvelope.
 type receiverContext struct {
-	store       *store.Store
+	service     *Service
 	localUUID   string
 	localDevice uint32
-	apiURL      string
-	auth        BasicAuth
-	tlsConf     *tls.Config
-	logger      *log.Logger
-	debugDir    string
 }
 
 // Message represents a received Signal message.
@@ -43,19 +38,18 @@ type Message struct {
 	SyncToNumber string    // recipient phone number (if known from contacts)
 }
 
-// ReceiveMessages connects to the authenticated WebSocket and returns an iterator
+// receiveMessages connects to the authenticated WebSocket and returns an iterator
 // that yields received text messages. The iterator stops when the context is
 // cancelled or when the caller breaks out of the range loop.
-// If logger is nil, logging is disabled.
-func ReceiveMessages(ctx context.Context, wsURL string, apiURL string, st *store.Store, auth BasicAuth, localUUID string, localDeviceID uint32, tlsConf *tls.Config, logger *log.Logger, debugDir string) iter.Seq2[Message, error] {
+func (s *Service) receiveMessages(ctx context.Context) iter.Seq2[Message, error] {
 	return func(yield func(Message, error) bool) {
-		wsEndpoint := wsURL + "/v1/websocket/"
-		headers := buildWebSocketHeaders(auth)
-		logf(logger, "connecting to WebSocket url=%s user=%s", wsEndpoint, auth.Username)
-		conn, err := signalws.DialPersistent(ctx, wsEndpoint, tlsConf,
+		wsEndpoint := s.wsURL + "/v1/websocket/"
+		headers := buildWebSocketHeaders(s.auth)
+		logf(s.logger, "connecting to WebSocket url=%s user=%s", wsEndpoint, s.auth.Username)
+		conn, err := signalws.DialPersistent(ctx, wsEndpoint, s.tlsConfig,
 			signalws.WithHeaders(headers),
 			signalws.WithKeepAliveCallback(func(rtt time.Duration) {
-				logf(logger, "keep-alive OK rtt=%s", rtt)
+				logf(s.logger, "keep-alive OK rtt=%s", rtt)
 			}),
 		)
 		if err != nil {
@@ -63,34 +57,34 @@ func ReceiveMessages(ctx context.Context, wsURL string, apiURL string, st *store
 			return
 		}
 		defer conn.Close()
-		logf(logger, "connected, waiting for messages")
+		logf(s.logger, "connected, waiting for messages")
 
 		for {
 			wsMsg, err := conn.ReadMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
-					logf(logger, "context cancelled, stopping")
+					logf(s.logger, "context cancelled, stopping")
 					return
 				}
-				logf(logger, "read error: %v", err)
+				logf(s.logger, "read error: %v", err)
 				if !yield(Message{}, fmt.Errorf("receiver: read: %w", err)) {
 					return
 				}
 				continue
 			}
 
-			logf(logger, "ws message type=%v", wsMsg.GetType())
+			logf(s.logger, "ws message type=%v", wsMsg.GetType())
 
 			// Only process REQUEST messages.
 			if wsMsg.GetType() != proto.WebSocketMessage_REQUEST {
 				if wsMsg.GetType() == proto.WebSocketMessage_RESPONSE {
 					resp := wsMsg.GetResponse()
-					logf(logger, "ws response id=%d status=%d message=%s", resp.GetId(), resp.GetStatus(), resp.GetMessage())
+					logf(s.logger, "ws response id=%d status=%d message=%s", resp.GetId(), resp.GetStatus(), resp.GetMessage())
 				}
 				continue
 			}
 			req := wsMsg.GetRequest()
-			logf(logger, "ws request verb=%s path=%s id=%d bodyLen=%d", req.GetVerb(), req.GetPath(), req.GetId(), len(req.GetBody()))
+			logf(s.logger, "ws request verb=%s path=%s id=%d bodyLen=%d", req.GetVerb(), req.GetPath(), req.GetId(), len(req.GetBody()))
 
 			if req.GetVerb() != "PUT" || req.GetPath() != "/api/v1/message" {
 				// ACK non-message requests.
@@ -101,8 +95,9 @@ func ReceiveMessages(ctx context.Context, wsURL string, apiURL string, st *store
 			}
 
 			rc := &receiverContext{
-				store: st, localUUID: localUUID, localDevice: localDeviceID,
-				apiURL: apiURL, auth: auth, tlsConf: tlsConf, logger: logger, debugDir: debugDir,
+				service:     s,
+				localUUID:   s.localACI,
+				localDevice: uint32(s.localDeviceID),
 			}
 			msg, err := handleEnvelope(ctx, req.GetBody(), rc)
 			if err != nil {
@@ -132,15 +127,15 @@ func ReceiveMessages(ctx context.Context, wsURL string, apiURL string, st *store
 // handleEnvelope parses an Envelope protobuf and decrypts the content.
 // Returns nil, nil for envelopes that don't contain a text message (e.g. delivery receipts).
 func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Message, error) {
-	st := rc.store
-	logger := rc.logger
+	st := rc.service.store
+	logger := rc.service.logger
 
 	var env proto.Envelope
 	if err := pb.Unmarshal(data, &env); err != nil {
 		return nil, fmt.Errorf("unmarshal envelope: %w", err)
 	}
 
-	dumpEnvelope(rc.debugDir, data, &env, logger)
+	dumpEnvelope(rc.service.debugDir, data, &env, logger)
 
 	envType := env.GetType()
 	logf(logger, "envelope type=%v sender=%s device=%d timestamp=%d contentLen=%d destination=%s",
@@ -338,7 +333,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	plaintext = stripPadding(plaintext)
 
 	// Dump received Content for debugging comparison with sent messages.
-	dumpContent(rc.debugDir, "recv", senderACI, env.GetTimestamp(), plaintext, logger)
+	dumpContent(rc.service.debugDir, "recv", senderACI, env.GetTimestamp(), plaintext, logger)
 
 	// Parse decrypted Content protobuf.
 	var contentProto proto.Content
@@ -398,7 +393,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 		// SyncMessage.Contacts: contact sync from primary device.
 		if contacts := sm.GetContacts(); contacts != nil {
-			if err := handleContactSync(ctx, contacts, st, rc.tlsConf, logger); err != nil {
+			if err := handleContactSync(ctx, contacts, st, rc.service.tlsConfig, logger); err != nil {
 				logf(logger, "contact sync error: %v", err)
 			}
 			return nil, nil
@@ -412,7 +407,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 // handlePlaintextContent processes a PLAINTEXT_CONTENT envelope, which contains
 // a DecryptionErrorMessage (retry receipt) from a peer who couldn't decrypt our message.
 func handlePlaintextContent(ctx context.Context, content []byte, senderACI string, senderDevice uint32, rc *receiverContext) (*Message, error) {
-	logf(rc.logger, "handling PLAINTEXT_CONTENT from=%s device=%d", senderACI, senderDevice)
+	logf(rc.service.logger, "handling PLAINTEXT_CONTENT from=%s device=%d", senderACI, senderDevice)
 
 	// Deserialize PlaintextContent to extract the body.
 	pc, err := libsignal.DeserializePlaintextContent(content)
@@ -435,18 +430,18 @@ func handlePlaintextContent(ctx context.Context, content []byte, senderACI strin
 
 	ts, _ := dem.Timestamp()
 	devID, _ := dem.DeviceID()
-	logf(rc.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
+	logf(rc.service.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
 
 	// Ignore old retry receipts (older than 1 minute) to break retry loops.
 	ageMs := uint64(time.Now().UnixMilli()) - ts
 	if ageMs > 60*1000 {
-		logf(rc.logger, "ignoring old retry receipt (age=%dms)", ageMs)
+		logf(rc.service.logger, "ignoring old retry receipt (age=%dms)", ageMs)
 		return nil, nil
 	}
 
 	// Handle the retry receipt: archive session and send null message.
-	if err := HandleRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice, rc.logger); err != nil {
-		logf(rc.logger, "handle retry receipt error: %v", err)
+	if err := rc.service.handleRetryReceipt(ctx, senderACI, senderDevice); err != nil {
+		logf(rc.service.logger, "handle retry receipt error: %v", err)
 	}
 
 	return nil, nil // Retry receipts are not user-visible.
@@ -455,16 +450,12 @@ func handlePlaintextContent(ctx context.Context, content []byte, senderACI strin
 // sendRetryReceiptAsync sends a retry receipt to the sender in a fire-and-forget
 // goroutine. Errors are logged but don't block message processing.
 func sendRetryReceiptAsync(ctx context.Context, rc *receiverContext, senderACI string, senderDevice uint32, innerContent []byte, msgType uint8, timestamp uint64) {
-	if rc.apiURL == "" {
-		logf(rc.logger, "cannot send retry receipt: no API URL configured")
-		return
-	}
-	logf(rc.logger, "sending retry receipt to=%s device=%d timestamp=%d", senderACI, senderDevice, timestamp)
+	logf(rc.service.logger, "sending retry receipt to=%s device=%d timestamp=%d", senderACI, senderDevice, timestamp)
 	go func() {
-		if err := SendRetryReceipt(ctx, rc.apiURL, rc.store, rc.auth, rc.tlsConf, senderACI, senderDevice, innerContent, msgType, timestamp, rc.logger); err != nil {
-			logf(rc.logger, "retry receipt send error: %v", err)
+		if err := rc.service.sendRetryReceipt(ctx, senderACI, senderDevice, innerContent, msgType, timestamp); err != nil {
+			logf(rc.service.logger, "retry receipt send error: %v", err)
 		} else {
-			logf(rc.logger, "retry receipt sent to=%s device=%d", senderACI, senderDevice)
+			logf(rc.service.logger, "retry receipt sent to=%s device=%d", senderACI, senderDevice)
 		}
 	}()
 }

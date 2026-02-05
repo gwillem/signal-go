@@ -3,29 +3,23 @@ package signalservice
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/proto"
-	"github.com/gwillem/signal-go/internal/store"
 	pb "google.golang.org/protobuf/proto"
 )
 
-// SendRetryReceipt sends a DecryptionErrorMessage back to a sender whose
+// sendRetryReceipt sends a DecryptionErrorMessage back to a sender whose
 // message we could not decrypt. The message is wrapped as PlaintextContent
 // and sent unencrypted (type=PLAINTEXT) so no session is required.
-func SendRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
-	auth BasicAuth, tlsConf *tls.Config,
+func (s *Service) sendRetryReceipt(ctx context.Context,
 	senderACI string, senderDevice uint32,
 	originalContent []byte, originalType uint8, originalTimestamp uint64,
-	logger *log.Logger,
 ) error {
 	dem, err := libsignal.NewDecryptionErrorMessage(originalContent, originalType, originalTimestamp, senderDevice)
 	if err != nil {
@@ -58,20 +52,17 @@ func SendRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 		Urgent: true,
 	}
 
-	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
-	return httpClient.SendMessage(ctx, senderACI, msgList, auth)
+	return s.SendMessage(ctx, senderACI, msgList)
 }
 
-// HandleRetryReceipt processes an incoming retry receipt (DecryptionErrorMessage)
+// handleRetryReceipt processes an incoming retry receipt (DecryptionErrorMessage)
 // from a peer who couldn't decrypt our message. It archives the broken session
 // and sends a null message to establish a fresh session.
-func HandleRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
-	auth BasicAuth, tlsConf *tls.Config,
+func (s *Service) handleRetryReceipt(ctx context.Context,
 	requesterACI string, requesterDevice uint32,
-	logger *log.Logger,
 ) error {
 	// Archive the broken session.
-	if err := st.ArchiveSession(requesterACI, requesterDevice); err != nil {
+	if err := s.store.ArchiveSession(requesterACI, requesterDevice); err != nil {
 		return fmt.Errorf("handle retry: archive session: %w", err)
 	}
 
@@ -81,32 +72,28 @@ func HandleRetryReceipt(ctx context.Context, apiURL string, st *store.Store,
 	if requesterDevice != 1 {
 		initialDevices = append(initialDevices, int(requesterDevice))
 	}
-	return sendNullMessageWithDevices(ctx, apiURL, requesterACI, initialDevices, st, auth, tlsConf, logger)
+	return s.sendNullMessageWithDevices(ctx, requesterACI, initialDevices)
 }
 
-// SendNullMessage sends a NullMessage (with random padding) to the recipient.
+// sendNullMessage sends a NullMessage (with random padding) to the recipient.
 // This forces pre-key bundle fetch and new session establishment if no session
 // exists (e.g. after archival).
-func SendNullMessage(ctx context.Context, apiURL string, recipient string,
-	st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
-) error {
+func (s *Service) sendNullMessage(ctx context.Context, recipient string) error {
 	contentBytes, err := makeNullMessageContent()
 	if err != nil {
 		return err
 	}
-	return sendEncryptedMessage(ctx, apiURL, recipient, contentBytes, st, auth, tlsConf, logger)
+	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
 }
 
 // sendNullMessageWithDevices sends a NullMessage starting with the given device list.
 // Used for retry receipt handling where we know some devices upfront.
-func sendNullMessageWithDevices(ctx context.Context, apiURL string, recipient string, initialDevices []int,
-	st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
-) error {
+func (s *Service) sendNullMessageWithDevices(ctx context.Context, recipient string, initialDevices []int) error {
 	contentBytes, err := makeNullMessageContent()
 	if err != nil {
 		return err
 	}
-	return sendEncryptedMessageWithDevices(ctx, apiURL, recipient, initialDevices, contentBytes, st, auth, tlsConf, logger)
+	return s.sendEncryptedMessageWithDevices(ctx, recipient, initialDevices, contentBytes)
 }
 
 // makeNullMessageContent creates a serialized NullMessage with random padding.
@@ -133,35 +120,22 @@ func makeNullMessageContent() ([]byte, error) {
 //   - 410 (stale devices): deletes stale sessions and retries
 //   - 409 (mismatched devices): adds missing devices and retries
 //
-// The local device ID is extracted from auth.Username ("{aci}.{deviceId}") and
-// excluded from the device list when sending to self (sync messages).
-func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
-	contentBytes []byte, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
-) error {
-	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
-
-	// Parse local ACI and device ID from auth username ("{aci}.{deviceId}").
-	// We only skip localDeviceID when sending to self (sync messages).
-	var localACI string
-	var localDeviceID int
-	if parts := strings.SplitN(auth.Username, ".", 2); len(parts) == 2 {
-		localACI = parts[0]
-		fmt.Sscanf(parts[1], "%d", &localDeviceID)
-	}
-	sendingToSelf := recipient == localACI
-	logf(logger, "send: localDeviceID=%d recipient=%s sendingToSelf=%v", localDeviceID, recipient, sendingToSelf)
+// The local device ID is excluded from the device list when sending to self (sync messages).
+func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, contentBytes []byte) error {
+	sendingToSelf := recipient == s.localACI
+	logf(s.logger, "send: localDeviceID=%d recipient=%s sendingToSelf=%v", s.localDeviceID, recipient, sendingToSelf)
 
 	// Load cached devices, or start with device 1 if not cached.
-	deviceIDs, _ := st.GetDevices(recipient)
+	deviceIDs, _ := s.store.GetDevices(recipient)
 	if len(deviceIDs) == 0 {
 		deviceIDs = []int{1}
 	}
 
 	// When sending to self, filter out our own device from the initial list.
 	if sendingToSelf {
-		deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == localDeviceID })
+		deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == s.localDeviceID })
 		if len(deviceIDs) == 0 {
-			return fmt.Errorf("send: no other devices to send to (you only have device %d)", localDeviceID)
+			return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
 		}
 	}
 
@@ -171,11 +145,11 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 	// 409 missing: add to list (will fetch keys in encryptAndSend)
 	const maxAttempts = 5
 	for attempt := range maxAttempts {
-		logf(logger, "send: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
-		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth, logger)
+		logf(s.logger, "send: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
+		err := s.encryptAndSend(ctx, recipient, contentBytes, deviceIDs)
 		if err == nil {
 			// Persist the working device list for future sends.
-			_ = st.SetDevices(recipient, deviceIDs)
+			_ = s.store.SetDevices(recipient, deviceIDs)
 			return nil
 		}
 		if attempt == maxAttempts-1 {
@@ -189,17 +163,17 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 		case errors.As(err, &staleErr):
 			// 410: sessions are stale. Archive them so retry fetches fresh keys.
 			// Don't remove devices - they're still valid, just need new sessions.
-			logf(logger, "send: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
+			logf(s.logger, "send: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
 			for _, deviceID := range staleErr.StaleDevices {
-				_ = st.ArchiveSession(recipient, uint32(deviceID))
+				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
 			}
 		case errors.As(err, &mismatchErr):
 			// 409: device list mismatch.
-			logf(logger, "send: 409 missing=%v extra=%v devices=%v",
+			logf(s.logger, "send: 409 missing=%v extra=%v devices=%v",
 				mismatchErr.MissingDevices, mismatchErr.ExtraDevices, deviceIDs)
 			// Archive all current sessions (our local state advanced during Encrypt).
 			for _, deviceID := range deviceIDs {
-				_ = st.ArchiveSession(recipient, uint32(deviceID))
+				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
 			}
 			// Remove extra devices (no longer registered).
 			for _, deviceID := range mismatchErr.ExtraDevices {
@@ -207,14 +181,14 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 			}
 			// Add missing devices (newly registered).
 			for _, deviceID := range mismatchErr.MissingDevices {
-				skipOwnDevice := sendingToSelf && deviceID == localDeviceID
+				skipOwnDevice := sendingToSelf && deviceID == s.localDeviceID
 				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
 					deviceIDs = append(deviceIDs, deviceID)
 				}
 			}
 			// Persist the updated device list immediately. This ensures the cache
 			// is consistent even if the send is cancelled mid-retry.
-			_ = st.SetDevices(recipient, deviceIDs)
+			_ = s.store.SetDevices(recipient, deviceIDs)
 		default:
 			return err
 		}
@@ -225,25 +199,13 @@ func sendEncryptedMessage(ctx context.Context, apiURL string, recipient string,
 // sendEncryptedMessageWithDevices encrypts and sends Content bytes starting with the
 // given initial device list. Like sendEncryptedMessage, it handles the 409/410 retry
 // loop, but starts with a known device list to reduce round trips.
-func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipient string, initialDevices []int,
-	contentBytes []byte, st *store.Store, auth BasicAuth, tlsConf *tls.Config, logger *log.Logger,
-) error {
-	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
-
-	// Parse local ACI and device ID from auth username ("{aci}.{deviceId}").
-	// We only skip localDeviceID when sending to self (sync messages).
-	var localACI string
-	var localDeviceID int
-	if parts := strings.SplitN(auth.Username, ".", 2); len(parts) == 2 {
-		localACI = parts[0]
-		fmt.Sscanf(parts[1], "%d", &localDeviceID)
-	}
-	sendingToSelf := recipient == localACI
+func (s *Service) sendEncryptedMessageWithDevices(ctx context.Context, recipient string, initialDevices []int, contentBytes []byte) error {
+	sendingToSelf := recipient == s.localACI
 
 	// Filter out own device if sending to self.
 	deviceIDs := make([]int, 0, len(initialDevices))
 	for _, d := range initialDevices {
-		if !sendingToSelf || d != localDeviceID {
+		if !sendingToSelf || d != s.localDeviceID {
 			deviceIDs = append(deviceIDs, d)
 		}
 	}
@@ -251,15 +213,15 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 		deviceIDs = []int{1}
 	}
 
-	logf(logger, "send with devices: recipient=%s devices=%v", recipient, deviceIDs)
+	logf(s.logger, "send with devices: recipient=%s devices=%v", recipient, deviceIDs)
 
 	const maxAttempts = 5
 	for attempt := range maxAttempts {
-		logf(logger, "send with devices: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
-		err := encryptAndSend(ctx, httpClient, recipient, contentBytes, deviceIDs, st, auth, logger)
+		logf(s.logger, "send with devices: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
+		err := s.encryptAndSend(ctx, recipient, contentBytes, deviceIDs)
 		if err == nil {
 			// Persist the working device list for future sends.
-			_ = st.SetDevices(recipient, deviceIDs)
+			_ = s.store.SetDevices(recipient, deviceIDs)
 			return nil
 		}
 		if attempt == maxAttempts-1 {
@@ -272,16 +234,16 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 		switch {
 		case errors.As(err, &staleErr):
 			// 410: sessions are stale. Archive them so retry fetches fresh keys.
-			logf(logger, "send with devices: 410 stale=%v", staleErr.StaleDevices)
+			logf(s.logger, "send with devices: 410 stale=%v", staleErr.StaleDevices)
 			for _, deviceID := range staleErr.StaleDevices {
-				_ = st.ArchiveSession(recipient, uint32(deviceID))
+				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
 			}
 		case errors.As(err, &mismatchErr):
 			// 409: device list mismatch.
-			logf(logger, "send with devices: 409 missing=%v extra=%v",
+			logf(s.logger, "send with devices: 409 missing=%v extra=%v",
 				mismatchErr.MissingDevices, mismatchErr.ExtraDevices)
 			for _, deviceID := range deviceIDs {
-				_ = st.ArchiveSession(recipient, uint32(deviceID))
+				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
 			}
 			// Remove extra devices.
 			for _, deviceID := range mismatchErr.ExtraDevices {
@@ -289,13 +251,13 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 			}
 			// Add missing devices.
 			for _, deviceID := range mismatchErr.MissingDevices {
-				skipOwnDevice := sendingToSelf && deviceID == localDeviceID
+				skipOwnDevice := sendingToSelf && deviceID == s.localDeviceID
 				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
 					deviceIDs = append(deviceIDs, deviceID)
 				}
 			}
 			// Persist the updated device list immediately.
-			_ = st.SetDevices(recipient, deviceIDs)
+			_ = s.store.SetDevices(recipient, deviceIDs)
 		default:
 			return err
 		}
@@ -304,9 +266,7 @@ func sendEncryptedMessageWithDevices(ctx context.Context, apiURL string, recipie
 }
 
 // encryptAndSend performs a single encrypt-and-send attempt for the given device IDs.
-func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient string,
-	contentBytes []byte, deviceIDs []int, st *store.Store, auth BasicAuth, logger *log.Logger,
-) error {
+func (s *Service) encryptAndSend(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int) error {
 	now := time.Now()
 	timestamp := uint64(now.UnixMilli())
 
@@ -322,7 +282,7 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 			return fmt.Errorf("send: create address for device %d: %w", deviceID, err)
 		}
 
-		session, err := st.LoadSession(addr)
+		session, err := s.store.LoadSession(addr)
 		if err != nil {
 			addr.Destroy()
 			return fmt.Errorf("send: load session for device %d: %w", deviceID, err)
@@ -332,7 +292,7 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 
 		if session == nil {
 			// No session exists, fetch pre-keys and establish one.
-			preKeyResp, err := httpClient.GetPreKeys(ctx, recipient, deviceID, auth)
+			preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
 			if err != nil {
 				addr.Destroy()
 				return fmt.Errorf("send: get pre-keys for device %d: %w", deviceID, err)
@@ -351,7 +311,7 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 				return fmt.Errorf("send: build pre-key bundle for device %d: %w", deviceID, err)
 			}
 
-			if err := libsignal.ProcessPreKeyBundle(bundle, addr, st, st, now); err != nil {
+			if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, s.store, now); err != nil {
 				bundle.Destroy()
 				addr.Destroy()
 				return fmt.Errorf("send: process pre-key bundle for device %d: %w", deviceID, err)
@@ -368,7 +328,7 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 			registrationID = int(regID)
 		}
 
-		ciphertext, err := libsignal.Encrypt(paddedContent, addr, st, st, now)
+		ciphertext, err := libsignal.Encrypt(paddedContent, addr, s.store, s.store, now)
 		addr.Destroy()
 		if err != nil {
 			return fmt.Errorf("send: encrypt for device %d: %w", deviceID, err)
@@ -403,9 +363,9 @@ func encryptAndSend(ctx context.Context, httpClient *HTTPClient, recipient strin
 
 	// Log outgoing message details for debugging.
 	for _, m := range messages {
-		logf(logger, "outgoing: device=%d type=%v regID=%d contentLen=%d paddedLen=%d",
+		logf(s.logger, "outgoing: device=%d type=%v regID=%d contentLen=%d paddedLen=%d",
 			m.DestinationDeviceID, m.Type, m.DestinationRegistrationID, len(contentBytes), len(paddedContent))
 	}
 
-	return httpClient.SendMessage(ctx, recipient, msgList, auth)
+	return s.SendMessage(ctx, recipient, msgList)
 }

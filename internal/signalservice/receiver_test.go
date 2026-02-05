@@ -257,6 +257,31 @@ func wsServer(t *testing.T, handler func(ws *websocket.Conn, ctx context.Context
 	return srv, done
 }
 
+// newTestService creates a Service for testing with the given store.
+func newTestService(t *testing.T, st *store.Store, apiURL, wsURL string, debugDir string) *Service {
+	t.Helper()
+	return NewService(ServiceConfig{
+		APIURL:        apiURL,
+		WSURL:         wsURL,
+		Store:         st,
+		Auth:          BasicAuth{Username: "bob-aci.2", Password: "password"},
+		LocalACI:      "bob-aci",
+		LocalDeviceID: 2,
+		DebugDir:      debugDir,
+	})
+}
+
+// newReceiverContext creates a receiverContext for testing.
+func newReceiverContext(t *testing.T, st *store.Store, debugDir string) *receiverContext {
+	t.Helper()
+	svc := newTestService(t, st, "", "", debugDir)
+	return &receiverContext{
+		service:     svc,
+		localUUID:   "bob-aci",
+		localDevice: 2,
+	}
+}
+
 func TestHandleEnvelopeDirect(t *testing.T) {
 	bobStore, senderACI, encryptAsAlice := setupAliceAndBob(t)
 	ct, _ := encryptAsAlice("direct test")
@@ -275,7 +300,7 @@ func TestHandleEnvelopeDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2})
+	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +331,7 @@ func TestHandleEnvelopeSkipsDeliveryReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2})
+	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +360,7 @@ func TestDumpEnvelope(t *testing.T) {
 
 	debugDir := t.TempDir()
 
-	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2, debugDir: debugDir})
+	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, debugDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +429,7 @@ func TestDumpEnvelopeNoOpWhenEmpty(t *testing.T) {
 	}
 
 	// Pass empty debugDir — should not create any files.
-	msg, err := handleEnvelope(context.Background(), envBytes, &receiverContext{store: bobStore, localUUID: "bob-aci", localDevice: 2})
+	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,13 +468,13 @@ func TestReceivePreKeyMessage(t *testing.T) {
 	})
 
 	wsURL := "ws" + srv.URL[4:]
-	auth := BasicAuth{Username: "bob-aci.2", Password: "password"}
+	svc := newTestService(t, bobStore, "", wsURL, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range svc.ReceiveMessages(ctx) {
 		if err != nil {
 			continue
 		}
@@ -513,13 +538,13 @@ func TestReceiveCiphertextMessage(t *testing.T) {
 	})
 
 	wsURL := "ws" + srv.URL[4:]
-	auth := BasicAuth{Username: "bob-aci.2", Password: "password"}
+	svc := newTestService(t, bobStore, "", wsURL, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range svc.ReceiveMessages(ctx) {
 		if err != nil {
 			continue
 		}
@@ -562,13 +587,13 @@ func TestReceiveMultipleMessages(t *testing.T) {
 	})
 
 	wsURL := "ws" + srv.URL[4:]
-	auth := BasicAuth{Username: "bob-aci.2", Password: "password"}
+	svc := newTestService(t, bobStore, "", wsURL, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var received []Message
-	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range svc.ReceiveMessages(ctx) {
 		if err != nil {
 			continue
 		}
@@ -631,13 +656,13 @@ func TestReceiveBreakClosesConnection(t *testing.T) {
 	})
 
 	wsURL := "ws" + srv.URL[4:]
-	auth := BasicAuth{Username: "bob-aci.2", Password: "password"}
+	svc := newTestService(t, bobStore, "", wsURL, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	count := 0
-	for msg, err := range ReceiveMessages(ctx, wsURL, "", bobStore, auth, "bob-aci", 2, nil, nil, "") {
+	for msg, err := range svc.ReceiveMessages(ctx) {
 		if err != nil {
 			continue
 		}
