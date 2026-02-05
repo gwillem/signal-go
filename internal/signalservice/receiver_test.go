@@ -2,6 +2,7 @@ package signalservice
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -673,5 +674,186 @@ func TestReceiveBreakClosesConnection(t *testing.T) {
 
 	if count != 1 {
 		t.Errorf("expected 1 message before break, got %d", count)
+	}
+}
+
+func TestPopulateContactInfoFetchesProfile(t *testing.T) {
+	// Create a profile key and encrypt a name with it.
+	profileKey := make([]byte, 32)
+	for i := range profileKey {
+		profileKey[i] = byte(i)
+	}
+
+	cipher, err := NewProfileCipher(profileKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encryptedName, err := cipher.EncryptString("Alice Smith", GetTargetNameLength("Alice Smith"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedNameB64 := base64.StdEncoding.EncodeToString(encryptedName)
+
+	// Mock HTTP server that returns the profile.
+	profileFetched := false
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/profile/") {
+			profileFetched = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			// Return encrypted profile.
+			resp := `{"name":"` + encryptedNameB64 + `","about":"","aboutEmoji":"","avatar":""}`
+			w.Write([]byte(resp))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer apiSrv.Close()
+
+	// Create store with a contact that has profile key but no name.
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// Use a valid UUID format for ACI (libsignal requires valid UUID for profile key version).
+	senderACI := "d7931635-28d9-49f3-b3d6-246245652744"
+	st.SaveContact(&store.Contact{
+		ACI:        senderACI,
+		ProfileKey: profileKey,
+		// Name is empty - should trigger profile fetch.
+	})
+
+	// Create service with mock API server.
+	svc := NewService(ServiceConfig{
+		APIURL:        apiSrv.URL,
+		Store:         st,
+		Auth:          BasicAuth{Username: "test.1", Password: "pass"},
+		LocalACI:      "local-aci",
+		LocalDeviceID: 1,
+	})
+
+	// Call populateContactInfo.
+	msg := &Message{Sender: senderACI}
+	populateContactInfo(context.Background(), msg, st, svc)
+
+	// Verify profile was fetched.
+	if !profileFetched {
+		t.Error("expected profile to be fetched from server")
+	}
+
+	// Verify name was populated.
+	if msg.SenderName != "Alice Smith" {
+		t.Errorf("SenderName: got %q, want %q", msg.SenderName, "Alice Smith")
+	}
+
+	// Verify name was cached in store.
+	contact, err := st.GetContactByACI(senderACI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contact.Name != "Alice Smith" {
+		t.Errorf("cached name: got %q, want %q", contact.Name, "Alice Smith")
+	}
+}
+
+func TestPopulateContactInfoSkipsWhenNameExists(t *testing.T) {
+	// Create store with a contact that already has a name.
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	profileKey := make([]byte, 32)
+	// Use a valid UUID format for ACI.
+	senderACI := "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+	st.SaveContact(&store.Contact{
+		ACI:        senderACI,
+		Name:       "Existing Name",
+		ProfileKey: profileKey,
+	})
+
+	// Mock server that should NOT be called.
+	profileFetched := false
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/profile/") {
+			profileFetched = true
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer apiSrv.Close()
+
+	svc := NewService(ServiceConfig{
+		APIURL:        apiSrv.URL,
+		Store:         st,
+		Auth:          BasicAuth{Username: "test.1", Password: "pass"},
+		LocalACI:      "local-aci",
+		LocalDeviceID: 1,
+	})
+
+	msg := &Message{Sender: senderACI}
+	populateContactInfo(context.Background(), msg, st, svc)
+
+	// Verify profile was NOT fetched (we already have a name).
+	if profileFetched {
+		t.Error("profile should not be fetched when name already exists")
+	}
+
+	// Verify existing name is used.
+	if msg.SenderName != "Existing Name" {
+		t.Errorf("SenderName: got %q, want %q", msg.SenderName, "Existing Name")
+	}
+}
+
+func TestPopulateContactInfoNoProfileKeyNoFetch(t *testing.T) {
+	// Create store with a contact that has no profile key.
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// Use a valid UUID format for ACI.
+	senderACI := "11111111-2222-3333-4444-555555555555"
+	st.SaveContact(&store.Contact{
+		ACI: senderACI,
+		// No ProfileKey, no Name.
+	})
+
+	// Mock server that should NOT be called.
+	profileFetched := false
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/profile/") {
+			profileFetched = true
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer apiSrv.Close()
+
+	svc := NewService(ServiceConfig{
+		APIURL:        apiSrv.URL,
+		Store:         st,
+		Auth:          BasicAuth{Username: "test.1", Password: "pass"},
+		LocalACI:      "local-aci",
+		LocalDeviceID: 1,
+	})
+
+	msg := &Message{Sender: senderACI}
+	populateContactInfo(context.Background(), msg, st, svc)
+
+	// Verify profile was NOT fetched (no profile key available).
+	if profileFetched {
+		t.Error("profile should not be fetched when no profile key available")
+	}
+
+	// SenderName should remain empty.
+	if msg.SenderName != "" {
+		t.Errorf("SenderName: got %q, want empty", msg.SenderName)
 	}
 }

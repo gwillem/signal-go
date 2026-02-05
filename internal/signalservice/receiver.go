@@ -369,7 +369,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 			Timestamp: time.UnixMilli(int64(env.GetTimestamp())),
 			Body:      dm.GetBody(),
 		}
-		populateContactInfo(msg, st)
+		populateContactInfo(ctx, msg, st, rc.service)
 		return msg, nil
 	}
 
@@ -386,7 +386,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 					Body:      dm.GetBody(),
 					SyncTo:    recipient,
 				}
-				populateContactInfo(msg, st)
+				populateContactInfo(ctx, msg, st, rc.service)
 				return msg, nil
 			}
 		}
@@ -502,16 +502,79 @@ func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts
 }
 
 // populateContactInfo fills SenderNumber/SenderName/SyncToNumber from the contact store.
-func populateContactInfo(msg *Message, st *store.Store) {
+// If a contact has a profile key but no cached name, it fetches the profile from the server.
+func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, service *Service) {
+	logger := service.logger
 	if c, _ := st.GetContactByACI(msg.Sender); c != nil {
 		msg.SenderNumber = c.Number
 		msg.SenderName = c.Name
+		// If we have profile key but no name, try fetching from server
+		if msg.SenderName == "" && len(c.ProfileKey) == 32 {
+			name := fetchAndCacheProfileName(ctx, msg.Sender, c.ProfileKey, st, service, logger)
+			if name != "" {
+				msg.SenderName = name
+			}
+		}
 	}
 	if msg.SyncTo != "" {
 		if c, _ := st.GetContactByACI(msg.SyncTo); c != nil {
 			msg.SyncToNumber = c.Number
 		}
 	}
+}
+
+// fetchAndCacheProfileName fetches a user's profile from the server, decrypts the name,
+// and caches it in the contact store. Returns the name or empty string on failure.
+func fetchAndCacheProfileName(ctx context.Context, aci string, profileKey []byte, st *store.Store, service *Service, logger *log.Logger) string {
+	logf(logger, "fetching profile for unknown sender %s", aci)
+
+	// Fetch profile from server
+	profile, err := service.GetProfile(ctx, aci, profileKey)
+	if err != nil {
+		logf(logger, "failed to fetch profile for %s: %v", aci, err)
+		return ""
+	}
+
+	// Decrypt name
+	if profile.Name == "" {
+		logf(logger, "profile for %s has no name field", aci)
+		return ""
+	}
+
+	cipher, err := NewProfileCipher(profileKey)
+	if err != nil {
+		logf(logger, "failed to create profile cipher: %v", err)
+		return ""
+	}
+
+	nameBytes, err := base64.StdEncoding.DecodeString(profile.Name)
+	if err != nil {
+		logf(logger, "failed to decode profile name: %v", err)
+		return ""
+	}
+
+	name, err := cipher.DecryptString(nameBytes)
+	if err != nil {
+		logf(logger, "failed to decrypt profile name: %v", err)
+		return ""
+	}
+
+	if name == "" {
+		return ""
+	}
+
+	logf(logger, "fetched profile name for %s: %q", aci, name)
+
+	// Cache the name in contact store
+	contact, _ := st.GetContactByACI(aci)
+	if contact != nil {
+		contact.Name = name
+		if err := st.SaveContact(contact); err != nil {
+			logf(logger, "failed to cache profile name: %v", err)
+		}
+	}
+
+	return name
 }
 
 // saveContactProfileKey stores or updates a contact's profile key.
