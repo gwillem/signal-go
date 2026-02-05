@@ -72,6 +72,8 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 	var distributionID [16]byte
 	copy(distributionID[:], groupIdentifier[:16])
 
+	logf(s.logger, "group send: distributionID=%x groupIdentifier=%x", distributionID, groupIdentifier)
+
 	// Build GroupContextV2 for the message
 	revision := uint32(group.Revision)
 	groupContext := &proto.GroupContextV2{
@@ -154,6 +156,8 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 		return fmt.Errorf("serialize skdm: %w", err)
 	}
 
+	logf(s.logger, "group send: created SKDM (len=%d) for distributionID=%x", len(skdmBytes), distributionID)
+
 	// Send SKDM to each member via regular encrypted message
 	// In production, we'd track who has received the SKDM and only send to new members
 	for _, recipient := range recipients {
@@ -196,6 +200,15 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 	}
 
 	logf(s.logger, "group send: sent to %d/%d members", succeeded, len(recipients))
+
+	// Step 4: Send sync message to our other devices so they show the sent message
+	if err := s.sendGroupSyncMessage(ctx, dm, timestamp, recipients, senderCert); err != nil {
+		logf(s.logger, "group send: failed to send sync message: %v", err)
+		// Don't fail the whole send - the message was delivered to recipients
+	} else {
+		logf(s.logger, "group send: sent sync message to self")
+	}
+
 	return nil
 }
 
@@ -359,6 +372,77 @@ func updateDeviceList(current []int, missing, extra []int) []int {
 
 // createSenderKeyUSMC creates an UnidentifiedSenderMessageContent for a sender key message.
 // Sender key messages (type 7) need to be wrapped in USMC differently than session messages.
+// sendGroupSyncMessage sends a SyncMessage.Sent to our other devices so they
+// display the outgoing group message in the conversation.
+func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessage, timestamp uint64, recipients []string, senderCert *libsignal.SenderCertificate) error {
+	acct, err := s.store.LoadAccount()
+	if err != nil {
+		return fmt.Errorf("load account: %w", err)
+	}
+
+	// Build UnidentifiedDeliveryStatus for each recipient
+	var statuses []*proto.SyncMessage_Sent_UnidentifiedDeliveryStatus
+	for _, recipient := range recipients {
+		unidentified := true
+		statuses = append(statuses, &proto.SyncMessage_Sent_UnidentifiedDeliveryStatus{
+			DestinationServiceId: &recipient,
+			Unidentified:         &unidentified,
+		})
+	}
+
+	// Build SyncMessage.Sent
+	sent := &proto.SyncMessage_Sent{
+		Timestamp:          &timestamp,
+		Message:            dm,
+		UnidentifiedStatus: statuses,
+	}
+
+	syncMessage := &proto.SyncMessage{
+		Sent: sent,
+	}
+
+	content := &proto.Content{
+		SyncMessage: syncMessage,
+	}
+
+	contentBytes, err := pb.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("marshal sync message: %w", err)
+	}
+
+	// Get our devices and exclude the current one
+	deviceIDs, _ := s.store.GetDevices(acct.ACI)
+	if len(deviceIDs) == 0 {
+		// Default to devices 1 and 2 if we don't have device info
+		deviceIDs = []int{1, 2}
+	}
+
+	// Filter out our own device
+	var otherDevices []int
+	for _, d := range deviceIDs {
+		if d != acct.DeviceID {
+			otherDevices = append(otherDevices, d)
+		}
+	}
+
+	if len(otherDevices) == 0 {
+		logf(s.logger, "sync: no other devices to sync to")
+		return nil
+	}
+
+	// Temporarily set the device list for self to only include other devices
+	s.store.SetDevices(acct.ACI, otherDevices)
+	defer func() {
+		// Restore full device list including our device
+		allDevices := append(otherDevices, acct.DeviceID)
+		s.store.SetDevices(acct.ACI, allDevices)
+	}()
+
+	// For sync messages to self, use regular encrypted messages (not sealed sender)
+	// to avoid access key issues with the server's device list validation
+	return s.sendEncryptedMessage(ctx, acct.ACI, contentBytes)
+}
+
 func createSenderKeyUSMC(senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) (*libsignal.UnidentifiedSenderMessageContent, error) {
 	// Use the type-aware constructor for sender key messages (type 7)
 	return libsignal.NewUnidentifiedSenderMessageContentFromType(

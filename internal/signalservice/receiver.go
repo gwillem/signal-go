@@ -289,6 +289,12 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 				return nil, fmt.Errorf("sealed sender decrypt sender key: %w", err)
 			}
 
+		case libsignal.CiphertextMessageTypePlaintext:
+			// Plaintext messages (type 8) contain unencrypted content.
+			// Used for retry receipts where the content is a DecryptionErrorMessage.
+			logf(logger, "sealed sender: processing plaintext message (retry receipt)")
+			plaintext = innerContent
+
 		default:
 			return nil, fmt.Errorf("sealed sender: unsupported inner message type %d", msgType)
 		}
@@ -353,10 +359,22 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	}
 
 	// Log what's inside the Content.
-	logf(logger, "content hasDataMessage=%v hasSyncMessage=%v hasTypingMessage=%v hasReceiptMessage=%v hasCallMessage=%v hasSKDM=%v",
+	logf(logger, "content hasDataMessage=%v hasSyncMessage=%v hasTypingMessage=%v hasReceiptMessage=%v hasCallMessage=%v hasSKDM=%v hasDecryptionError=%v",
 		contentProto.DataMessage != nil, contentProto.SyncMessage != nil,
 		contentProto.TypingMessage != nil, contentProto.ReceiptMessage != nil,
-		contentProto.CallMessage != nil, len(contentProto.SenderKeyDistributionMessage) > 0)
+		contentProto.CallMessage != nil, len(contentProto.SenderKeyDistributionMessage) > 0,
+		len(contentProto.DecryptionErrorMessage) > 0)
+
+	// Log DecryptionErrorMessage details (retry request from recipient who couldn't decrypt our message).
+	if dem := contentProto.GetDecryptionErrorMessage(); len(dem) > 0 {
+		var errMsg proto.DecryptionErrorMessage
+		if err := pb.Unmarshal(dem, &errMsg); err != nil {
+			logf(logger, "failed to unmarshal DecryptionErrorMessage: %v", err)
+		} else {
+			logf(logger, "RETRY REQUEST: timestamp=%d deviceId=%d ratchetKeyLen=%d",
+				errMsg.GetTimestamp(), errMsg.GetDeviceId(), len(errMsg.GetRatchetKey()))
+		}
+	}
 
 	// Process sender key distribution message if present.
 	// This must happen before we try to decrypt any sender key messages from this sender.

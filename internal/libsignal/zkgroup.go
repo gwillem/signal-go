@@ -119,6 +119,27 @@ func (p GroupSecretParams) DecryptServiceID(ciphertext [65]byte) ([17]byte, erro
 	return out, nil
 }
 
+// DecryptProfileKey decrypts an encrypted profile key from group state.
+// The ciphertext is 65 bytes (SignalPROFILE_KEY_CIPHERTEXT_LEN).
+// The serviceID is the 17-byte decrypted service ID of the member.
+// Returns the 32-byte profile key.
+func (p GroupSecretParams) DecryptProfileKey(ciphertext [65]byte, serviceID [17]byte) ([32]byte, error) {
+	var out [32]C.uchar
+	paramsPtr := (*[289]C.uchar)(unsafe.Pointer(&p[0]))
+	ciphertextPtr := (*[65]C.uchar)(unsafe.Pointer(&ciphertext[0]))
+	serviceIDPtr := (*C.SignalServiceIdFixedWidthBinaryBytes)(unsafe.Pointer(&serviceID[0]))
+
+	if err := wrapError(C.signal_group_secret_params_decrypt_profile_key(&out, paramsPtr, ciphertextPtr, serviceIDPtr)); err != nil {
+		return [32]byte{}, fmt.Errorf("decrypt profile key: %w", err)
+	}
+
+	var key [32]byte
+	for i := range 32 {
+		key[i] = byte(out[i])
+	}
+	return key, nil
+}
+
 // GroupIdentifierFromMasterKey derives a GroupIdentifier directly from a master key.
 // This is a convenience function that combines DeriveGroupSecretParams, GetPublicParams,
 // and GetGroupIdentifier.

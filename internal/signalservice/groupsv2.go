@@ -97,23 +97,50 @@ func (s *Service) FetchGroupDetails(ctx context.Context, group *store.Group) err
 	// Update revision
 	group.Revision = int(groupProto.Version)
 
-	// Decrypt member ACIs
+	// Decrypt member ACIs and profile keys
 	var memberACIs []string
 	for _, member := range groupProto.Members {
-		if len(member.UserId) == 65 { // UUID_CIPHERTEXT_LEN
-			var ciphertext [65]byte
-			copy(ciphertext[:], member.UserId)
-			serviceID, err := secretParams.DecryptServiceID(ciphertext)
+		if len(member.UserId) != 65 { // UUID_CIPHERTEXT_LEN
+			continue
+		}
+
+		var ciphertext [65]byte
+		copy(ciphertext[:], member.UserId)
+		serviceID, err := secretParams.DecryptServiceID(ciphertext)
+		if err != nil {
+			logf(s.logger, "failed to decrypt member service id: %v", err)
+			continue
+		}
+
+		// serviceID is 17 bytes: 1 byte type prefix + 16 byte UUID
+		// Type 0x00 = ACI, 0x01 = PNI
+		if serviceID[0] != 0x00 || len(serviceID) < 17 {
+			continue
+		}
+
+		aci := fmt.Sprintf("%x-%x-%x-%x-%x",
+			serviceID[1:5], serviceID[5:7], serviceID[7:9], serviceID[9:11], serviceID[11:17])
+		memberACIs = append(memberACIs, aci)
+
+		// Decrypt and save profile key if available
+		if len(member.ProfileKey) == 65 { // PROFILE_KEY_CIPHERTEXT_LEN
+			var profileKeyCiphertext [65]byte
+			copy(profileKeyCiphertext[:], member.ProfileKey)
+			profileKey, err := secretParams.DecryptProfileKey(profileKeyCiphertext, serviceID)
 			if err != nil {
-				logf(s.logger, "failed to decrypt member service id: %v", err)
+				logf(s.logger, "failed to decrypt profile key for %s: %v", aci[:8], err)
 				continue
 			}
-			// serviceID is 17 bytes: 1 byte type prefix + 16 byte UUID
-			// Type 0x00 = ACI, 0x01 = PNI
-			if serviceID[0] == 0x00 && len(serviceID) >= 17 {
-				aci := fmt.Sprintf("%x-%x-%x-%x-%x",
-					serviceID[1:5], serviceID[5:7], serviceID[7:9], serviceID[9:11], serviceID[11:17])
-				memberACIs = append(memberACIs, aci)
+
+			// Save profile key to contact (upsert)
+			contact := &store.Contact{
+				ACI:        aci,
+				ProfileKey: profileKey[:],
+			}
+			if err := s.store.SaveContact(contact); err != nil {
+				logf(s.logger, "failed to save profile key for %s: %v", aci[:8], err)
+			} else {
+				logf(s.logger, "saved profile key for group member %s", aci[:8])
 			}
 		}
 	}
