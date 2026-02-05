@@ -20,6 +20,8 @@ extern int bridge_store_signed_pre_key(void *ctx, uint32_t id, SignalMutPointerS
 extern int bridge_load_kyber_pre_key(void *ctx, SignalMutPointerKyberPreKeyRecord *recordp, uint32_t id);
 extern int bridge_store_kyber_pre_key(void *ctx, uint32_t id, SignalMutPointerKyberPreKeyRecord record);
 extern int bridge_mark_kyber_pre_key_used(void *ctx, uint32_t id, uint32_t ec_prekey_id, SignalMutPointerPublicKey base_key);
+extern int bridge_load_sender_key(void *ctx, SignalMutPointerSenderKeyRecord *recordp, SignalMutPointerProtocolAddress sender, SignalUuid distribution_id);
+extern int bridge_store_sender_key(void *ctx, SignalMutPointerProtocolAddress sender, SignalUuid distribution_id, SignalMutPointerSenderKeyRecord record);
 // No-op destroy function - Go handles actual cleanup via deferred cleanup functions.
 extern void bridge_noop_destroy(void *ctx);
 */
@@ -297,6 +299,60 @@ func goMarkKyberPreKeyUsed(ctx unsafe.Pointer, id C.uint32_t, ecPreKeyID C.uint3
 	return 0
 }
 
+// --- Sender Key Store callbacks ---
+
+//export goLoadSenderKey
+func goLoadSenderKey(ctx unsafe.Pointer, recordp *C.SignalMutPointerSenderKeyRecord, sender *C.SignalProtocolAddress, distributionID C.SignalUuid) C.int {
+	store := restorePointer(ctx).(SenderKeyStore)
+	addr := &Address{ptr: sender}
+
+	// Convert SignalUuid to [16]byte
+	var distID [16]byte
+	for i := range 16 {
+		distID[i] = byte(distributionID.bytes[i])
+	}
+
+	rec, err := store.LoadSenderKey(addr, distID)
+	addr.ptr = nil // prevent Destroy of borrowed pointer
+	if err != nil {
+		return -1
+	}
+	if rec != nil {
+		recordp.raw = rec.ptr
+	}
+	return 0
+}
+
+//export goStoreSenderKey
+func goStoreSenderKey(ctx unsafe.Pointer, sender *C.SignalProtocolAddress, distributionID C.SignalUuid, record *C.SignalSenderKeyRecord) C.int {
+	store := restorePointer(ctx).(SenderKeyStore)
+	addr := &Address{ptr: sender}
+
+	// Convert SignalUuid to [16]byte
+	var distID [16]byte
+	for i := range 16 {
+		distID[i] = byte(distributionID.bytes[i])
+	}
+
+	// Clone the sender key record since we're borrowing the C pointer
+	var clonedBuf C.SignalOwnedBuffer
+	if err := wrapError(C.signal_sender_key_record_serialize(&clonedBuf, C.SignalConstPointerSenderKeyRecord{raw: record})); err != nil {
+		return -1
+	}
+	data := freeOwnedBuffer(clonedBuf)
+	rec, err := DeserializeSenderKeyRecord(data)
+	if err != nil {
+		return -1
+	}
+
+	err = store.StoreSenderKey(addr, distID, rec)
+	addr.ptr = nil
+	if err != nil {
+		return -1
+	}
+	return 0
+}
+
 // --- Store wrapper constructors ---
 
 func wrapSessionStore(store SessionStore) (*C.SignalSessionStore, func()) {
@@ -379,6 +435,23 @@ func wrapKyberPreKeyStore(store KyberPreKeyStore) (*C.SignalKyberPreKeyStore, fu
 		store_kyber_pre_key:     C.SignalFfiBridgeKyberPreKeyStoreStoreKyberPreKey(C.bridge_store_kyber_pre_key),
 		mark_kyber_pre_key_used: C.SignalFfiBridgeKyberPreKeyStoreMarkKyberPreKeyUsed(C.bridge_mark_kyber_pre_key_used),
 		destroy:                 C.SignalFfiBridgeKyberPreKeyStoreDestroy(C.bridge_noop_destroy),
+	}
+	// Pin the C struct so GC doesn't move it during Rust callbacks
+	var pinner runtime.Pinner
+	pinner.Pin(cStore)
+	return cStore, func() {
+		pinner.Unpin()
+		deletePointer(ctx)
+	}
+}
+
+func wrapSenderKeyStore(store SenderKeyStore) (*C.SignalSenderKeyStore, func()) {
+	ctx := savePointer(store)
+	cStore := &C.SignalSenderKeyStore{
+		ctx:              ctx,
+		load_sender_key:  C.SignalFfiBridgeSenderKeyStoreLoadSenderKey(C.bridge_load_sender_key),
+		store_sender_key: C.SignalFfiBridgeSenderKeyStoreStoreSenderKey(C.bridge_store_sender_key),
+		destroy:          C.SignalFfiBridgeSenderKeyStoreDestroy(C.bridge_noop_destroy),
 	}
 	// Pin the C struct so GC doesn't move it during Rust callbacks
 	var pinner runtime.Pinner

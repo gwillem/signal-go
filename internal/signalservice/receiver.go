@@ -279,6 +279,14 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 				return nil, fmt.Errorf("sealed sender decrypt whisper: %w", err)
 			}
 
+		case libsignal.CiphertextMessageTypeSenderKey:
+			logf(logger, "sealed sender: decrypting inner sender key message")
+			plaintext, err = libsignal.GroupDecryptMessage(innerContent, addr, st)
+			if err != nil {
+				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+				return nil, fmt.Errorf("sealed sender decrypt sender key: %w", err)
+			}
+
 		default:
 			return nil, fmt.Errorf("sealed sender: unsupported inner message type %d", msgType)
 		}
@@ -343,10 +351,19 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	}
 
 	// Log what's inside the Content.
-	logf(logger, "content hasDataMessage=%v hasSyncMessage=%v hasTypingMessage=%v hasReceiptMessage=%v hasCallMessage=%v",
+	logf(logger, "content hasDataMessage=%v hasSyncMessage=%v hasTypingMessage=%v hasReceiptMessage=%v hasCallMessage=%v hasSKDM=%v",
 		contentProto.DataMessage != nil, contentProto.SyncMessage != nil,
 		contentProto.TypingMessage != nil, contentProto.ReceiptMessage != nil,
-		contentProto.CallMessage != nil)
+		contentProto.CallMessage != nil, len(contentProto.SenderKeyDistributionMessage) > 0)
+
+	// Process sender key distribution message if present.
+	// This must happen before we try to decrypt any sender key messages from this sender.
+	if skdm := contentProto.GetSenderKeyDistributionMessage(); len(skdm) > 0 {
+		if err := processSenderKeyDistribution(senderACI, senderDevice, skdm, st, logger); err != nil {
+			// Log but don't fail - the sender can resend the distribution message
+			logf(logger, "failed to process sender key distribution: %v", err)
+		}
+	}
 
 	// Log DataMessage details for debugging.
 	if dm := contentProto.GetDataMessage(); dm != nil {
@@ -638,4 +655,32 @@ func buildWebSocketHeaders(auth BasicAuth) http.Header {
 	h.Set("X-Signal-Agent", "signal-go")
 	h.Set("X-Signal-Receive-Stories", "false")
 	return h
+}
+
+// processSenderKeyDistribution processes a sender key distribution message,
+// storing the sender key for later use in decrypting group messages.
+func processSenderKeyDistribution(senderACI string, senderDevice uint32, skdmBytes []byte, st *store.Store, logger *log.Logger) error {
+	logf(logger, "processing sender key distribution from=%s device=%d len=%d", senderACI, senderDevice, len(skdmBytes))
+
+	// Deserialize the distribution message
+	skdm, err := libsignal.DeserializeSenderKeyDistributionMessage(skdmBytes)
+	if err != nil {
+		return fmt.Errorf("deserialize SKDM: %w", err)
+	}
+	defer skdm.Destroy()
+
+	// Create the sender address
+	addr, err := libsignal.NewAddress(senderACI, senderDevice)
+	if err != nil {
+		return fmt.Errorf("create address: %w", err)
+	}
+	defer addr.Destroy()
+
+	// Process the distribution message - this stores the sender key in the store
+	if err := libsignal.ProcessSenderKeyDistributionMessage(addr, skdm, st); err != nil {
+		return fmt.Errorf("process SKDM: %w", err)
+	}
+
+	logf(logger, "stored sender key from=%s device=%d", senderACI, senderDevice)
+	return nil
 }

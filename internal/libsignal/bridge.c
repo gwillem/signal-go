@@ -65,3 +65,11 @@ int bridge_store_kyber_pre_key(void *ctx, uint32_t id, SignalMutPointerKyberPreK
 int bridge_mark_kyber_pre_key_used(void *ctx, uint32_t id, uint32_t ec_prekey_id, SignalMutPointerPublicKey base_key) {
     return goMarkKyberPreKeyUsed(ctx, id, ec_prekey_id, (SignalPublicKey*)base_key.raw);
 }
+
+// Sender key store
+int bridge_load_sender_key(void *ctx, SignalMutPointerSenderKeyRecord *recordp, SignalMutPointerProtocolAddress sender, SignalUuid distribution_id) {
+    return goLoadSenderKey(ctx, recordp, (SignalProtocolAddress*)sender.raw, distribution_id);
+}
+int bridge_store_sender_key(void *ctx, SignalMutPointerProtocolAddress sender, SignalUuid distribution_id, SignalMutPointerSenderKeyRecord record) {
+    return goStoreSenderKey(ctx, (SignalProtocolAddress*)sender.raw, distribution_id, (SignalSenderKeyRecord*)record.raw);
+}

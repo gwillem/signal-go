@@ -38,3 +38,10 @@ type KyberPreKeyStore interface {
 	// parameters can be used for reuse tracking (optional; implementations may ignore them).
 	MarkKyberPreKeyUsed(id uint32, ecPreKeyID uint32, baseKey *PublicKey) error
 }
+
+// SenderKeyStore stores sender key records for group messaging.
+// Sender keys are keyed by (sender address, distribution ID).
+type SenderKeyStore interface {
+	LoadSenderKey(sender *Address, distributionID [16]byte) (*SenderKeyRecord, error)
+	StoreSenderKey(sender *Address, distributionID [16]byte, record *SenderKeyRecord) error
+}

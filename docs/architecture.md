@@ -291,6 +291,53 @@ Sending requires:
 
 This is covered in Signal-Android's `SignalServiceMessageSender.java`.
 
+### Group messaging and sender keys
+
+Signal uses **sender keys** for efficient group messaging. Instead of encrypting a message N times for N recipients (fanout), the sender encrypts once with a symmetric sender key that all group members share.
+
+#### Message types
+
+| Type | Name | Use |
+|------|------|-----|
+| 2 | Whisper | Regular 1:1 message (established session) |
+| 3 | PreKey | 1:1 message establishing new session |
+| 7 | SenderKey | Group message encrypted with sender key |
+| 8 | Plaintext | Unencrypted (retry receipts only) |
+
+#### Sender key flow
+
+1. **Distribution**: Before sending to a group, the sender creates a `SenderKeyDistributionMessage` and sends it to all group members inside a regular encrypted message (type 2/3). This is in `Content.senderKeyDistributionMessage`.
+
+2. **Storage**: Recipients process the distribution message and store the sender key record, keyed by `(sender_address, distribution_id)`.
+
+3. **Group send**: The sender encrypts the message once with the sender key, producing a type 7 message. The same ciphertext goes to all recipients.
+
+4. **Decryption**: Recipients decrypt using `signal_group_decrypt_message` with the stored sender key.
+
+#### signal-cli vs Signal-Android behavior
+
+**signal-cli** uses aggressive fallback:
+- Evaluates each recipient for "sender key capability"
+- Falls back to **legacy fanout** (individual type 2/3 messages) if fewer than 2 recipients support sender keys, or if sender key delivery fails
+- This means signal-cli group messages may arrive as regular 1:1 messages
+
+**Signal-Android** is optimized for sender keys:
+- Prefers sender keys for efficiency
+- When decryption fails, expects the recipient to send a retry receipt
+- The sender then re-distributes the key and retries
+- Less eager to fall back to legacy fanout
+
+**Implication**: A client that doesn't handle type 7 messages will receive group messages from signal-cli (via fallback) but not from Signal-Android (which persists with sender keys).
+
+#### Group membership discovery
+
+Groups are stored in Signal's **Storage Service**, not the messaging protocol:
+1. Sync encrypted storage records via `/v2/storage/`
+2. Parse `GroupV2Record` entries containing group master keys
+3. Use Groups V2 API with zero-knowledge credentials to fetch group state
+
+This requires libsignal's `zkgroup` module for zero-knowledge proofs. signal-go does not currently implement Storage Service sync or Groups V2 API.
+
 ## Reference sources
 
 | Source | Location | What to learn |

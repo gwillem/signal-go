@@ -28,8 +28,9 @@ var (
 	_ libsignal.SessionStore      = (*Store)(nil)
 	_ libsignal.IdentityKeyStore  = (*Store)(nil)
 	_ libsignal.PreKeyStore       = (*Store)(nil)
-	_ libsignal.SignedPreKeyStore  = (*Store)(nil)
+	_ libsignal.SignedPreKeyStore = (*Store)(nil)
 	_ libsignal.KyberPreKeyStore  = (*Store)(nil)
+	_ libsignal.SenderKeyStore    = (*Store)(nil)
 )
 
 const schema = `
@@ -70,6 +71,13 @@ CREATE TABLE IF NOT EXISTS recipient_device (
 	device_id INTEGER NOT NULL,
 	last_seen INTEGER NOT NULL,
 	PRIMARY KEY (aci, device_id)
+);
+CREATE TABLE IF NOT EXISTS sender_key (
+	sender_aci TEXT NOT NULL,
+	sender_device INTEGER NOT NULL,
+	distribution_id BLOB NOT NULL,
+	record BLOB NOT NULL,
+	PRIMARY KEY (sender_aci, sender_device, distribution_id)
 );
 `
 

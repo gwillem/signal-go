@@ -111,7 +111,8 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `prekeybundle.go`                        | PreKeyBundle construction                                                                          |
 | `session.go`                             | SessionRecord                                                                                      |
 | `message.go`                             | CiphertextMessage, PreKeySignalMessage, SignalMessage                                              |
-| `store.go`                               | Store interfaces (5 types)                                                                         |
+| `store.go`                               | Store interfaces (6 types including SenderKeyStore)                                                |
+| `senderkey.go`                           | SenderKeyRecord, SenderKeyDistributionMessage, GroupDecryptMessage                                 |
 | `callbacks.go`                           | CGO callback exports + store wrappers                                                              |
 | `bridge.c`                               | C bridge functions for callback type conversion                                                    |
 | `memstore.go`                            | In-memory store implementations                                                                    |
@@ -138,4 +139,5 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/store/session.go`              | SessionStore + ArchiveSession implementation                                                       |
 | `internal/store/identity.go`             | IdentityKeyStore implementation (TOFU)                                                             |
 | `internal/store/prekey.go`               | PreKeyStore, SignedPreKeyStore, KyberPreKeyStore implementations                                   |
+| `internal/store/senderkey.go`            | SenderKeyStore implementation for group messaging                                                  |
 | `internal/store/contact.go`              | Contact CRUD: SaveContact, GetContactByACI, SaveContacts (bulk upsert)                             |

@@ -202,3 +202,41 @@ func (s *MemoryKyberPreKeyStore) MarkKyberPreKeyUsed(id uint32, ecPreKeyID uint3
 	s.used[id] = true
 	return nil
 }
+
+// senderKeyKey returns a map key for a sender key (address + distribution ID).
+func senderKeyKey(addr *Address, distributionID [16]byte) string {
+	name, _ := addr.Name()
+	devID, _ := addr.DeviceID()
+	return fmt.Sprintf("%s:%d:%x", name, devID, distributionID)
+}
+
+// MemorySenderKeyStore is an in-memory SenderKeyStore.
+type MemorySenderKeyStore struct {
+	senderKeys map[string]*SenderKeyRecord
+}
+
+func NewMemorySenderKeyStore() *MemorySenderKeyStore {
+	return &MemorySenderKeyStore{senderKeys: map[string]*SenderKeyRecord{}}
+}
+
+func (s *MemorySenderKeyStore) LoadSenderKey(sender *Address, distributionID [16]byte) (*SenderKeyRecord, error) {
+	rec := s.senderKeys[senderKeyKey(sender, distributionID)]
+	if rec == nil {
+		return nil, nil
+	}
+	// Return a clone so the caller owns it
+	data, err := rec.Serialize()
+	if err != nil {
+		return nil, err
+	}
+	return DeserializeSenderKeyRecord(data)
+}
+
+func (s *MemorySenderKeyStore) StoreSenderKey(sender *Address, distributionID [16]byte, record *SenderKeyRecord) error {
+	key := senderKeyKey(sender, distributionID)
+	if old := s.senderKeys[key]; old != nil {
+		old.Destroy()
+	}
+	s.senderKeys[key] = record
+	return nil
+}
