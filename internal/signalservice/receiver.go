@@ -37,6 +37,8 @@ type Message struct {
 	SyncTo       string    // recipient ACI if this is a SyncMessage (sent by our other device)
 	SyncToNumber string    // recipient phone number (if known from contacts)
 	SyncToName   string    // recipient display name (if known from contacts)
+	GroupID      string    // group identifier (hex) if this is a group message
+	GroupName    string    // group name (if known)
 }
 
 // receiveMessages connects to the authenticated WebSocket and returns an iterator
@@ -372,7 +374,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 			dm.GetGroupV2() != nil, dm.GetQuote() != nil, dm.ExpireTimer != nil)
 	}
 
-	// Extract text body from DataMessage (direct message).
+	// Extract text body from DataMessage (direct or group message).
 	if dm := contentProto.GetDataMessage(); dm != nil && dm.Body != nil {
 		// Store sender's profile key if provided (needed for sealed sender replies).
 		if len(dm.ProfileKey) == 32 {
@@ -387,6 +389,12 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 			Timestamp: time.UnixMilli(int64(env.GetTimestamp())),
 			Body:      dm.GetBody(),
 		}
+
+		// Handle group context if present
+		if gv2 := dm.GetGroupV2(); gv2 != nil && len(gv2.GetMasterKey()) == 32 {
+			populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, logger)
+		}
+
 		populateContactInfo(ctx, msg, st, rc.service)
 		return msg, nil
 	}
@@ -404,6 +412,12 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 					Body:      dm.GetBody(),
 					SyncTo:    recipient,
 				}
+
+				// Handle group context if present
+				if gv2 := dm.GetGroupV2(); gv2 != nil && len(gv2.GetMasterKey()) == 32 {
+					populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, logger)
+				}
+
 				populateContactInfo(ctx, msg, st, rc.service)
 				return msg, nil
 			}
@@ -683,4 +697,56 @@ func processSenderKeyDistribution(senderACI string, senderDevice uint32, skdmByt
 
 	logf(logger, "stored sender key from=%s device=%d", senderACI, senderDevice)
 	return nil
+}
+
+// populateGroupInfo extracts group info from a master key and populates the message.
+// It also stores/updates the group in the database for future reference.
+func populateGroupInfo(msg *Message, masterKeyBytes []byte, revision int, st *store.Store, logger *log.Logger) {
+	if len(masterKeyBytes) != 32 {
+		return
+	}
+
+	// Convert to GroupMasterKey
+	var masterKey libsignal.GroupMasterKey
+	copy(masterKey[:], masterKeyBytes)
+
+	// Derive group identifier
+	groupID, err := libsignal.GroupIdentifierFromMasterKey(masterKey)
+	if err != nil {
+		logf(logger, "failed to derive group identifier: %v", err)
+		return
+	}
+
+	msg.GroupID = groupID.String()
+	logf(logger, "group message groupID=%s revision=%d", msg.GroupID, revision)
+
+	// Check if we have this group stored
+	existing, err := st.GetGroup(msg.GroupID)
+	if err != nil {
+		logf(logger, "failed to get group: %v", err)
+	}
+
+	if existing != nil {
+		// Use cached name
+		msg.GroupName = existing.Name
+		// Update revision if newer
+		if revision > existing.Revision {
+			existing.Revision = revision
+			if err := st.SaveGroup(existing); err != nil {
+				logf(logger, "failed to update group revision: %v", err)
+			}
+		}
+	} else {
+		// Store new group (without name - we'll need to fetch it from server later)
+		newGroup := &store.Group{
+			GroupID:   msg.GroupID,
+			MasterKey: masterKeyBytes,
+			Revision:  revision,
+		}
+		if err := st.SaveGroup(newGroup); err != nil {
+			logf(logger, "failed to save group: %v", err)
+		} else {
+			logf(logger, "stored new group groupID=%s", msg.GroupID)
+		}
+	}
 }

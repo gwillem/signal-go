@@ -1,6 +1,6 @@
 # Task 14: Full Group Support (Storage Service + Groups V2)
 
-## Status: Planned
+## Status: In Progress (Foundation Complete)
 
 ## Goal
 
@@ -24,10 +24,21 @@ Signal groups (V2) use a complex architecture:
 |---------|--------|
 | Receive sender key messages (type 7) | Done (task 13) |
 | Process sender key distribution | Done (task 13) |
+| zkgroup bindings | **Done** (GroupMasterKey, GroupSecretParams, GroupPublicParams, GroupIdentifier) |
+| Group storage (SQLite) | **Done** (master key, name, revision) |
+| Extract group info from received messages | **Done** (populateGroupInfo in receiver.go) |
+| Public API (Groups, GetGroup) | **Done** |
 | Storage Service sync | Not implemented |
-| zkgroup bindings | Not implemented |
 | Groups V2 API | Not implemented |
 | Send to groups | Not implemented |
+
+### Implemented Files
+
+- `internal/libsignal/zkgroup.go` - CGO bindings for zkgroup operations
+- `internal/libsignal/zkgroup_test.go` - Tests for zkgroup bindings
+- `internal/store/group.go` - SQLite group storage (SaveGroup, GetGroup, GetAllGroups)
+- `internal/signalservice/receiver.go` - populateGroupInfo() extracts and stores group info from messages
+- `client.go` - Groups(), GetGroup() public API methods
 
 ## Architecture Overview
 

@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS sender_key (
 	record BLOB NOT NULL,
 	PRIMARY KEY (sender_aci, sender_device, distribution_id)
 );
+CREATE TABLE IF NOT EXISTS groups (
+	group_id TEXT PRIMARY KEY,
+	master_key BLOB NOT NULL,
+	name TEXT NOT NULL DEFAULT '',
+	revision INTEGER NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL
+);
 `
 
 // DefaultDataDir returns the default data directory for signal-go databases.

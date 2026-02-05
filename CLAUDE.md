@@ -99,7 +99,7 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 
 | File                                     | Purpose                                                                                            |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `client.go`                              | Public API: Client, Link, Load, Send, Receive, SyncContacts, LookupNumber, Close, Number, DeviceID |
+| `client.go`                              | Public API: Client, Link, Load, Send, Receive, SyncContacts, LookupNumber, Groups, Close, Number, DeviceID |
 | `libsignal.go`                           | CGO preamble (LDFLAGS, includes)                                                                   |
 | `error.go`                               | FFI error wrapping, owned buffer handling                                                          |
 | `privatekey.go`                          | PrivateKey: generate, serialize, sign, agree                                                       |
@@ -113,6 +113,7 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `message.go`                             | CiphertextMessage, PreKeySignalMessage, SignalMessage                                              |
 | `store.go`                               | Store interfaces (6 types including SenderKeyStore)                                                |
 | `senderkey.go`                           | SenderKeyRecord, SenderKeyDistributionMessage, GroupDecryptMessage                                 |
+| `zkgroup.go`                             | GroupMasterKey, GroupSecretParams, GroupPublicParams, GroupIdentifier: zkgroup crypto operations   |
 | `callbacks.go`                           | CGO callback exports + store wrappers                                                              |
 | `bridge.c`                               | C bridge functions for callback type conversion                                                    |
 | `memstore.go`                            | In-memory store implementations                                                                    |
@@ -141,3 +142,4 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/store/prekey.go`               | PreKeyStore, SignedPreKeyStore, KyberPreKeyStore implementations                                   |
 | `internal/store/senderkey.go`            | SenderKeyStore implementation for group messaging                                                  |
 | `internal/store/contact.go`              | Contact CRUD: SaveContact, GetContactByACI, SaveContacts (bulk upsert)                             |
+| `internal/store/group.go`                | Group CRUD: SaveGroup, GetGroup, GetAllGroups, GetGroupByMasterKey                                 |

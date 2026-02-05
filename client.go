@@ -22,6 +22,9 @@ import (
 // Message represents a received Signal message.
 type Message = signalservice.Message
 
+// Group represents a Signal group stored locally.
+type Group = store.Group
+
 const (
 	defaultProvisioningURL = "wss://chat.signal.org/v1/websocket/provisioning/"
 	defaultAPIURL          = "https://chat.signal.org"
@@ -489,6 +492,24 @@ func (c *Client) LookupNumber(aci string) string {
 		return ""
 	}
 	return contact.Number
+}
+
+// Groups returns all groups this device knows about.
+// Groups are discovered incrementally from received group messages.
+func (c *Client) Groups() ([]*Group, error) {
+	if c.store == nil {
+		return nil, fmt.Errorf("client: not loaded")
+	}
+	return c.store.GetAllGroups()
+}
+
+// GetGroup returns group details by group ID (hex-encoded GroupIdentifier).
+// Returns nil if the group is not found.
+func (c *Client) GetGroup(groupID string) (*Group, error) {
+	if c.store == nil {
+		return nil, fmt.Errorf("client: not loaded")
+	}
+	return c.store.GetGroup(groupID)
 }
 
 // VerifyIdentityKey checks if the server has the same identity key as locally stored.
