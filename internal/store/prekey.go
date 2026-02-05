@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -13,7 +15,7 @@ func (s *Store) LoadPreKey(id uint32) (*libsignal.PreKeyRecord, error) {
 		"SELECT record FROM pre_key WHERE id = ?", id,
 	).Scan(&record)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("pre-key %d not found", id)
 		}
 		return nil, fmt.Errorf("store: load pre-key: %w", err)
@@ -53,7 +55,7 @@ func (s *Store) LoadSignedPreKey(id uint32) (*libsignal.SignedPreKeyRecord, erro
 		"SELECT record FROM signed_pre_key WHERE id = ?", id,
 	).Scan(&record)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("signed pre-key %d not found", id)
 		}
 		return nil, fmt.Errorf("store: load signed pre-key: %w", err)
@@ -84,7 +86,7 @@ func (s *Store) LoadKyberPreKey(id uint32) (*libsignal.KyberPreKeyRecord, error)
 		"SELECT record FROM kyber_pre_key WHERE id = ?", id,
 	).Scan(&record)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("kyber pre-key %d not found", id)
 		}
 		return nil, fmt.Errorf("store: load kyber pre-key: %w", err)

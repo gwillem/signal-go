@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -49,7 +51,7 @@ func (s *Store) LoadAccount() (*Account, error) {
 		"SELECT value FROM account WHERE key = ?", accountKey,
 	).Scan(&data)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: load account: %w", err)

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -89,7 +91,7 @@ func (s *Store) GetIdentityKey(address *libsignal.Address) (*libsignal.PublicKey
 		"SELECT public_key FROM identity WHERE address = ?", name,
 	).Scan(&data)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: load identity key: %w", err)

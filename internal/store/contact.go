@@ -1,6 +1,10 @@
 package store
 
-import "fmt"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+)
 
 // Contact represents a Signal contact with ACI-to-phone-number mapping.
 type Contact struct {
@@ -29,7 +33,7 @@ func (s *Store) GetContactByACI(aci string) (*Contact, error) {
 		"SELECT aci, number, name, profile_key FROM contact WHERE aci = ?", aci,
 	).Scan(&c.ACI, &c.Number, &c.Name, &c.ProfileKey)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: get contact: %w", err)

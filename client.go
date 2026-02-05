@@ -2,6 +2,7 @@
 package signal
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -44,6 +45,19 @@ type Client struct {
 	number            string
 	registrationID    int
 	pniRegistrationID int
+}
+
+// auth returns the BasicAuth credentials for API requests.
+func (c *Client) auth() signalservice.BasicAuth {
+	return signalservice.BasicAuth{
+		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
+		Password: c.password,
+	}
+}
+
+// httpClient returns a new HTTPClient for API requests.
+func (c *Client) httpClient() *signalservice.HTTPClient {
+	return signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
 }
 
 // Option configures a Client.
@@ -422,10 +436,7 @@ func (c *Client) SendSealed(ctx context.Context, recipient string, text string) 
 	if c.store == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
+	auth := c.auth()
 	return signalservice.SendSealedSenderMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig, c.logger)
 }
 
@@ -437,10 +448,7 @@ func (c *Client) sendInternal(ctx context.Context, recipient string, text string
 	// When usePNI=true, we use PNI identity for encryption but ACI for auth.
 	// This creates a mismatch that recipients may not handle correctly.
 	// The proper solution is sealed sender (not yet implemented).
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
+	auth := c.auth()
 	if usePNI {
 		c.store.UsePNI(true)
 		defer c.store.UsePNI(false)
@@ -457,10 +465,7 @@ func (c *Client) Receive(ctx context.Context) iter.Seq2[Message, error] {
 			yield(Message{}, fmt.Errorf("client: not linked (call Link or Load first)"))
 		}
 	}
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
+	auth := c.auth()
 	wsURL := defaultWSURL
 	return signalservice.ReceiveMessages(ctx, wsURL, c.apiURL, c.store, auth, c.aci, uint32(c.deviceID), c.tlsConfig, c.logger, c.debugDir)
 }
@@ -472,10 +477,7 @@ func (c *Client) SyncContacts(ctx context.Context) error {
 	if c.store == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
+	auth := c.auth()
 	return signalservice.RequestContactSync(ctx, c.apiURL, c.store, auth, c.aci, c.tlsConfig, c.logger)
 }
 
@@ -504,14 +506,14 @@ func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []b
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("client: load account: %w", err)
 	}
+	if acct == nil {
+		return nil, nil, false, fmt.Errorf("client: no account found")
+	}
 	localKey = acct.ACIIdentityKeyPublic
 
 	// Query server for our pre-keys (includes identity key)
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	auth := c.auth()
+	httpClient := c.httpClient()
 	preKeys, err := httpClient.GetPreKeys(ctx, c.aci, c.deviceID, auth)
 	if err != nil {
 		return nil, localKey, false, fmt.Errorf("client: get pre-keys from server: %w", err)
@@ -522,17 +524,14 @@ func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []b
 		return nil, localKey, false, fmt.Errorf("client: decode server identity key: %w", err)
 	}
 
-	match = string(serverKey) == string(localKey)
+	match = bytes.Equal(serverKey, localKey)
 	return serverKey, localKey, match, nil
 }
 
 // GetDeviceIdentityKey fetches the identity key for a specific device from the server.
 func (c *Client) GetDeviceIdentityKey(ctx context.Context, deviceID int) (string, error) {
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	auth := c.auth()
+	httpClient := c.httpClient()
 	preKeys, err := httpClient.GetPreKeys(ctx, c.aci, deviceID, auth)
 	if err != nil {
 		return "", err
@@ -545,11 +544,8 @@ type DeviceInfo = signalservice.DeviceInfo
 
 // Devices returns the list of registered devices for this account.
 func (c *Client) Devices(ctx context.Context) ([]DeviceInfo, error) {
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	auth := c.auth()
+	httpClient := c.httpClient()
 	return httpClient.GetDevices(ctx, auth)
 }
 
@@ -567,10 +563,7 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 		return fmt.Errorf("client: no account found")
 	}
 
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
+	auth := c.auth()
 
 	attrs := &signalservice.AccountAttributes{
 		RegistrationID:    acct.RegistrationID,
@@ -594,7 +587,7 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 		attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
 	}
 
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	httpClient := c.httpClient()
 	return httpClient.SetAccountAttributes(ctx, attrs, auth)
 }
 
@@ -631,11 +624,8 @@ func (c *Client) UpdateAccountSettings(ctx context.Context, settings *AccountSet
 		}
 	}
 
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	auth := c.auth()
+	httpClient := c.httpClient()
 
 	// Update account attributes if any attribute settings are provided.
 	if settings.DiscoverableByPhoneNumber != nil || settings.UnrestrictedUnidentifiedAccess != nil {
@@ -683,11 +673,8 @@ func (c *Client) RefreshPreKeys(ctx context.Context) error {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
 
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
-		Password: c.password,
-	}
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	auth := c.auth()
+	httpClient := c.httpClient()
 
 	// Upload ACI pre-keys (ID 1)
 	aciSignedPreKey, err := c.store.LoadSignedPreKey(1)
@@ -949,7 +936,7 @@ func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
 		Password: acct.Password,
 	}
 
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	httpClient := c.httpClient()
 	resp, err := httpClient.GetProfile(ctx, acct.ACI, acct.ProfileKey, auth)
 	if err != nil {
 		return nil, err
@@ -1030,7 +1017,7 @@ func (c *Client) SetProfile(ctx context.Context, name string, numberSharing *boo
 		Password: acct.Password,
 	}
 
-	httpClient := signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
+	httpClient := c.httpClient()
 
 	// Build profile options, fetching current name if not provided
 	var profileName *string

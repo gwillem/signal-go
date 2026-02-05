@@ -1,6 +1,7 @@
 package signalservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -535,7 +536,7 @@ func saveContactProfileKey(st *store.Store, aci string, profileKey []byte, logge
 	}
 
 	// Only update if we don't have a profile key or it changed
-	if len(contact.ProfileKey) == 0 || !bytesEqual(contact.ProfileKey, profileKey) {
+	if len(contact.ProfileKey) == 0 || !bytes.Equal(contact.ProfileKey, profileKey) {
 		contact.ProfileKey = profileKey
 		if err := st.SaveContact(contact); err != nil {
 			return err
@@ -543,18 +544,6 @@ func saveContactProfileKey(st *store.Store, aci string, profileKey []byte, logge
 		logf(logger, "saved profile key for %s", aci)
 	}
 	return nil
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // logf logs a formatted message if the logger is non-nil.

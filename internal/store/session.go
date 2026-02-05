@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -24,7 +26,7 @@ func (s *Store) LoadSession(address *libsignal.Address) (*libsignal.SessionRecor
 		name, devID,
 	).Scan(&record)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("store: load session: %w", err)
