@@ -335,20 +335,26 @@ func (s *Service) sendSealedSenderMessage(ctx context.Context, recipient string,
 }
 
 // sendSealedEncrypted encrypts content with sealed sender and sends it.
+// Handles 409 (device mismatch) and 410 (stale sessions) with retry.
 func (s *Service) sendSealedEncrypted(ctx context.Context, recipient string,
 	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
 ) error {
-	now := time.Now()
-	timestamp := uint64(now.UnixMilli())
-
-	// Add Signal transport padding
 	paddedContent := padMessage(contentBytes)
 
-	// Get recipient's devices (start with device 1 if unknown)
-	deviceIDs, _ := s.store.GetDevices(recipient)
-	if len(deviceIDs) == 0 {
-		deviceIDs = []int{1}
-	}
+	deviceIDs, _ := s.initialDevices(recipient, false)
+
+	return s.withDeviceRetry(recipient, deviceIDs, 0, func(devices []int) error {
+		return s.trySendSealed(ctx, recipient, paddedContent, senderCert, accessKey, devices)
+	})
+}
+
+// trySendSealed encrypts and sends sealed sender messages to the given devices.
+func (s *Service) trySendSealed(ctx context.Context, recipient string,
+	paddedContent []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
+	deviceIDs []int,
+) error {
+	now := time.Now()
+	timestamp := uint64(now.UnixMilli())
 
 	var messages []OutgoingMessage
 
@@ -369,7 +375,6 @@ func (s *Service) sendSealedEncrypted(ctx context.Context, recipient string,
 
 		if session == nil {
 			// Fetch pre-keys and establish session
-			// For sealed sender, we need the identity key to seal the message
 			preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
 			if err != nil {
 				addr.Destroy()

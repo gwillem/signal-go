@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -125,139 +123,30 @@ func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, co
 	sendingToSelf := recipient == s.localACI
 	logf(s.logger, "send: localDeviceID=%d recipient=%s sendingToSelf=%v", s.localDeviceID, recipient, sendingToSelf)
 
-	// Load cached devices, or start with device 1 if not cached.
-	deviceIDs, _ := s.store.GetDevices(recipient)
-	if len(deviceIDs) == 0 {
-		deviceIDs = []int{1}
+	deviceIDs, skipDevice := s.initialDevices(recipient, sendingToSelf)
+	if sendingToSelf && len(deviceIDs) == 0 {
+		return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
 	}
 
-	// When sending to self, filter out our own device from the initial list.
-	if sendingToSelf {
-		deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == s.localDeviceID })
-		if len(deviceIDs) == 0 {
-			return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
-		}
-	}
-
-	// Signal-Android behavior: retry up to 4 times, no special tracking.
-	// 410: archive sessions (will fetch fresh keys on retry)
-	// 409 extra: archive sessions, remove from list
-	// 409 missing: add to list (will fetch keys in encryptAndSend)
-	const maxAttempts = 5
-	for attempt := range maxAttempts {
-		logf(s.logger, "send: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
-		err := s.encryptAndSend(ctx, recipient, contentBytes, deviceIDs)
-		if err == nil {
-			// Persist the working device list for future sends.
-			_ = s.store.SetDevices(recipient, deviceIDs)
-			return nil
-		}
-		if attempt == maxAttempts-1 {
-			return err
-		}
-
-		var staleErr *StaleDevicesError
-		var mismatchErr *MismatchedDevicesError
-
-		switch {
-		case errors.As(err, &staleErr):
-			// 410: sessions are stale. Archive them so retry fetches fresh keys.
-			// Don't remove devices - they're still valid, just need new sessions.
-			logf(s.logger, "send: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
-			for _, deviceID := range staleErr.StaleDevices {
-				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
-			}
-		case errors.As(err, &mismatchErr):
-			// 409: device list mismatch.
-			logf(s.logger, "send: 409 missing=%v extra=%v devices=%v",
-				mismatchErr.MissingDevices, mismatchErr.ExtraDevices, deviceIDs)
-			// Archive all current sessions (our local state advanced during Encrypt).
-			for _, deviceID := range deviceIDs {
-				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
-			}
-			// Remove extra devices (no longer registered).
-			for _, deviceID := range mismatchErr.ExtraDevices {
-				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
-			}
-			// Add missing devices (newly registered).
-			for _, deviceID := range mismatchErr.MissingDevices {
-				skipOwnDevice := sendingToSelf && deviceID == s.localDeviceID
-				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
-					deviceIDs = append(deviceIDs, deviceID)
-				}
-			}
-			// Persist the updated device list immediately. This ensures the cache
-			// is consistent even if the send is cancelled mid-retry.
-			_ = s.store.SetDevices(recipient, deviceIDs)
-		default:
-			return err
-		}
-	}
-	return nil
+	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return s.encryptAndSend(ctx, recipient, contentBytes, devices)
+	})
 }
 
 // sendEncryptedMessageWithTimestamp is like sendEncryptedMessage but uses an explicit timestamp.
 // This is needed for sync messages where the envelope timestamp must match the DataMessage timestamp.
 func (s *Service) sendEncryptedMessageWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
 	sendingToSelf := recipient == s.localACI
-	logf(s.logger, "send with timestamp: localDeviceID=%d recipient=%s sendingToSelf=%v timestamp=%d", s.localDeviceID, recipient, sendingToSelf, timestamp)
+	logf(s.logger, "send: localDeviceID=%d recipient=%s sendingToSelf=%v timestamp=%d", s.localDeviceID, recipient, sendingToSelf, timestamp)
 
-	// Load cached devices, or start with device 1 if not cached.
-	deviceIDs, _ := s.store.GetDevices(recipient)
-	if len(deviceIDs) == 0 {
-		deviceIDs = []int{1}
+	deviceIDs, skipDevice := s.initialDevices(recipient, sendingToSelf)
+	if sendingToSelf && len(deviceIDs) == 0 {
+		return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
 	}
 
-	// When sending to self, filter out our own device from the initial list.
-	if sendingToSelf {
-		deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == s.localDeviceID })
-		if len(deviceIDs) == 0 {
-			return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
-		}
-	}
-
-	const maxAttempts = 5
-	for attempt := range maxAttempts {
-		logf(s.logger, "send with timestamp: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
-		err := s.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, deviceIDs, timestamp)
-		if err == nil {
-			_ = s.store.SetDevices(recipient, deviceIDs)
-			return nil
-		}
-		if attempt == maxAttempts-1 {
-			return err
-		}
-
-		var staleErr *StaleDevicesError
-		var mismatchErr *MismatchedDevicesError
-
-		switch {
-		case errors.As(err, &staleErr):
-			logf(s.logger, "send with timestamp: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
-			for _, deviceID := range staleErr.StaleDevices {
-				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
-			}
-		case errors.As(err, &mismatchErr):
-			logf(s.logger, "send with timestamp: 409 missing=%v extra=%v devices=%v",
-				mismatchErr.MissingDevices, mismatchErr.ExtraDevices, deviceIDs)
-			for _, deviceID := range deviceIDs {
-				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
-			}
-			for _, deviceID := range mismatchErr.ExtraDevices {
-				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
-			}
-			for _, deviceID := range mismatchErr.MissingDevices {
-				skipOwnDevice := sendingToSelf && deviceID == s.localDeviceID
-				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
-					deviceIDs = append(deviceIDs, deviceID)
-				}
-			}
-			_ = s.store.SetDevices(recipient, deviceIDs)
-		default:
-			return err
-		}
-	}
-	return nil
+	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return s.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, devices, timestamp)
+	})
 }
 
 // sendEncryptedMessageWithDevices encrypts and sends Content bytes starting with the
@@ -277,56 +166,16 @@ func (s *Service) sendEncryptedMessageWithDevices(ctx context.Context, recipient
 		deviceIDs = []int{1}
 	}
 
-	logf(s.logger, "send with devices: recipient=%s devices=%v", recipient, deviceIDs)
-
-	const maxAttempts = 5
-	for attempt := range maxAttempts {
-		logf(s.logger, "send with devices: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
-		err := s.encryptAndSend(ctx, recipient, contentBytes, deviceIDs)
-		if err == nil {
-			// Persist the working device list for future sends.
-			_ = s.store.SetDevices(recipient, deviceIDs)
-			return nil
-		}
-		if attempt == maxAttempts-1 {
-			return err
-		}
-
-		var staleErr *StaleDevicesError
-		var mismatchErr *MismatchedDevicesError
-
-		switch {
-		case errors.As(err, &staleErr):
-			// 410: sessions are stale. Archive them so retry fetches fresh keys.
-			logf(s.logger, "send with devices: 410 stale=%v", staleErr.StaleDevices)
-			for _, deviceID := range staleErr.StaleDevices {
-				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
-			}
-		case errors.As(err, &mismatchErr):
-			// 409: device list mismatch.
-			logf(s.logger, "send with devices: 409 missing=%v extra=%v",
-				mismatchErr.MissingDevices, mismatchErr.ExtraDevices)
-			for _, deviceID := range deviceIDs {
-				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
-			}
-			// Remove extra devices.
-			for _, deviceID := range mismatchErr.ExtraDevices {
-				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
-			}
-			// Add missing devices.
-			for _, deviceID := range mismatchErr.MissingDevices {
-				skipOwnDevice := sendingToSelf && deviceID == s.localDeviceID
-				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
-					deviceIDs = append(deviceIDs, deviceID)
-				}
-			}
-			// Persist the updated device list immediately.
-			_ = s.store.SetDevices(recipient, deviceIDs)
-		default:
-			return err
-		}
+	skipDevice := 0
+	if sendingToSelf {
+		skipDevice = s.localDeviceID
 	}
-	return nil
+
+	logf(s.logger, "send: recipient=%s devices=%v", recipient, deviceIDs)
+
+	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return s.encryptAndSend(ctx, recipient, contentBytes, devices)
+	})
 }
 
 // encryptAndSend performs a single encrypt-and-send attempt for the given device IDs.

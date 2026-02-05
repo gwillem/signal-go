@@ -53,6 +53,7 @@ These mistakes have caused bugs in the past:
 - **Inventing retry/recovery logic** — Signal-Android's retry logic is simple (archive + retry N times). Don't add staleSeen tracking or other "clever" solutions.
 - **Assuming server behavior** — If unsure what the server expects, grep Signal-Android for the endpoint or error code.
 - **Skipping message formatting steps** — Signal uses transport-level padding (`PushTransportDetails.getPaddedMessageBody()`) before encryption. Missing this causes decryption failures even though the protocol-level crypto succeeds.
+- **Duplicating 409/410 retry logic** — All send paths must handle device mismatch (409) and stale sessions (410). Use `withDeviceRetry` in `deviceretry.go` instead of writing a new retry loop. Missing retry handling caused SKDM delivery failures to multi-device recipients.
 
 ## Prerequisites
 
@@ -127,6 +128,8 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/signalservice/httptypes.go`    | JSON request/response types for all endpoints                                                      |
 | `internal/signalservice/registration.go` | RegisterLinkedDevice orchestration                                                                 |
 | `internal/signalservice/sender.go`       | SendTextMessage, padMessage: session establishment + transport padding + encryption + delivery     |
+| `internal/signalservice/groupsender.go`  | SendGroupMessage: sender key distribution + group encryption + sealed sender delivery              |
+| `internal/signalservice/deviceretry.go`  | withDeviceRetry: centralized 409/410 device mismatch retry loop for all send paths                |
 | `internal/signalservice/retryreceipt.go` | SendRetryReceipt, HandleRetryReceipt: DecryptionErrorMessage retry flow                            |
 | `internal/signalservice/dump.go`         | dumpEnvelope: raw envelope debug dump to file, LoadDump for test replay                            |
 | `internal/signalservice/receiver.go`     | ReceiveMessages: WebSocket receive loop + decryption + retry receipts + contact sync + iterator    |
