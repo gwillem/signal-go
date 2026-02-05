@@ -1,6 +1,6 @@
 # Task 14: Full Group Support (Storage Service + Groups V2)
 
-## Status: In Progress (Storage Service Sync Complete)
+## Status: In Progress (Groups V2 API Complete)
 
 ## Goal
 
@@ -29,8 +29,8 @@ Signal groups (V2) use a complex architecture:
 | Extract group info from received messages | **Done** (populateGroupInfo in receiver.go) |
 | Public API (Groups, GetGroup, SyncGroups) | **Done** |
 | Storage Service sync | **Done** (Phase 1 complete, uses RecordIkm key derivation) |
-| CLI `sgnl groups` command | **Done** (list groups, --sync flag) |
-| Groups V2 API (fetch group details) | Not implemented |
+| CLI `sgnl groups` command | **Done** (list groups, --sync flag, --fetch flag) |
+| Groups V2 API (fetch group details) | **Done** (Phase 3 complete) |
 | Send to groups | Not implemented |
 
 ### Implemented Files
@@ -43,8 +43,11 @@ Signal groups (V2) use a complex architecture:
 - `internal/signalservice/storagecrypto.go` - AES-256-GCM decryption for storage records
 - `internal/signalservice/storage.go` - Storage Service client (SyncGroupsFromStorage)
 - `internal/proto/StorageService.proto` - Storage Service protobuf definitions
-- `client.go` - Groups(), GetGroup(), SyncGroups() public API methods
-- `cmd/sgnl/groups.go` - CLI command for listing and syncing groups
+- `client.go` - Groups(), GetGroup(), SyncGroups(), FetchGroupDetails() public API methods
+- `cmd/sgnl/groups.go` - CLI command for listing, syncing, and fetching groups
+- `internal/libsignal/authcredential.go` - ServerPublicParams, auth credential presentation
+- `internal/signalservice/groupsv2.go` - Groups V2 API client for fetching group details
+- `internal/proto/Groups.proto` - Groups V2 protobuf definitions
 
 ## Architecture Overview
 
