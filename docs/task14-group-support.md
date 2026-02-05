@@ -1,6 +1,6 @@
 # Task 14: Full Group Support (Storage Service + Groups V2)
 
-## Status: In Progress (Groups V2 API Complete)
+## Status: In Progress (Group Sending Implemented)
 
 ## Goal
 
@@ -31,7 +31,8 @@ Signal groups (V2) use a complex architecture:
 | Storage Service sync | **Done** (Phase 1 complete, uses RecordIkm key derivation) |
 | CLI `sgnl groups` command | **Done** (list groups, --sync flag, --fetch flag) |
 | Groups V2 API (fetch group details) | **Done** (Phase 3 complete) |
-| Send to groups | Not implemented |
+| Send to groups | **Done** (Phase 4 complete, uses sealed sender v1) |
+| CLI `sgnl send-group` command | **Done** |
 
 ### Implemented Files
 
@@ -47,7 +48,9 @@ Signal groups (V2) use a complex architecture:
 - `cmd/sgnl/groups.go` - CLI command for listing, syncing, and fetching groups
 - `internal/libsignal/authcredential.go` - ServerPublicParams, auth credential presentation
 - `internal/signalservice/groupsv2.go` - Groups V2 API client for fetching group details
+- `internal/signalservice/groupsender.go` - Group message sending with sender keys
 - `internal/proto/Groups.proto` - Groups V2 protobuf definitions
+- `cmd/sgnl/sendgroup.go` - CLI command for sending group messages
 
 ## Architecture Overview
 

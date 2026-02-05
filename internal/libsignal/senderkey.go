@@ -103,3 +103,59 @@ func GroupDecryptMessage(
 	}
 	return freeOwnedBuffer(out), nil
 }
+
+// CreateSenderKeyDistributionMessage creates a new sender key distribution message.
+// This message should be sent to group members so they can decrypt messages from this sender.
+// The distributionID is a UUID that identifies this sender key distribution (typically derived from the group).
+func CreateSenderKeyDistributionMessage(
+	sender *Address,
+	distributionID [16]byte,
+	store SenderKeyStore,
+) (*SenderKeyDistributionMessage, error) {
+	var out C.SignalMutPointerSenderKeyDistributionMessage
+
+	cSender := C.SignalConstPointerProtocolAddress{raw: sender.ptr}
+
+	// Convert distribution ID to SignalUuid
+	var cDistID C.SignalUuid
+	for i := range 16 {
+		cDistID.bytes[i] = C.uint8_t(distributionID[i])
+	}
+
+	cStore, cleanup := wrapSenderKeyStore(store)
+	defer cleanup()
+	cStorePtr := C.SignalConstPointerFfiSenderKeyStoreStruct{raw: cStore}
+
+	if err := wrapError(C.signal_sender_key_distribution_message_create(&out, cSender, cDistID, cStorePtr)); err != nil {
+		return nil, err
+	}
+	return &SenderKeyDistributionMessage{ptr: out.raw}, nil
+}
+
+// GroupEncryptMessage encrypts a message using sender key for group messaging.
+// Returns a CiphertextMessage of type SenderKey (7).
+func GroupEncryptMessage(
+	plaintext []byte,
+	sender *Address,
+	distributionID [16]byte,
+	store SenderKeyStore,
+) (*CiphertextMessage, error) {
+	var out C.SignalMutPointerCiphertextMessage
+
+	cSender := C.SignalConstPointerProtocolAddress{raw: sender.ptr}
+
+	// Convert distribution ID to SignalUuid
+	var cDistID C.SignalUuid
+	for i := range 16 {
+		cDistID.bytes[i] = C.uint8_t(distributionID[i])
+	}
+
+	cStore, cleanup := wrapSenderKeyStore(store)
+	defer cleanup()
+	cStorePtr := C.SignalConstPointerFfiSenderKeyStoreStruct{raw: cStore}
+
+	if err := wrapError(C.signal_group_encrypt_message(&out, cSender, cDistID, borrowedBuffer(plaintext), cStorePtr)); err != nil {
+		return nil, err
+	}
+	return &CiphertextMessage{ptr: out.raw}, nil
+}

@@ -444,6 +444,16 @@ func (c *Client) SendSealed(ctx context.Context, recipient string, text string) 
 	return c.service.SendSealedSenderMessage(ctx, recipient, text)
 }
 
+// SendGroup sends a text message to a group.
+// The groupID should be the hex-encoded GroupIdentifier (obtained from Groups()).
+// Uses sender key encryption for efficient group messaging.
+func (c *Client) SendGroup(ctx context.Context, groupID string, text string) error {
+	if c.service == nil {
+		return fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	return c.service.SendGroupMessage(ctx, groupID, text)
+}
+
 func (c *Client) sendInternal(ctx context.Context, recipient string, text string, usePNI bool) error {
 	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")

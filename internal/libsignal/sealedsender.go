@@ -265,6 +265,39 @@ func NewUnidentifiedSenderMessageContent(
 	return &UnidentifiedSenderMessageContent{ptr: out.raw}, nil
 }
 
+// NewUnidentifiedSenderMessageContentFromType creates a USMC from raw message bytes and type.
+// This is useful for sender key messages where we already have the serialized ciphertext.
+func NewUnidentifiedSenderMessageContentFromType(
+	messageContent []byte,
+	messageType uint8,
+	senderCert *SenderCertificate,
+	contentHint uint32,
+	groupID []byte,
+) (*UnidentifiedSenderMessageContent, error) {
+	var out C.SignalMutPointerUnidentifiedSenderMessageContent
+
+	cSenderCert := C.SignalConstPointerSenderCertificate{raw: senderCert.ptr}
+
+	var cGroupID C.SignalBorrowedBuffer
+	if len(groupID) > 0 {
+		cGroupID = borrowedBuffer(groupID)
+	} else {
+		cGroupID = borrowedBuffer(nil)
+	}
+
+	if err := wrapError(C.signal_unidentified_sender_message_content_new_from_content_and_type(
+		&out,
+		borrowedBuffer(messageContent),
+		C.uint8_t(messageType),
+		cSenderCert,
+		C.uint32_t(contentHint),
+		cGroupID,
+	)); err != nil {
+		return nil, err
+	}
+	return &UnidentifiedSenderMessageContent{ptr: out.raw}, nil
+}
+
 // SealedSenderEncrypt encrypts a USMC using sealed sender (SSv1).
 // Uses the recipient's identity key for ECDH.
 func SealedSenderEncrypt(

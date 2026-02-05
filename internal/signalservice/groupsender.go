@@ -1,0 +1,323 @@
+package signalservice
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"time"
+
+	"github.com/gwillem/signal-go/internal/libsignal"
+	"github.com/gwillem/signal-go/internal/proto"
+	"github.com/gwillem/signal-go/internal/store"
+	pb "google.golang.org/protobuf/proto"
+)
+
+// SendGroupMessage sends a text message to a group.
+// Uses sender key encryption (type 7) with sealed sender delivery.
+func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text string) error {
+	timestamp := uint64(time.Now().UnixMilli())
+
+	// Look up group in store
+	group, err := s.store.GetGroup(groupID)
+	if err != nil {
+		return fmt.Errorf("get group: %w", err)
+	}
+	if group == nil {
+		return fmt.Errorf("group not found: %s", groupID)
+	}
+
+	// Ensure we have member list
+	if len(group.MemberACIs) == 0 {
+		// Try to fetch group details
+		if err := s.FetchGroupDetails(ctx, group); err != nil {
+			return fmt.Errorf("fetch group details: %w", err)
+		}
+		if err := s.store.SaveGroup(group); err != nil {
+			return fmt.Errorf("save group: %w", err)
+		}
+	}
+	if len(group.MemberACIs) == 0 {
+		return fmt.Errorf("group has no members")
+	}
+
+	// Load account
+	acct, err := s.store.LoadAccount()
+	if err != nil {
+		return fmt.Errorf("load account: %w", err)
+	}
+
+	// Derive distribution ID from group master key
+	// The distribution ID is the first 16 bytes of the GroupIdentifier
+	var masterKey libsignal.GroupMasterKey
+	copy(masterKey[:], group.MasterKey)
+
+	secretParams, err := libsignal.DeriveGroupSecretParams(masterKey)
+	if err != nil {
+		return fmt.Errorf("derive group secret params: %w", err)
+	}
+
+	publicParams, err := secretParams.GetPublicParams()
+	if err != nil {
+		return fmt.Errorf("get public params: %w", err)
+	}
+
+	groupIdentifier, err := publicParams.GetGroupIdentifier()
+	if err != nil {
+		return fmt.Errorf("get group identifier: %w", err)
+	}
+
+	// Distribution ID is derived from the group - use first 16 bytes of GroupIdentifier
+	var distributionID [16]byte
+	copy(distributionID[:], groupIdentifier[:16])
+
+	// Build GroupContextV2 for the message
+	revision := uint32(group.Revision)
+	groupContext := &proto.GroupContextV2{
+		MasterKey: group.MasterKey,
+		Revision:  &revision,
+	}
+
+	// Build the DataMessage with group context
+	expireTimer := uint32(0)
+	requiredProtocolVersion := uint32(0)
+	expireTimerVersion := uint32(1)
+
+	dm := &proto.DataMessage{
+		Body:                    &text,
+		Timestamp:               &timestamp,
+		GroupV2:                 groupContext,
+		ExpireTimer:             &expireTimer,
+		RequiredProtocolVersion: &requiredProtocolVersion,
+		ExpireTimerVersion:      &expireTimerVersion,
+	}
+
+	if acct != nil && len(acct.ProfileKey) > 0 {
+		dm.ProfileKey = acct.ProfileKey
+	}
+
+	content := &proto.Content{
+		DataMessage: dm,
+	}
+
+	contentBytes, err := pb.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("marshal content: %w", err)
+	}
+
+	// Add Signal transport padding
+	paddedContent := padMessage(contentBytes)
+
+	// Create our local sender address
+	localAddr, err := libsignal.NewAddress(acct.ACI, uint32(acct.DeviceID))
+	if err != nil {
+		return fmt.Errorf("create local address: %w", err)
+	}
+	defer localAddr.Destroy()
+
+	// Get sender certificate for sealed sender
+	senderCertBytes, err := s.GetSenderCertificate(ctx)
+	if err != nil {
+		return fmt.Errorf("get sender certificate: %w", err)
+	}
+	senderCert, err := libsignal.DeserializeSenderCertificate(senderCertBytes)
+	if err != nil {
+		return fmt.Errorf("deserialize sender certificate: %w", err)
+	}
+	defer senderCert.Destroy()
+
+	// Filter out self from members
+	var recipients []string
+	for _, aci := range group.MemberACIs {
+		if aci != acct.ACI {
+			recipients = append(recipients, aci)
+		}
+	}
+
+	if len(recipients) == 0 {
+		return fmt.Errorf("no other members in group")
+	}
+
+	logf(s.logger, "group send: sending to %d members in group %s", len(recipients), group.Name)
+
+	// Step 1: Distribute sender keys to members who don't have them
+	// Create sender key distribution message
+	skdm, err := libsignal.CreateSenderKeyDistributionMessage(localAddr, distributionID, s.store)
+	if err != nil {
+		return fmt.Errorf("create sender key distribution message: %w", err)
+	}
+	defer skdm.Destroy()
+
+	skdmBytes, err := skdm.Serialize()
+	if err != nil {
+		return fmt.Errorf("serialize skdm: %w", err)
+	}
+
+	// Send SKDM to each member via regular encrypted message
+	// In production, we'd track who has received the SKDM and only send to new members
+	for _, recipient := range recipients {
+		if err := s.sendSenderKeyDistribution(ctx, recipient, skdmBytes, senderCert); err != nil {
+			logf(s.logger, "group send: failed to send SKDM to %s: %v (continuing)", recipient, err)
+			// Continue - they may already have our sender key from previous messages
+		} else {
+			logf(s.logger, "group send: sent SKDM to %s", recipient)
+		}
+	}
+
+	// Step 2: Encrypt the message once with sender key
+	senderKeyMsg, err := libsignal.GroupEncryptMessage(paddedContent, localAddr, distributionID, s.store)
+	if err != nil {
+		return fmt.Errorf("group encrypt: %w", err)
+	}
+	defer senderKeyMsg.Destroy()
+
+	senderKeyBytes, err := senderKeyMsg.Serialize()
+	if err != nil {
+		return fmt.Errorf("serialize sender key message: %w", err)
+	}
+
+	logf(s.logger, "group send: encrypted message with sender key (type 7)")
+
+	// Step 3: Wrap in sealed sender and send to each member
+	for _, recipient := range recipients {
+		if err := s.sendGroupSealedMessage(ctx, recipient, senderKeyBytes, senderCert, groupIdentifier[:]); err != nil {
+			logf(s.logger, "group send: failed to send to %s: %v", recipient, err)
+			return fmt.Errorf("send to %s: %w", recipient, err)
+		}
+		logf(s.logger, "group send: sent to %s", recipient)
+	}
+
+	logf(s.logger, "group send: successfully sent to all %d members", len(recipients))
+	return nil
+}
+
+// sendSenderKeyDistribution sends a sender key distribution message to a recipient
+// using a regular 1:1 encrypted message.
+func (s *Service) sendSenderKeyDistribution(ctx context.Context, recipient string, skdmBytes []byte, senderCert *libsignal.SenderCertificate) error {
+	// Build Content with SenderKeyDistributionMessage
+	content := &proto.Content{
+		SenderKeyDistributionMessage: skdmBytes,
+	}
+
+	contentBytes, err := pb.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("marshal content: %w", err)
+	}
+
+	// Get recipient's profile key for access key
+	contact, err := s.store.GetContactByACI(recipient)
+	if err != nil {
+		return fmt.Errorf("get contact: %w", err)
+	}
+
+	// If we have a profile key, use sealed sender; otherwise fall back to regular
+	if contact != nil && len(contact.ProfileKey) > 0 {
+		accessKey, err := DeriveAccessKey(contact.ProfileKey)
+		if err != nil {
+			return fmt.Errorf("derive access key: %w", err)
+		}
+		return s.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
+	}
+
+	// Fall back to regular encrypted message
+	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
+}
+
+// sendGroupSealedMessage wraps a sender key ciphertext in sealed sender and sends it.
+// This is different from regular sealed sender because the inner message is already
+// encrypted with sender key (type 7), not a session message.
+func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) error {
+	timestamp := uint64(time.Now().UnixMilli())
+
+	// Get recipient's profile key for access key
+	contact, err := s.store.GetContactByACI(recipient)
+	if err != nil {
+		return fmt.Errorf("get contact: %w", err)
+	}
+	if contact == nil || len(contact.ProfileKey) == 0 {
+		return fmt.Errorf("no profile key for recipient %s", recipient)
+	}
+
+	accessKey, err := DeriveAccessKey(contact.ProfileKey)
+	if err != nil {
+		return fmt.Errorf("derive access key: %w", err)
+	}
+
+	// Get recipient's devices
+	deviceIDs, _ := s.store.GetDevices(recipient)
+	if len(deviceIDs) == 0 {
+		deviceIDs = []int{1}
+	}
+
+	var messages []OutgoingMessage
+
+	for _, deviceID := range deviceIDs {
+		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
+		if err != nil {
+			return fmt.Errorf("create address: %w", err)
+		}
+
+		// Get registration ID for this device (do this before destroying addr)
+		registrationID := 0
+		session, err := s.store.LoadSession(addr)
+		if err == nil && session != nil {
+			regID, _ := session.RemoteRegistrationID()
+			session.Destroy()
+			registrationID = int(regID)
+		}
+
+		// Create USMC wrapping the sender key message
+		usmc, err := createSenderKeyUSMC(senderKeyBytes, senderCert, groupID)
+		if err != nil {
+			addr.Destroy()
+			return fmt.Errorf("create sender key USMC: %w", err)
+		}
+
+		// Seal the message
+		sealed, err := libsignal.SealedSenderEncrypt(addr, usmc, s.store)
+		usmc.Destroy()
+		addr.Destroy()
+		if err != nil {
+			return fmt.Errorf("seal: %w", err)
+		}
+
+		messages = append(messages, OutgoingMessage{
+			Type:                      proto.Envelope_UNIDENTIFIED_SENDER,
+			DestinationDeviceID:       deviceID,
+			DestinationRegistrationID: registrationID,
+			Content:                   base64.StdEncoding.EncodeToString(sealed),
+		})
+	}
+
+	msgList := &OutgoingMessageList{
+		Destination: recipient,
+		Timestamp:   timestamp,
+		Messages:    messages,
+		Urgent:      true,
+	}
+
+	return s.SendSealedMessage(ctx, recipient, msgList, accessKey)
+}
+
+// createSenderKeyUSMC creates an UnidentifiedSenderMessageContent for a sender key message.
+// Sender key messages (type 7) need to be wrapped in USMC differently than session messages.
+func createSenderKeyUSMC(senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) (*libsignal.UnidentifiedSenderMessageContent, error) {
+	// Use the type-aware constructor for sender key messages (type 7)
+	return libsignal.NewUnidentifiedSenderMessageContentFromType(
+		senderKeyBytes,
+		libsignal.CiphertextMessageTypeSenderKey,
+		senderCert,
+		libsignal.ContentHintResendable,
+		groupID,
+	)
+}
+
+// GetGroupByIdentifier looks up a group by its hex-encoded GroupIdentifier.
+func (s *Service) GetGroupByIdentifier(groupID string) (*store.Group, error) {
+	return s.store.GetGroup(groupID)
+}
+
+// parseGroupID converts a hex-encoded group ID to bytes.
+func parseGroupID(groupID string) ([]byte, error) {
+	return hex.DecodeString(groupID)
+}

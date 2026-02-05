@@ -41,6 +41,7 @@ type globalOpts struct {
 	DebugSealed    debugSealedCommand    `command:"debug-sealed" description:"Debug sealed sender decryption with detailed output"`
 	SafetyNumber   safetyNumberCommand   `command:"safety-number" description:"Compute safety number with a contact"`
 	Groups         groupsCommand         `command:"groups" description:"List known groups (use --sync to fetch from Storage Service)"`
+	SendGroup      sendGroupCommand      `command:"send-group" description:"Send a text message to a group"`
 }
 
 var opts globalOpts
