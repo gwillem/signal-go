@@ -1,6 +1,10 @@
 package signalservice
 
-import "github.com/gwillem/signal-go/internal/proto"
+import (
+	"fmt"
+
+	"github.com/gwillem/signal-go/internal/proto"
+)
 
 // BasicAuth holds credentials for HTTP Basic authentication.
 type BasicAuth struct {
@@ -203,4 +207,26 @@ type ProfileResponse struct {
 // SenderCertificateResponse is the JSON response from GET /v1/certificate/delivery.
 type SenderCertificateResponse struct {
 	Certificate string `json:"certificate"` // base64-encoded SenderCertificate protobuf
+}
+
+// StaleDevicesError is returned when the server responds with 410,
+// indicating that sessions for certain devices are outdated.
+// The caller should delete those sessions, re-fetch pre-keys, and retry.
+type StaleDevicesError struct {
+	StaleDevices []int
+}
+
+func (e *StaleDevicesError) Error() string {
+	return fmt.Sprintf("stale devices: %v", e.StaleDevices)
+}
+
+// MismatchedDevicesError is returned when the server responds with 409,
+// indicating device list mismatch (missing or extra devices).
+type MismatchedDevicesError struct {
+	MissingDevices []int `json:"missingDevices"`
+	ExtraDevices   []int `json:"extraDevices"`
+}
+
+func (e *MismatchedDevicesError) Error() string {
+	return fmt.Sprintf("mismatched devices: missing=%v extra=%v", e.MissingDevices, e.ExtraDevices)
 }

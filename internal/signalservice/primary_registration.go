@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"slices"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -66,13 +68,21 @@ func RegisterPrimary(
 	tlsConf *tls.Config,
 	logger *log.Logger,
 ) (*PrimaryRegistrationResult, error) {
-	httpClient := NewHTTPClient(apiURL, tlsConf, logger)
+	t := NewTransport(apiURL, tlsConf, logger)
 
-	// Step 1: Create verification session.
+	// Step 1: Create verification session (POST /v1/verification/session).
 	logf(logger, "creating verification session for %s", number)
-	session, err := httpClient.CreateVerificationSession(ctx, number)
+	sessionReq := &VerificationSessionRequest{Number: number}
+	respBody, status, err := t.PostJSON(ctx, "/v1/verification/session", sessionReq, nil)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: create session: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("primary registration: create session: status %d: %s", status, respBody)
+	}
+	var session VerificationSessionResponse
+	if err := json.Unmarshal(respBody, &session); err != nil {
+		return nil, fmt.Errorf("primary registration: unmarshal session: %w", err)
 	}
 	logf(logger, "session created: id=%s allowedToRequestCode=%v requestedInformation=%v",
 		session.ID, session.AllowedToRequestCode, session.RequestedInformation)
@@ -84,35 +94,56 @@ func RegisterPrimary(
 		if err != nil {
 			return nil, fmt.Errorf("primary registration: get captcha: %w", err)
 		}
-		session, err = httpClient.UpdateSession(ctx, session.ID, &UpdateSessionRequest{
+		// PATCH /v1/verification/session/{sessionId}
+		respBody, status, err = t.PatchJSON(ctx, "/v1/verification/session/"+session.ID, &UpdateSessionRequest{
 			Captcha: captchaToken,
-		})
+		}, nil)
 		if err != nil {
 			return nil, fmt.Errorf("primary registration: submit captcha: %w", err)
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("primary registration: submit captcha: status %d: %s", status, respBody)
+		}
+		if err := json.Unmarshal(respBody, &session); err != nil {
+			return nil, fmt.Errorf("primary registration: unmarshal session: %w", err)
 		}
 		logf(logger, "CAPTCHA submitted, session updated: allowedToRequestCode=%v", session.AllowedToRequestCode)
 	}
 
-	// Step 3: Request verification code.
+	// Step 3: Request verification code (POST /v1/verification/session/{sessionId}/code).
 	if !session.AllowedToRequestCode {
 		return nil, fmt.Errorf("primary registration: not allowed to request code (session: %+v)", session)
 	}
 	logf(logger, "requesting %s verification code", transport)
-	session, err = httpClient.RequestVerificationCode(ctx, session.ID, transport)
+	codeReq := &RequestVerificationCodeRequest{Transport: transport, Client: "android-2024-01"}
+	respBody, status, err = t.PostJSON(ctx, "/v1/verification/session/"+session.ID+"/code", codeReq, nil)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: request code: %w", err)
 	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("primary registration: request code: status %d: %s", status, respBody)
+	}
+	if err := json.Unmarshal(respBody, &session); err != nil {
+		return nil, fmt.Errorf("primary registration: unmarshal session: %w", err)
+	}
 	logf(logger, "verification code requested")
 
-	// Step 4: Get code from user and submit.
+	// Step 4: Get code from user and submit (PUT /v1/verification/session/{sessionId}/code).
 	code, err := getCode()
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: get code from user: %w", err)
 	}
 	logf(logger, "submitting verification code")
-	session, err = httpClient.SubmitVerificationCode(ctx, session.ID, code)
+	submitReq := &SubmitVerificationCodeRequest{Code: code}
+	respBody, status, err = t.PutJSON(ctx, "/v1/verification/session/"+session.ID+"/code", submitReq, nil)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: submit code: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("primary registration: submit code: status %d: %s", status, respBody)
+	}
+	if err := json.Unmarshal(respBody, &session); err != nil {
+		return nil, fmt.Errorf("primary registration: unmarshal session: %w", err)
 	}
 	if !session.Verified {
 		return nil, fmt.Errorf("primary registration: session not verified after code submission")
@@ -227,9 +258,17 @@ func RegisterPrimary(
 		SkipDeviceTransfer:    true,
 	}
 
-	regResp, err := httpClient.RegisterPrimaryDevice(ctx, regReq, regAuth)
+	// POST /v1/registration
+	respBody, status, err = t.PostJSON(ctx, "/v1/registration", regReq, &regAuth)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: register: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("primary registration: register: status %d: %s", status, respBody)
+	}
+	var regResp PrimaryRegistrationResponse
+	if err := json.Unmarshal(respBody, &regResp); err != nil {
+		return nil, fmt.Errorf("primary registration: unmarshal registration: %w", err)
 	}
 	logf(logger, "registered: aci=%s pni=%s number=%s", regResp.UUID, regResp.PNI, regResp.Number)
 
@@ -239,22 +278,30 @@ func RegisterPrimary(
 		Password: password,
 	}
 
+	// PUT /v2/keys?identity=aci
 	logf(logger, "uploading ACI pre-keys")
-	err = httpClient.UploadPreKeys(ctx, "aci", &PreKeyUpload{
+	respBody, status, err = t.PutJSON(ctx, "/v2/keys?identity=aci", &PreKeyUpload{
 		SignedPreKey:    aciSPK,
 		PqLastResortKey: aciKPK,
-	}, auth)
+	}, &auth)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: upload ACI keys: %w", err)
 	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return nil, fmt.Errorf("primary registration: upload ACI keys: status %d: %s", status, respBody)
+	}
 
+	// PUT /v2/keys?identity=pni
 	logf(logger, "uploading PNI pre-keys")
-	err = httpClient.UploadPreKeys(ctx, "pni", &PreKeyUpload{
+	respBody, status, err = t.PutJSON(ctx, "/v2/keys?identity=pni", &PreKeyUpload{
 		SignedPreKey:    pniSPK,
 		PqLastResortKey: pniKPK,
-	}, auth)
+	}, &auth)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: upload PNI keys: %w", err)
+	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return nil, fmt.Errorf("primary registration: upload PNI keys: status %d: %s", status, respBody)
 	}
 
 	// Serialize pre-key records for local storage.

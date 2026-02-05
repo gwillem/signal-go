@@ -8,7 +8,9 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/provisioncrypto"
@@ -120,7 +122,7 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 	password := generatePassword()
 
 	// Register device.
-	httpClient := NewHTTPClient(apiURL, tlsConf, nil)
+	transport := NewTransport(apiURL, tlsConf, nil)
 
 	regReq := &RegisterRequest{
 		VerificationCode: data.ProvisioningCode,
@@ -150,9 +152,17 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 		Password: password,
 	}
 
-	regResp, err := httpClient.RegisterSecondaryDevice(ctx, regReq, linkAuth)
+	// PUT /v1/devices/link
+	respBody, status, err := transport.PutJSON(ctx, "/v1/devices/link", regReq, &linkAuth)
 	if err != nil {
 		return nil, fmt.Errorf("registration: register device: %w", err)
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("registration: register device: status %d: %s", status, respBody)
+	}
+	var regResp RegisterResponse
+	if err := json.Unmarshal(respBody, &regResp); err != nil {
+		return nil, fmt.Errorf("registration: unmarshal response: %w", err)
 	}
 
 	// Auth for subsequent key uploads uses ACI.deviceID as username.
@@ -161,28 +171,37 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 		Password: password,
 	}
 
-	// Upload pre-keys for ACI.
-	err = httpClient.UploadPreKeys(ctx, "aci", &PreKeyUpload{
+	// Upload pre-keys for ACI (PUT /v2/keys?identity=aci).
+	respBody, status, err = transport.PutJSON(ctx, "/v2/keys?identity=aci", &PreKeyUpload{
 		SignedPreKey:    aciSPK,
 		PqLastResortKey: aciKPK,
-	}, auth)
+	}, &auth)
 	if err != nil {
 		return nil, fmt.Errorf("registration: upload ACI keys: %w", err)
 	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return nil, fmt.Errorf("registration: upload ACI keys: status %d: %s", status, respBody)
+	}
 
-	// Upload pre-keys for PNI.
-	err = httpClient.UploadPreKeys(ctx, "pni", &PreKeyUpload{
+	// Upload pre-keys for PNI (PUT /v2/keys?identity=pni).
+	respBody, status, err = transport.PutJSON(ctx, "/v2/keys?identity=pni", &PreKeyUpload{
 		SignedPreKey:    pniSPK,
 		PqLastResortKey: pniKPK,
-	}, auth)
+	}, &auth)
 	if err != nil {
 		return nil, fmt.Errorf("registration: upload PNI keys: %w", err)
 	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return nil, fmt.Errorf("registration: upload PNI keys: status %d: %s", status, respBody)
+	}
 
-	// Set account attributes (ensures unidentifiedAccessKey is set at account level).
-	err = httpClient.SetAccountAttributes(ctx, &regReq.AccountAttributes, auth)
+	// Set account attributes (PUT /v1/accounts/attributes/).
+	respBody, status, err = transport.PutJSON(ctx, "/v1/accounts/attributes/", &regReq.AccountAttributes, &auth)
 	if err != nil {
 		return nil, fmt.Errorf("registration: set account attributes: %w", err)
+	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return nil, fmt.Errorf("registration: set account attributes: status %d: %s", status, respBody)
 	}
 
 	// Serialize pre-key records for local storage.

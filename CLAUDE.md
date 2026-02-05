@@ -93,7 +93,7 @@ func logf(logger *log.Logger, format string, args ...any) {
 }
 ```
 
-When adding new functions that need logging, accept `logger *log.Logger` as a parameter and pass it through to `NewHTTPClient` and any callees. Logging is disabled by default (nil logger).
+When adding new functions that need logging, accept `logger *log.Logger` as a parameter and pass it through to `NewTransport` and any callees. Logging is disabled by default (nil logger).
 
 ## Key files
 
@@ -121,7 +121,7 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/provisioncrypto/devicename.go` | Device name encrypt/decrypt (DeviceNameCipher)                                                     |
 | `internal/signalws/persistent.go`        | PersistentConn: keep-alive heartbeats + automatic reconnection                                     |
 | `internal/signalservice/keygen.go`       | Pre-key set generation (signed EC + Kyber)                                                         |
-| `internal/signalservice/httpclient.go`   | HTTP client for Signal REST API (register, pre-keys, send)                                         |
+| `internal/signalservice/transport.go`    | HTTP transport layer: rate limiting, retry logic, JSON helpers (PutJSON, PostJSON, etc.)           |
 | `internal/signalservice/httptypes.go`    | JSON request/response types for all endpoints                                                      |
 | `internal/signalservice/registration.go` | RegisterLinkedDevice orchestration                                                                 |
 | `internal/signalservice/sender.go`       | SendTextMessage, padMessage: session establishment + transport padding + encryption + delivery     |

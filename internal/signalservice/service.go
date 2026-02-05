@@ -232,6 +232,15 @@ func (s *Service) GetSenderCertificate(ctx context.Context) ([]byte, error) {
 	return certBytes, nil
 }
 
+// decodeBase64 decodes a base64 string (with or without padding).
+func decodeBase64(s string) ([]byte, error) {
+	// Try standard base64 first, then raw (no padding)
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return b, nil
+	}
+	return base64.RawStdEncoding.DecodeString(s)
+}
+
 // --- Profile API ---
 
 // ProfileOptions configures which profile fields to update.

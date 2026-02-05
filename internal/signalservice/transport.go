@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -175,4 +176,45 @@ func (t *Transport) doAndRead(req *http.Request) ([]byte, int, error) {
 		return nil, resp.StatusCode, fmt.Errorf("transport: read response: %w", err)
 	}
 	return body, resp.StatusCode, nil
+}
+
+// GetJSON performs a GET request and unmarshals the response into result.
+func (t *Transport) GetJSON(ctx context.Context, path string, auth *BasicAuth, result any) (int, error) {
+	body, status, err := t.Get(ctx, path, auth)
+	if err != nil {
+		return status, err
+	}
+	if result != nil && len(body) > 0 {
+		if err := json.Unmarshal(body, result); err != nil {
+			return status, fmt.Errorf("transport: unmarshal response: %w", err)
+		}
+	}
+	return status, nil
+}
+
+// PutJSON performs a PUT request with JSON body and optional basic auth.
+func (t *Transport) PutJSON(ctx context.Context, path string, body any, auth *BasicAuth) ([]byte, int, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("transport: marshal request: %w", err)
+	}
+	return t.Put(ctx, path, data, auth)
+}
+
+// PostJSON performs a POST request with JSON body and optional basic auth.
+func (t *Transport) PostJSON(ctx context.Context, path string, body any, auth *BasicAuth) ([]byte, int, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("transport: marshal request: %w", err)
+	}
+	return t.Post(ctx, path, data, auth)
+}
+
+// PatchJSON performs a PATCH request with JSON body and optional basic auth.
+func (t *Transport) PatchJSON(ctx context.Context, path string, body any, auth *BasicAuth) ([]byte, int, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("transport: marshal request: %w", err)
+	}
+	return t.Patch(ctx, path, data, auth)
 }
