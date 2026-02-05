@@ -10,7 +10,8 @@ import (
 )
 
 type groupsCommand struct {
-	Sync bool `long:"sync" description:"Sync groups from Storage Service before listing"`
+	Sync  bool `long:"sync" description:"Sync groups from Storage Service before listing"`
+	Fetch bool `long:"fetch" description:"Fetch group details (names) from Groups V2 API"`
 }
 
 func (cmd *groupsCommand) Execute(args []string) error {
@@ -31,6 +32,15 @@ func (cmd *groupsCommand) Execute(args []string) error {
 			return fmt.Errorf("sync groups: %w", err)
 		}
 		fmt.Printf("Synced %d groups from Storage Service.\n\n", n)
+	}
+
+	if cmd.Fetch {
+		fmt.Println("Fetching group details from Groups V2 API...")
+		n, err := c.FetchGroupDetails(ctx)
+		if err != nil {
+			return fmt.Errorf("fetch group details: %w", err)
+		}
+		fmt.Printf("Updated %d groups with details.\n\n", n)
 	}
 
 	groups, err := c.Groups()

@@ -522,6 +522,16 @@ func (c *Client) SyncGroups(ctx context.Context) (int, error) {
 	return c.service.SyncGroupsFromStorage(ctx)
 }
 
+// FetchGroupDetails fetches details (name, members) for all groups that don't have names yet.
+// This uses the Groups V2 API which requires zkgroup auth credentials.
+// Returns the number of groups updated.
+func (c *Client) FetchGroupDetails(ctx context.Context) (int, error) {
+	if c.service == nil {
+		return 0, fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	return c.service.FetchAllGroupDetails(ctx)
+}
+
 // VerifyIdentityKey checks if the server has the same identity key as locally stored.
 // Returns (serverKey, localKey, match, error).
 func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []byte, match bool, err error) {
