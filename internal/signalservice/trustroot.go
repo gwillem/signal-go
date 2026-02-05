@@ -2,6 +2,7 @@ package signalservice
 
 import (
 	"encoding/base64"
+	"fmt"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 )
@@ -13,11 +14,19 @@ var sealedSenderTrustRoots = []string{
 	"BUkY0I+9+oPgDCn4+Ac6Iu813yvqkDr/ga8DzLxFxuk6",
 }
 
-// loadTrustRoot decodes and deserializes the primary sealed sender trust root public key.
-func loadTrustRoot() (*libsignal.PublicKey, error) {
-	raw, err := base64.StdEncoding.DecodeString(sealedSenderTrustRoots[0])
-	if err != nil {
-		return nil, err
+// loadTrustRoots decodes and deserializes all sealed sender trust root public keys.
+func loadTrustRoots() ([]*libsignal.PublicKey, error) {
+	roots := make([]*libsignal.PublicKey, 0, len(sealedSenderTrustRoots))
+	for i, b64 := range sealedSenderTrustRoots {
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return nil, fmt.Errorf("decode trust root %d: %w", i, err)
+		}
+		key, err := libsignal.DeserializePublicKey(raw)
+		if err != nil {
+			return nil, fmt.Errorf("deserialize trust root %d: %w", i, err)
+		}
+		roots = append(roots, key)
 	}
-	return libsignal.DeserializePublicKey(raw)
+	return roots, nil
 }

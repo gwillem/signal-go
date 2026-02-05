@@ -194,32 +194,10 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		}
 
 		// Step 1: Decrypt outer sealed sender layer → USMC (uses only identity key for ECDH).
-		// Try ACI identity first, then PNI identity as fallback.
-		// The sender may have encrypted for either identity depending on how they discovered us.
+		// The identity is already selected based on envelope destination (lines 148-155).
 		usmc, err := libsignal.SealedSenderDecryptToUSMC(content, st)
 		if err != nil {
-			logf(logger, "sealed sender: ACI identity failed: %v", err)
-			logf(logger, "sealed sender: trying PNI identity as fallback...")
-
-			// Try PNI identity
-			st.UsePNI(true)
-			if pniKey, pniErr := st.GetIdentityKeyPair(); pniErr == nil {
-				if pub, pubErr := pniKey.PublicKey(); pubErr == nil {
-					if data, serErr := pub.Serialize(); serErr == nil && len(data) >= 8 {
-						logf(logger, "sealed sender: trying PNI identity key fingerprint=%x", data[:8])
-					}
-					pub.Destroy()
-				}
-				pniKey.Destroy()
-			}
-
-			usmc, err = libsignal.SealedSenderDecryptToUSMC(content, st)
-			st.UsePNI(false)
-
-			if err != nil {
-				return nil, fmt.Errorf("sealed sender decrypt outer failed with both ACI and PNI identities: %w", err)
-			}
-			logf(logger, "sealed sender: PNI identity succeeded!")
+			return nil, fmt.Errorf("sealed sender decrypt outer: %w", err)
 		}
 		defer usmc.Destroy()
 
@@ -230,13 +208,15 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		}
 		defer cert.Destroy()
 
-		trustRoot, err := loadTrustRoot()
+		trustRoots, err := loadTrustRoots()
 		if err != nil {
-			return nil, fmt.Errorf("load trust root: %w", err)
+			return nil, fmt.Errorf("load trust roots: %w", err)
 		}
-		defer trustRoot.Destroy()
+		for _, root := range trustRoots {
+			defer root.Destroy()
+		}
 
-		valid, err := cert.Validate(trustRoot, env.GetServerTimestamp())
+		valid, err := cert.ValidateWithTrustRoots(trustRoots, env.GetServerTimestamp())
 		if err != nil {
 			return nil, fmt.Errorf("sealed sender validate cert: %w", err)
 		}

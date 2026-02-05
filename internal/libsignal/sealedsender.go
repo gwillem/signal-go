@@ -97,13 +97,26 @@ func (sc *SenderCertificate) DeviceID() (uint32, error) {
 
 // Validate checks the certificate against a trust root and timestamp.
 func (sc *SenderCertificate) Validate(trustRoot *PublicKey, timestamp uint64) (bool, error) {
+	return sc.ValidateWithTrustRoots([]*PublicKey{trustRoot}, timestamp)
+}
+
+// ValidateWithTrustRoots checks the certificate against multiple trust roots and timestamp.
+// Returns true if any of the trust roots validates the certificate.
+func (sc *SenderCertificate) ValidateWithTrustRoots(trustRoots []*PublicKey, timestamp uint64) (bool, error) {
+	if len(trustRoots) == 0 {
+		return false, nil
+	}
 	var out C.bool
 	cCert := C.SignalConstPointerSenderCertificate{raw: sc.ptr}
-	// v0.87.0 changed to take a slice of trust roots
-	cKey := C.SignalConstPointerPublicKey{raw: trustRoot.ptr}
+
+	// Build slice of trust root pointers
+	cKeys := make([]C.SignalConstPointerPublicKey, len(trustRoots))
+	for i, root := range trustRoots {
+		cKeys[i] = C.SignalConstPointerPublicKey{raw: root.ptr}
+	}
 	cTrustRoots := C.SignalBorrowedSliceOfConstPointerPublicKey{
-		base:   &cKey,
-		length: 1,
+		base:   &cKeys[0],
+		length: C.size_t(len(cKeys)),
 	}
 	if err := wrapError(C.signal_sender_certificate_validate(&out, cCert, cTrustRoots, C.uint64_t(timestamp))); err != nil {
 		return false, err
