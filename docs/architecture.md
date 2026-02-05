@@ -5,9 +5,10 @@ Go library for Signal messenger. Replaces signal-cli (Java) dependency with a pu
 ## Goal
 
 Remove the JVM dependency from signalbot. Provide a Go library that can:
-1. Link to an existing Signal account as secondary device
-2. Send text messages (1:1 and group)
-3. Receive text messages
+1. Register a new Signal account as primary device (SMS verification)
+2. Link to an existing Signal account as secondary device
+3. Send text messages (1:1 and group)
+4. Receive text messages
 
 ## Public API
 
@@ -39,7 +40,6 @@ err = client.SyncContacts(ctx)
 - Attachments (beyond contact sync blobs), reactions, read receipts, typing indicators
 - Group v2 management (create, invite, admin)
 - Profile updates
-- Registration as primary device
 - Stories, calls, stickers
 - Desktop/multi-platform UI
 
@@ -49,6 +49,7 @@ err = client.SyncContacts(ctx)
 ┌─────────────────────────────────────────────┐
 │  cmd/sgnl                (CLI app)          │
 │  - sgnl link: link as secondary device      │
+│  - sgnl register: register as primary device│
 │  - sgnl send: send text messages            │
 │  - sgnl receive: receive + decrypt messages │
 │  - sgnl sync-contacts: contact sync         │
@@ -121,7 +122,7 @@ signal-go/
 ├── CLAUDE.md                       # Development instructions
 ├── client.go                       # Public API — Client, Link, Load, Send, Receive, SyncContacts
 ├── internal/
-│   ├── libsignal/                  # CGO bindings — COMPLETE (Phase 1)
+│   ├── libsignal/                  # CGO bindings — COMPLETE (Task 01)
 │   │   ├── libsignal-ffi.h        # Generated C header (gitignored)
 │   │   ├── libsignal.go           # CGO preamble, LDFLAGS
 │   │   ├── error.go               # FFI error wrapping + buffer helpers
@@ -185,9 +186,9 @@ signal-go/
 
 ## Dependencies
 
-Phase 1 has zero external Go dependencies (CGO only).
+Task 01 has zero external Go dependencies (CGO only).
 
-Phase 2 adds:
+Task 02 adds:
 
 | Dependency | Purpose |
 |---|---|

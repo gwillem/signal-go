@@ -1,4 +1,6 @@
-# Phase 6: Primary Device Registration
+# Task 06: Primary Device Registration
+
+## Status: Complete ✅
 
 ## Goal
 
@@ -7,8 +9,8 @@ Implement `sgnl register +NNNNNN` to register a new Signal account as a primary 
 ## Background
 
 Currently signal-go only supports linking as a secondary device (`sgnl link`). Primary device registration is a separate flow that:
+
 - Generates identity keys locally (instead of receiving them via provisioning)
-- Uses SMS/voice verification (instead of QR code provisioning)
 - Registers via `POST /v1/registration` (instead of `PUT /v1/devices/link`)
 
 ## Registration Flow
@@ -220,6 +222,7 @@ func (cmd *registerCommand) Execute(args []string) error {
 **File: `cmd/sgnl/main.go`**
 
 Add to globalOpts:
+
 ```go
 Register registerCommand `command:"register" description:"Register a new Signal account (primary device)"`
 ```
@@ -236,25 +239,25 @@ func (c *Client) Register(ctx context.Context, number string, getCode func() (st
 
 ## Key Differences from Secondary Device
 
-| Aspect | Primary (new) | Secondary (existing) |
-|--------|---------------|----------------------|
-| Identity keys | Generated locally | Received via provisioning |
-| Verification | SMS/voice + CAPTCHA | QR code scan |
-| Endpoint | `POST /v1/registration` | `PUT /v1/devices/link` |
-| Device ID | Always 1 | Assigned by server (2+) |
-| Auth | None initially | Basic auth after linking |
+| Aspect        | Primary (new)           | Secondary (existing)      |
+| ------------- | ----------------------- | ------------------------- |
+| Identity keys | Generated locally       | Received via provisioning |
+| Verification  | SMS/voice + CAPTCHA     | QR code scan              |
+| Endpoint      | `POST /v1/registration` | `PUT /v1/devices/link`    |
+| Device ID     | Always 1                | Assigned by server (2+)   |
+| Auth          | None initially          | Basic auth after linking  |
 
 ## Files to Create/Modify
 
-| File | Action | Description | Status |
-|------|--------|-------------|--------|
-| `internal/signalservice/httptypes.go` | Modify | Add verification session types | Done |
-| `internal/signalservice/httpclient.go` | Modify | Add verification/registration endpoints | Done |
-| `internal/signalservice/httpclient_test.go` | Modify | Add tests for new endpoints | Done |
-| `internal/signalservice/primary_registration.go` | Create | Registration orchestration | Done |
-| `cmd/sgnl/register.go` | Create | CLI command | Done |
-| `cmd/sgnl/main.go` | Modify | Add register command | Done |
-| `client.go` | Modify | Add Register() method | Done |
+| File                                             | Action | Description                             | Status |
+| ------------------------------------------------ | ------ | --------------------------------------- | ------ |
+| `internal/signalservice/httptypes.go`            | Modify | Add verification session types          | Done   |
+| `internal/signalservice/httpclient.go`           | Modify | Add verification/registration endpoints | Done   |
+| `internal/signalservice/httpclient_test.go`      | Modify | Add tests for new endpoints             | Done   |
+| `internal/signalservice/primary_registration.go` | Create | Registration orchestration              | Done   |
+| `cmd/sgnl/register.go`                           | Create | CLI command                             | Done   |
+| `cmd/sgnl/main.go`                               | Modify | Add register command                    | Done   |
+| `client.go`                                      | Modify | Add Register() method                   | Done   |
 
 ## Testing
 
@@ -284,13 +287,13 @@ go run ./cmd/sgnl -v receive
 
 ## Error Handling
 
-| Error | Cause | Resolution |
-|-------|-------|------------|
-| 400 Bad Request | Invalid phone number format | Validate E.164 format |
-| 402 Payment Required | CAPTCHA required | Prompt user for CAPTCHA token |
-| 409 Conflict | Number already registered | Offer re-registration option |
-| 429 Too Many Requests | Rate limited | Wait and retry (use Retry-After header) |
-| 440 Unprocessable | Session expired | Start new session |
+| Error                 | Cause                       | Resolution                              |
+| --------------------- | --------------------------- | --------------------------------------- |
+| 400 Bad Request       | Invalid phone number format | Validate E.164 format                   |
+| 402 Payment Required  | CAPTCHA required            | Prompt user for CAPTCHA token           |
+| 409 Conflict          | Number already registered   | Offer re-registration option            |
+| 429 Too Many Requests | Rate limited                | Wait and retry (use Retry-After header) |
+| 440 Unprocessable     | Session expired             | Start new session                       |
 
 ## CAPTCHA Handling
 
