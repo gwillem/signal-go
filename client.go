@@ -73,6 +73,48 @@ func (c *Client) auth() signalservice.BasicAuth {
 	}
 }
 
+// storeSignedPreKeyFromBytes deserializes and stores a signed pre-key.
+func (c *Client) storeSignedPreKeyFromBytes(data []byte, label string) error {
+	if len(data) == 0 {
+		return nil
+	}
+	rec, err := libsignal.DeserializeSignedPreKeyRecord(data)
+	if err != nil {
+		return fmt.Errorf("deserialize %s signed pre-key: %w", label, err)
+	}
+	id, err := rec.ID()
+	if err != nil {
+		rec.Destroy()
+		return fmt.Errorf("%s signed pre-key ID: %w", label, err)
+	}
+	if err := c.store.StoreSignedPreKey(id, rec); err != nil {
+		rec.Destroy()
+		return fmt.Errorf("store %s signed pre-key: %w", label, err)
+	}
+	return nil
+}
+
+// storeKyberPreKeyFromBytes deserializes and stores a Kyber pre-key.
+func (c *Client) storeKyberPreKeyFromBytes(data []byte, label string) error {
+	if len(data) == 0 {
+		return nil
+	}
+	rec, err := libsignal.DeserializeKyberPreKeyRecord(data)
+	if err != nil {
+		return fmt.Errorf("deserialize %s Kyber pre-key: %w", label, err)
+	}
+	id, err := rec.ID()
+	if err != nil {
+		rec.Destroy()
+		return fmt.Errorf("%s Kyber pre-key ID: %w", label, err)
+	}
+	if err := c.store.StoreKyberPreKey(id, rec); err != nil {
+		rec.Destroy()
+		return fmt.Errorf("store %s Kyber pre-key: %w", label, err)
+	}
+	return nil
+}
+
 // Option configures a Client.
 type Option func(*Client)
 
@@ -132,13 +174,13 @@ func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 	cb := &linkCallbacks{onQR: onQR}
 	result, err := signalservice.RunProvisioning(ctx, c.provisioningURL, cb, c.tlsConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("client: provisioning: %w", err)
 	}
 	c.data = result.Data
 
 	reg, err := signalservice.RegisterLinkedDevice(ctx, c.apiURL, result.Data, "signal-go", c.tlsConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("client: register device: %w", err)
 	}
 
 	c.deviceID = reg.DeviceID
@@ -181,7 +223,7 @@ func (c *Client) Register(
 ) error {
 	reg, err := signalservice.RegisterPrimary(ctx, c.apiURL, number, transport, getCode, getCaptcha, c.tlsConfig, c.logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("client: register: %w", err)
 	}
 
 	c.deviceID = reg.DeviceID
@@ -225,82 +267,23 @@ func (c *Client) Register(
 		ProfileKey:            signalservice.GenerateProfileKey(),
 	}
 	if err := c.store.SaveAccount(acct); err != nil {
-		return err
+		return fmt.Errorf("client: save account: %w", err)
 	}
 	c.initService()
 	return nil
 }
 
 func (c *Client) storePrimaryPreKeys(reg *signalservice.PrimaryRegistrationResult) error {
-	// Store ACI signed pre-key.
-	if len(reg.ACISignedPreKey) > 0 {
-		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.ACISignedPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize ACI signed pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("ACI signed pre-key ID: %w", err)
-		}
-		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store ACI signed pre-key: %w", err)
-		}
+	if err := c.storeSignedPreKeyFromBytes(reg.ACISignedPreKey, "ACI"); err != nil {
+		return err
 	}
-
-	// Store ACI Kyber pre-key.
-	if len(reg.ACIKyberPreKey) > 0 {
-		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.ACIKyberPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize ACI Kyber pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("ACI Kyber pre-key ID: %w", err)
-		}
-		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store ACI Kyber pre-key: %w", err)
-		}
+	if err := c.storeKyberPreKeyFromBytes(reg.ACIKyberPreKey, "ACI"); err != nil {
+		return err
 	}
-
-	// Store PNI signed pre-key.
-	if len(reg.PNISignedPreKey) > 0 {
-		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.PNISignedPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize PNI signed pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("PNI signed pre-key ID: %w", err)
-		}
-		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store PNI signed pre-key: %w", err)
-		}
+	if err := c.storeSignedPreKeyFromBytes(reg.PNISignedPreKey, "PNI"); err != nil {
+		return err
 	}
-
-	// Store PNI Kyber pre-key.
-	if len(reg.PNIKyberPreKey) > 0 {
-		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.PNIKyberPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize PNI Kyber pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("PNI Kyber pre-key ID: %w", err)
-		}
-		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store PNI Kyber pre-key: %w", err)
-		}
-	}
-
-	return nil
+	return c.storeKyberPreKeyFromBytes(reg.PNIKyberPreKey, "PNI")
 }
 
 // Load opens an existing database and loads credentials without re-linking.
@@ -749,75 +732,16 @@ func (c *Client) RefreshPreKeys(ctx context.Context) error {
 }
 
 func (c *Client) storePreKeys(reg *signalservice.RegistrationResult) error {
-	// Store ACI signed pre-key.
-	if len(reg.ACISignedPreKey) > 0 {
-		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.ACISignedPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize ACI signed pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("ACI signed pre-key ID: %w", err)
-		}
-		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store ACI signed pre-key: %w", err)
-		}
+	if err := c.storeSignedPreKeyFromBytes(reg.ACISignedPreKey, "ACI"); err != nil {
+		return err
 	}
-
-	// Store ACI Kyber pre-key.
-	if len(reg.ACIKyberPreKey) > 0 {
-		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.ACIKyberPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize ACI Kyber pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("ACI Kyber pre-key ID: %w", err)
-		}
-		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store ACI Kyber pre-key: %w", err)
-		}
+	if err := c.storeKyberPreKeyFromBytes(reg.ACIKyberPreKey, "ACI"); err != nil {
+		return err
 	}
-
-	// Store PNI signed pre-key (uses offset ID to avoid colliding with ACI).
-	if len(reg.PNISignedPreKey) > 0 {
-		rec, err := libsignal.DeserializeSignedPreKeyRecord(reg.PNISignedPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize PNI signed pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("PNI signed pre-key ID: %w", err)
-		}
-		if err := c.store.StoreSignedPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store PNI signed pre-key: %w", err)
-		}
+	if err := c.storeSignedPreKeyFromBytes(reg.PNISignedPreKey, "PNI"); err != nil {
+		return err
 	}
-
-	// Store PNI Kyber pre-key (uses offset ID to avoid colliding with ACI).
-	if len(reg.PNIKyberPreKey) > 0 {
-		rec, err := libsignal.DeserializeKyberPreKeyRecord(reg.PNIKyberPreKey)
-		if err != nil {
-			return fmt.Errorf("deserialize PNI Kyber pre-key: %w", err)
-		}
-		id, err := rec.ID()
-		if err != nil {
-			rec.Destroy()
-			return fmt.Errorf("PNI Kyber pre-key ID: %w", err)
-		}
-		if err := c.store.StoreKyberPreKey(id, rec); err != nil {
-			rec.Destroy()
-			return fmt.Errorf("store PNI Kyber pre-key: %w", err)
-		}
-	}
-
-	return nil
+	return c.storeKyberPreKeyFromBytes(reg.PNIKyberPreKey, "PNI")
 }
 
 // Store returns the underlying store, or nil if not yet opened.
@@ -840,7 +764,7 @@ func (c *Client) openStore() error {
 
 	s, err := store.Open(dbPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open store %s: %w", dbPath, err)
 	}
 	c.store = s
 	return nil
@@ -871,7 +795,7 @@ func (c *Client) saveAccount() error {
 	}
 
 	if err := c.store.SaveAccount(acct); err != nil {
-		return err
+		return fmt.Errorf("save account: %w", err)
 	}
 	c.initService()
 	return nil

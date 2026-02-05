@@ -16,6 +16,7 @@
 - [ ] Simplify SendTextMessage gigantic signature
 - [ ] logf > c.logf
 - [ ] speed up tests
+- [ ] un-wrap methods for sending and receiving and tie them to the service struct
 
 ## Completed
 

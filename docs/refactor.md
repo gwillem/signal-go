@@ -6,13 +6,10 @@ This document identifies opportunities for improving the signal-go codebase base
 
 ### High Priority
 
-#### 1.1 Pre-Key Storage Pattern (client.go:202-272 and 765-835)
-`storePreKeys()` and `storePrimaryPreKeys()` contain ~68 lines of nearly identical code for deserializing and storing ACI/PNI signed and Kyber pre-keys.
+#### 1.1 Pre-Key Storage Pattern (client.go:202-272 and 765-835) ✅ FIXED
+~~`storePreKeys()` and `storePrimaryPreKeys()` contain ~68 lines of nearly identical code for deserializing and storing ACI/PNI signed and Kyber pre-keys.~~
 
-**Suggestion:** Extract a generic helper:
-```go
-func (c *Client) storePreKeyRecord(data []byte, keyType PreKeyType, isPNI bool) error
-```
+**Fixed:** Extracted `storeSignedPreKeyFromBytes()` and `storeKyberPreKeyFromBytes()` helpers. Both functions now use these helpers, reducing ~68 lines to ~20 lines.
 
 #### 1.2 HTTP Request Boilerplate (httpclient.go - 13+ occurrences)
 Every HTTP method repeats: create request, set headers, set auth, do request, read body, check status.
@@ -48,14 +45,10 @@ Repeated base64 decode + cipher decrypt for Name, About, Emoji fields.
 
 ## 2. Inconsistent Behavior
 
-### 2.1 Error Wrapping
-~30% of errors returned raw without context wrapping.
+### 2.1 Error Wrapping ✅ FIXED
+~~~30% of errors returned raw without context wrapping.~~
 
-**Files affected:**
-- client.go:156, 371, 538, 551 - raw `return err`
-- Most functions use `fmt.Errorf("context: %w", err)` (good)
-
-**Fix:** Wrap all errors with context using `fmt.Errorf`.
+**Fixed:** Wrapped errors in `Link()`, `Register()`, `openStore()`, `saveAccount()` with descriptive context. Remaining pass-through errors in pre-key storage are intentionally not double-wrapped (helpers already provide context).
 
 ### 2.2 SQL Error Detection (CRITICAL) ✅ FIXED
 ~~String comparison `err.Error() == "sql: no rows in result set"` instead of `errors.Is(err, sql.ErrNoRows)`.~~
@@ -234,9 +227,9 @@ Traditional `wg.Add(1); go func() { defer wg.Done(); ... }()` pattern used inste
 1. ✅ SQL error handling (`errors.Is`) - quick win, prevents bugs - **DONE**
 2. ✅ Nil checks after `LoadAccount()` - prevents panics - **DONE**
 3. ✅ Replace custom `bytesEqual` with `bytes.Equal` - **DONE**
-4. Test coverage for `profilecipher.go` - security critical
+4. ✅ Test coverage for `profilecipher.go` - security critical - **DONE**
 5. ✅ Extract `auth()` helper - reduces 10 duplicates - **DONE**
 6. HTTP request helper - reduces ~200 lines
-7. Pre-key storage consolidation - reduces ~70 lines
-8. Standardize error wrapping
+7. ✅ Pre-key storage consolidation - reduces ~70 lines - **DONE**
+8. ✅ Standardize error wrapping - **DONE**
 9. Add remaining unit tests
