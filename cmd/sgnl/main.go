@@ -40,6 +40,7 @@ type globalOpts struct {
 	AnalyzeSealed  analyzeSealedCommand  `command:"analyze-sealed" description:"Analyze a captured sealed sender envelope (debug)"`
 	DebugSealed    debugSealedCommand    `command:"debug-sealed" description:"Debug sealed sender decryption with detailed output"`
 	SafetyNumber   safetyNumberCommand   `command:"safety-number" description:"Compute safety number with a contact"`
+	Groups         groupsCommand         `command:"groups" description:"List known groups (use --sync to fetch from Storage Service)"`
 }
 
 var opts globalOpts

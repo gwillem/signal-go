@@ -133,7 +133,7 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/signalservice/attachment.go`   | DownloadAttachment, DecryptAttachment: CDN download + AES-CBC decryption                           |
 | `internal/signalservice/contactsync.go`  | ParseContactStream, RequestContactSync: contact sync request + response parsing                    |
 | `internal/signalservice/storage.go`      | SyncGroupsFromStorage: Storage Service client for group discovery                                  |
-| `internal/signalservice/storagekeys.go`  | StorageKey, ManifestKey, ItemKey: key derivation for Storage Service encryption                    |
+| `internal/signalservice/storagekeys.go`  | StorageKey, ManifestKey, ItemKey, RecordIkm: key derivation for Storage Service encryption         |
 | `internal/signalservice/storagecrypto.go`| AES-256-GCM decryption for Storage Service records                                                 |
 | `internal/signalservice/trustroot.go`    | Signal sealed sender trust root public keys                                                        |
 | `internal/libsignal/decryptionerror.go`  | DecryptionErrorMessage: CGO bindings for retry receipts                                            |
@@ -146,3 +146,4 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/store/senderkey.go`            | SenderKeyStore implementation for group messaging                                                  |
 | `internal/store/contact.go`              | Contact CRUD: SaveContact, GetContactByACI, SaveContacts (bulk upsert)                             |
 | `internal/store/group.go`                | Group CRUD: SaveGroup, GetGroup, GetAllGroups, GetGroupByMasterKey                                 |
+| `cmd/sgnl/groups.go`                     | CLI: list groups, sync from Storage Service                                                        |

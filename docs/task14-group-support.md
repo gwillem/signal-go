@@ -1,6 +1,6 @@
 # Task 14: Full Group Support (Storage Service + Groups V2)
 
-## Status: In Progress (Foundation Complete)
+## Status: In Progress (Storage Service Sync Complete)
 
 ## Goal
 
@@ -28,8 +28,9 @@ Signal groups (V2) use a complex architecture:
 | Group storage (SQLite) | **Done** (master key, name, revision) |
 | Extract group info from received messages | **Done** (populateGroupInfo in receiver.go) |
 | Public API (Groups, GetGroup, SyncGroups) | **Done** |
-| Storage Service sync | **Done** (Phase 1 complete) |
-| Groups V2 API | Not implemented |
+| Storage Service sync | **Done** (Phase 1 complete, uses RecordIkm key derivation) |
+| CLI `sgnl groups` command | **Done** (list groups, --sync flag) |
+| Groups V2 API (fetch group details) | Not implemented |
 | Send to groups | Not implemented |
 
 ### Implemented Files
@@ -43,6 +44,7 @@ Signal groups (V2) use a complex architecture:
 - `internal/signalservice/storage.go` - Storage Service client (SyncGroupsFromStorage)
 - `internal/proto/StorageService.proto` - Storage Service protobuf definitions
 - `client.go` - Groups(), GetGroup(), SyncGroups() public API methods
+- `cmd/sgnl/groups.go` - CLI command for listing and syncing groups
 
 ## Architecture Overview
 

@@ -1,6 +1,7 @@
 package signalservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"github.com/gwillem/signal-go/internal/store"
 	gproto "google.golang.org/protobuf/proto"
 )
+
+const storageServiceURL = "https://storage.signal.org"
 
 // StorageAuthResponse is the response from GET /v1/storage/auth
 type StorageAuthResponse struct {
@@ -52,7 +55,8 @@ func (s *Service) SyncGroupsFromStorage(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("get manifest: %w", err)
 	}
 
-	logf(s.logger, "storage manifest version=%d, %d identifiers", manifest.Version, len(manifest.Identifiers))
+	logf(s.logger, "storage manifest version=%d, %d identifiers, recordIkm=%d bytes",
+		manifest.Version, len(manifest.Identifiers), len(manifest.RecordIkm))
 
 	// Find GroupV2 record IDs
 	var groupIDs [][]byte
@@ -69,8 +73,12 @@ func (s *Service) SyncGroupsFromStorage(ctx context.Context) (int, error) {
 
 	logf(s.logger, "found %d GroupV2 records to fetch", len(groupIDs))
 
-	// Read storage records
-	groups, err := s.readGroupRecords(ctx, auth, storageKey, groupIDs)
+	// Read storage records (use recordIkm from manifest if present)
+	var recordIkm RecordIkm
+	if len(manifest.RecordIkm) > 0 {
+		recordIkm = RecordIkm(manifest.RecordIkm)
+	}
+	groups, err := s.readGroupRecords(ctx, auth, storageKey, recordIkm, groupIDs)
 	if err != nil {
 		return 0, fmt.Errorf("read group records: %w", err)
 	}
@@ -117,18 +125,19 @@ func (s *Service) getStorageAuth(ctx context.Context) (*StorageAuthResponse, err
 
 // getStorageManifest fetches and decrypts the storage manifest.
 func (s *Service) getStorageManifest(ctx context.Context, auth *StorageAuthResponse, storageKey StorageKey) (*proto.ManifestRecord, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", s.transport.baseURL+"/v1/storage/manifest", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", storageServiceURL+"/v1/storage/manifest", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.SetBasicAuth(auth.Username, auth.Password)
 	req.Header.Set("Accept", "application/x-protobuf")
 
-	resp, err := s.transport.Do(req)
+	resp, err := s.storageHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	logf(s.logger, "http GET %s → %d", req.URL.Path, resp.StatusCode)
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("no storage manifest found (404)")
@@ -166,7 +175,7 @@ func (s *Service) getStorageManifest(ctx context.Context, auth *StorageAuthRespo
 }
 
 // readGroupRecords fetches and decrypts GroupV2 records from storage.
-func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthResponse, storageKey StorageKey, recordIDs [][]byte) ([]*store.Group, error) {
+func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthResponse, storageKey StorageKey, recordIkm RecordIkm, recordIDs [][]byte) ([]*store.Group, error) {
 	// Build read operation
 	readOp := &proto.ReadOperation{
 		ReadKey: recordIDs,
@@ -176,7 +185,7 @@ func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthRespons
 		return nil, fmt.Errorf("marshal read operation: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", s.transport.baseURL+"/v1/storage/read", newBytesReader(body))
+	req, err := http.NewRequestWithContext(ctx, "PUT", storageServiceURL+"/v1/storage/read", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -184,11 +193,12 @@ func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthRespons
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Accept", "application/x-protobuf")
 
-	resp, err := s.transport.Do(req)
+	resp, err := s.storageHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	logf(s.logger, "http PUT %s → %d", req.URL.Path, resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("read storage items failed: %s", resp.Status)
@@ -206,7 +216,7 @@ func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthRespons
 
 	var groups []*store.Group
 	for _, item := range items.Items {
-		g, err := s.decryptGroupRecord(storageKey, item)
+		g, err := s.decryptGroupRecord(storageKey, recordIkm, item)
 		if err != nil {
 			logf(s.logger, "failed to decrypt group record: %v", err)
 			continue
@@ -220,9 +230,18 @@ func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthRespons
 }
 
 // decryptGroupRecord decrypts a single storage item and extracts the GroupV2Record.
-func (s *Service) decryptGroupRecord(storageKey StorageKey, item *proto.StorageItem) (*store.Group, error) {
-	// Derive item key from the raw ID
-	itemKey := storageKey.DeriveItemKey(item.Key)
+func (s *Service) decryptGroupRecord(storageKey StorageKey, recordIkm RecordIkm, item *proto.StorageItem) (*store.Group, error) {
+	// Derive item key - use recordIkm if present (new method), otherwise fallback to storageKey (legacy)
+	var itemKey StorageItemKey
+	if len(recordIkm) > 0 {
+		var err error
+		itemKey, err = recordIkm.DeriveItemKey(item.Key)
+		if err != nil {
+			return nil, fmt.Errorf("derive item key from recordIkm: %w", err)
+		}
+	} else {
+		itemKey = storageKey.DeriveItemKey(item.Key)
+	}
 
 	// Decrypt the item value
 	plaintext, err := DecryptStorageItem(itemKey, item.Value)
@@ -262,21 +281,11 @@ func (s *Service) decryptGroupRecord(storageKey StorageKey, item *proto.StorageI
 	}, nil
 }
 
-// newBytesReader creates an io.Reader from a byte slice.
-func newBytesReader(data []byte) *bytesReaderType {
-	return &bytesReaderType{data: data}
-}
-
-type bytesReaderType struct {
-	data []byte
-	off  int
-}
-
-func (r *bytesReaderType) Read(p []byte) (n int, err error) {
-	if r.off >= len(r.data) {
-		return 0, io.EOF
+// storageHTTPClient returns an HTTP client configured for the storage service.
+func (s *Service) storageHTTPClient() *http.Client {
+	client := &http.Client{}
+	if s.tlsConfig != nil {
+		client.Transport = &http.Transport{TLSClientConfig: s.tlsConfig}
 	}
-	n = copy(p, r.data[r.off:])
-	r.off += n
-	return n, nil
+	return client
 }
