@@ -17,6 +17,7 @@ import (
 const (
 	cdnBaseURL  = "https://cdn.signal.org"
 	cdn2BaseURL = "https://cdn2.signal.org"
+	cdn3BaseURL = "https://cdn3.signal.org"
 )
 
 // DecryptAttachment decrypts a Signal attachment.
@@ -123,15 +124,20 @@ func DownloadAttachment(ctx context.Context, ptr *proto.AttachmentPointer, tlsCo
 func attachmentURL(ptr *proto.AttachmentPointer) (string, error) {
 	cdnNumber := ptr.GetCdnNumber()
 
+	// Select CDN base URL
+	base := cdnBaseURL
+	switch cdnNumber {
+	case 2:
+		base = cdn2BaseURL
+	case 3:
+		base = cdn3BaseURL
+	}
+
 	switch {
 	case ptr.GetCdnKey() != "":
-		base := cdn2BaseURL
-		if cdnNumber == 0 {
-			base = cdnBaseURL
-		}
 		return fmt.Sprintf("%s/attachments/%s", base, ptr.GetCdnKey()), nil
 	case ptr.GetCdnId() != 0:
-		return fmt.Sprintf("%s/attachments/%d", cdnBaseURL, ptr.GetCdnId()), nil
+		return fmt.Sprintf("%s/attachments/%d", base, ptr.GetCdnId()), nil
 	default:
 		return "", fmt.Errorf("attachment: no CDN ID or key")
 	}

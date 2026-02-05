@@ -401,6 +401,9 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 	// Handle SyncMessage subtypes.
 	if sm := contentProto.GetSyncMessage(); sm != nil {
+		logf(logger, "SyncMessage: sent=%v contacts=%v request=%v read=%v keys=%v",
+			sm.Sent != nil, sm.Contacts != nil, sm.Request != nil, sm.Read != nil, sm.Keys != nil)
+
 		// SyncMessage.Sent: message sent by our other device.
 		if sent := sm.GetSent(); sent != nil {
 			if dm := sent.GetMessage(); dm != nil && dm.Body != nil {
@@ -499,8 +502,8 @@ func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts
 		return fmt.Errorf("contact sync: no attachment blob")
 	}
 
-	logf(logger, "downloading contact sync attachment (cdnId=%d cdnKey=%s size=%d)",
-		blob.GetCdnId(), blob.GetCdnKey(), blob.GetSize())
+	logf(logger, "downloading contact sync attachment (cdnId=%d cdnKey=%s cdnNumber=%d size=%d)",
+		blob.GetCdnId(), blob.GetCdnKey(), blob.GetCdnNumber(), blob.GetSize())
 
 	data, err := DownloadAttachment(ctx, blob, tlsConf)
 	if err != nil {

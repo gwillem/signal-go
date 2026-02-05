@@ -92,3 +92,9 @@ func (s *Store) UpdateGroupName(groupID, name string) error {
 	)
 	return err
 }
+
+// DeleteGroup removes a group from the store.
+func (s *Store) DeleteGroup(groupID string) error {
+	_, err := s.db.Exec("DELETE FROM groups WHERE group_id = ?", groupID)
+	return err
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -264,6 +265,7 @@ func parseUUID(s string) ([]byte, error) {
 }
 
 // FetchAllGroupDetails fetches details for all groups that don't have names yet.
+// Groups returning 403 (not a member) are removed from the local store.
 func (s *Service) FetchAllGroupDetails(ctx context.Context) (int, error) {
 	groups, err := s.store.GetAllGroups()
 	if err != nil {
@@ -278,7 +280,15 @@ func (s *Service) FetchAllGroupDetails(ctx context.Context) (int, error) {
 		}
 
 		if err := s.FetchGroupDetails(ctx, g); err != nil {
-			logf(s.logger, "failed to fetch group %s: %v", g.GroupID[:8], err)
+			// Remove groups we're no longer a member of
+			if strings.Contains(err.Error(), "403") {
+				logf(s.logger, "removing group %s: no longer a member", g.GroupID[:8])
+				if delErr := s.store.DeleteGroup(g.GroupID); delErr != nil {
+					logf(s.logger, "failed to delete group %s: %v", g.GroupID[:8], delErr)
+				}
+			} else {
+				logf(s.logger, "failed to fetch group %s: %v", g.GroupID[:8], err)
+			}
 			continue
 		}
 

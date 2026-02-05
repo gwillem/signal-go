@@ -10,8 +10,7 @@ import (
 )
 
 type groupsCommand struct {
-	Sync  bool `long:"sync" description:"Sync groups from Storage Service before listing"`
-	Fetch bool `long:"fetch" description:"Fetch group details (names) from Groups V2 API"`
+	Sync bool `long:"sync" description:"Sync groups from Storage Service before listing"`
 }
 
 func (cmd *groupsCommand) Execute(args []string) error {
@@ -34,13 +33,9 @@ func (cmd *groupsCommand) Execute(args []string) error {
 		fmt.Printf("Synced %d groups from Storage Service.\n\n", n)
 	}
 
-	if cmd.Fetch {
-		fmt.Println("Fetching group details from Groups V2 API...")
-		n, err := c.FetchGroupDetails(ctx)
-		if err != nil {
-			return fmt.Errorf("fetch group details: %w", err)
-		}
-		fmt.Printf("Updated %d groups with details.\n\n", n)
+	// Always fetch group details for groups without names
+	if _, err := c.FetchGroupDetails(ctx); err != nil {
+		return fmt.Errorf("fetch group details: %w", err)
 	}
 
 	groups, err := c.Groups()
@@ -50,23 +45,24 @@ func (cmd *groupsCommand) Execute(args []string) error {
 
 	if len(groups) == 0 {
 		fmt.Println("No groups found.")
-		fmt.Println("Groups are discovered from received messages or via --sync.")
+		fmt.Println("Use --sync --fetch to discover groups from Storage Service.")
 		return nil
 	}
 
-	fmt.Printf("Found %d group(s):\n\n", len(groups))
+	// Find max name length for alignment
+	maxLen := len("(no name)")
+	for _, g := range groups {
+		if len(g.Name) > maxLen {
+			maxLen = len(g.Name)
+		}
+	}
+
 	for _, g := range groups {
 		name := g.Name
 		if name == "" {
-			name = "(unnamed)"
+			name = "(no name)"
 		}
-		fmt.Printf("  %s\n", name)
-		fmt.Printf("    ID:       %s\n", g.GroupID)
-		fmt.Printf("    Revision: %d\n", g.Revision)
-		if len(g.MemberACIs) > 0 {
-			fmt.Printf("    Members:  %d\n", len(g.MemberACIs))
-		}
-		fmt.Println()
+		fmt.Printf("%-*s  %s\n", maxLen, name, g.GroupID)
 	}
 
 	return nil

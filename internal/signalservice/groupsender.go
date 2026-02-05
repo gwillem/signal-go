@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -179,15 +180,22 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 	logf(s.logger, "group send: encrypted message with sender key (type 7)")
 
 	// Step 3: Wrap in sealed sender and send to each member
+	var succeeded, failed int
 	for _, recipient := range recipients {
 		if err := s.sendGroupSealedMessage(ctx, recipient, senderKeyBytes, senderCert, groupIdentifier[:]); err != nil {
 			logf(s.logger, "group send: failed to send to %s: %v", recipient, err)
-			return fmt.Errorf("send to %s: %w", recipient, err)
+			failed++
+			continue
 		}
 		logf(s.logger, "group send: sent to %s", recipient)
+		succeeded++
 	}
 
-	logf(s.logger, "group send: successfully sent to all %d members", len(recipients))
+	if succeeded == 0 {
+		return fmt.Errorf("failed to send to any of %d recipients", len(recipients))
+	}
+
+	logf(s.logger, "group send: sent to %d/%d members", succeeded, len(recipients))
 	return nil
 }
 
@@ -226,16 +234,15 @@ func (s *Service) sendSenderKeyDistribution(ctx context.Context, recipient strin
 // sendGroupSealedMessage wraps a sender key ciphertext in sealed sender and sends it.
 // This is different from regular sealed sender because the inner message is already
 // encrypted with sender key (type 7), not a session message.
+// Handles 409 device mismatch with retry.
 func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) error {
-	timestamp := uint64(time.Now().UnixMilli())
-
 	// Get recipient's profile key for access key
 	contact, err := s.store.GetContactByACI(recipient)
 	if err != nil {
 		return fmt.Errorf("get contact: %w", err)
 	}
 	if contact == nil || len(contact.ProfileKey) == 0 {
-		return fmt.Errorf("no profile key for recipient %s", recipient)
+		return fmt.Errorf("no profile key (run sync-contacts or receive a message from them first)")
 	}
 
 	accessKey, err := DeriveAccessKey(contact.ProfileKey)
@@ -249,6 +256,39 @@ func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, 
 		deviceIDs = []int{1}
 	}
 
+	// Retry loop for 409 device mismatch
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := s.trySendGroupSealed(ctx, recipient, senderKeyBytes, senderCert, groupID, accessKey, deviceIDs)
+		if err == nil {
+			return nil
+		}
+
+		// Check for 409 device mismatch
+		var mismatch *MismatchedDevicesError
+		if errors.As(err, &mismatch) {
+			logf(s.logger, "group send 409: missing=%v extra=%v (attempt %d)", mismatch.MissingDevices, mismatch.ExtraDevices, attempt)
+
+			// Update device list
+			deviceIDs = updateDeviceList(deviceIDs, mismatch.MissingDevices, mismatch.ExtraDevices)
+			s.store.SetDevices(recipient, deviceIDs)
+
+			// Archive sessions for extra devices
+			for _, devID := range mismatch.ExtraDevices {
+				s.store.ArchiveSession(recipient, uint32(devID))
+			}
+			continue
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("failed after %d attempts", maxAttempts)
+}
+
+// trySendGroupSealed attempts to send a sender key message to specific devices.
+func (s *Service) trySendGroupSealed(ctx context.Context, recipient string, senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte, accessKey []byte, deviceIDs []int) error {
+	timestamp := uint64(time.Now().UnixMilli())
 	var messages []OutgoingMessage
 
 	for _, deviceID := range deviceIDs {
@@ -257,7 +297,7 @@ func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, 
 			return fmt.Errorf("create address: %w", err)
 		}
 
-		// Get registration ID for this device (do this before destroying addr)
+		// Get registration ID for this device
 		registrationID := 0
 		session, err := s.store.LoadSession(addr)
 		if err == nil && session != nil {
@@ -297,6 +337,24 @@ func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, 
 	}
 
 	return s.SendSealedMessage(ctx, recipient, msgList, accessKey)
+}
+
+// updateDeviceList adds missing devices and removes extra devices.
+func updateDeviceList(current []int, missing, extra []int) []int {
+	// Remove extra devices
+	extraSet := make(map[int]bool)
+	for _, d := range extra {
+		extraSet[d] = true
+	}
+	var result []int
+	for _, d := range current {
+		if !extraSet[d] {
+			result = append(result, d)
+		}
+	}
+	// Add missing devices
+	result = append(result, missing...)
+	return result
 }
 
 // createSenderKeyUSMC creates an UnidentifiedSenderMessageContent for a sender key message.

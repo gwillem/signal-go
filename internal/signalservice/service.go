@@ -362,9 +362,26 @@ func (s *Service) SetProfile(ctx context.Context, aci string, profileKey []byte,
 
 // --- Messaging ---
 
-// SendTextMessage sends a text message to a recipient.
+// SendTextMessage sends a text message to a recipient (ACI UUID or group ID).
+// Automatically detects group IDs (64 hex characters) and routes to group send.
 func (s *Service) SendTextMessage(ctx context.Context, recipient, text string) error {
+	if isGroupID(recipient) {
+		return s.SendGroupMessage(ctx, recipient, text)
+	}
 	return s.sendTextMessage(ctx, recipient, text)
+}
+
+// isGroupID returns true if s looks like a group ID (64 hex characters = 32 bytes).
+func isGroupID(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // SendSealedSenderMessage sends a sealed sender message to a recipient.

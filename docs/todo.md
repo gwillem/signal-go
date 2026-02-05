@@ -6,8 +6,7 @@
 
 ## Investigations
 
-- [ ] **Task 05: Session Decryption** - Debug session decryption failures ([details](task05-session-decryption-failure.md))
-- [ ] **Task 10: iPhone Message Visibility** - Messages delivered but not visible on iPhone ([details](task10-iphone-message-visibility.md))
+(none)
 
 ## Refactoring
 
@@ -22,6 +21,8 @@
 
 ## Completed
 
+- [x] Task 05: Session Decryption ([details](task05-session-decryption-failure.md))
+- [x] Task 10: iPhone Message Visibility ([details](task10-iphone-message-visibility.md))
 - [x] Task 01: CGO Bindings ([details](task01-cgo-bindings.md))
 - [x] Task 02: Service Layer ([details](task02-service-layer.md))
 - [x] Task 03: UUID to Tel Plan ([details](task03-uuid-to-tel-plan.md))
