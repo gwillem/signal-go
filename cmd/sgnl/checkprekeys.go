@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 
@@ -113,10 +115,18 @@ func (cmd *checkPreKeysCommand) Execute(args []string) error {
 		Username: fmt.Sprintf("%s.%d", acct.ACI, acct.DeviceID),
 		Password: acct.Password,
 	}
-	httpClient := signalservice.NewHTTPClient("https://chat.signal.org", signalservice.TLSConfig(), nil)
-	serverKeys, err := httpClient.GetPreKeys(ctx, acct.ACI, acct.DeviceID, auth)
+	transport := signalservice.NewTransport("https://chat.signal.org", signalservice.TLSConfig(), nil)
+	path := fmt.Sprintf("/v2/keys/%s/%d", acct.ACI, acct.DeviceID)
+	respBody, status, err := transport.Get(ctx, path, &auth)
 	if err != nil {
 		return fmt.Errorf("get server pre-keys: %w", err)
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("get server pre-keys: status %d: %s", status, respBody)
+	}
+	var serverKeys signalservice.PreKeyResponse
+	if err := json.Unmarshal(respBody, &serverKeys); err != nil {
+		return fmt.Errorf("unmarshal pre-keys: %w", err)
 	}
 
 	fmt.Printf("Server identity key: %s\n", serverKeys.IdentityKey)

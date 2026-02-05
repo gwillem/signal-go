@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/store"
 )
 
@@ -232,6 +233,22 @@ func (s *Service) GetSenderCertificate(ctx context.Context) ([]byte, error) {
 }
 
 // --- Profile API ---
+
+// ProfileOptions configures which profile fields to update.
+type ProfileOptions struct {
+	Name               *string // nil = don't change, non-nil = set to this value
+	PhoneNumberSharing *bool   // nil = don't change, non-nil = set to this value
+}
+
+// getProfileKeyVersion wraps libsignal's profile key version derivation.
+func getProfileKeyVersion(profileKey []byte, aci string) (string, error) {
+	return libsignal.ProfileKeyGetVersion(profileKey, aci)
+}
+
+// getProfileKeyCommitment wraps libsignal's profile key commitment derivation.
+func getProfileKeyCommitment(profileKey []byte, aci string) ([]byte, error) {
+	return libsignal.ProfileKeyGetCommitment(profileKey, aci)
+}
 
 // GetProfile fetches a user's profile from the server.
 func (s *Service) GetProfile(ctx context.Context, aci string, profileKey []byte) (*ProfileResponse, error) {

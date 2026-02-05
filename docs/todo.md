@@ -17,6 +17,8 @@
 - [ ] logf > c.logf
 - [ ] speed up tests
 - [ ] un-wrap methods for sending and receiving and tie them to the service struct
+- [ ] can we unexport stuff?
+- [ ] httpclient methods: should these be moved to the service object? or perhaps they already are?
 
 ## Completed
 
