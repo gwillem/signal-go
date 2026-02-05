@@ -9,6 +9,37 @@ package signal.proto;
 
 option go_package = "github.com/gwillem/signal-go/internal/proto";
 
+// Server certificate used to sign sender certificates.
+message ServerCertificate {
+    message Certificate {
+        optional uint32 id  = 1;
+        optional bytes  key = 2;
+    }
+    optional bytes certificate = 1;
+    optional bytes signature   = 2;
+}
+
+// Sender certificate for sealed sender messages.
+// Contains sender's identity, signed by server certificate.
+message SenderCertificate {
+    message Certificate {
+        optional string            senderE164    = 1;
+        oneof senderUuid {
+            string                 uuidString    = 6;
+            bytes                  uuidBytes     = 7;
+        }
+        optional uint32            senderDevice  = 2;
+        optional fixed64           expires       = 3;
+        optional bytes             identityKey   = 4;
+        oneof signer {
+            bytes /*ServerCertificate*/ signerCertificate = 5;
+            uint32                      signerId          = 8;
+        }
+    }
+    optional bytes certificate = 1;
+    optional bytes signature   = 2;
+}
+
 // Outer structure of a Sealed Sender v1 message.
 // This is parsed BEFORE decryption to extract the encrypted components.
 message UnidentifiedSenderMessage {

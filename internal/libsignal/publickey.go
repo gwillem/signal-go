@@ -40,15 +40,28 @@ func DeserializePublicKey(data []byte) (*PublicKey, error) {
 	return &PublicKey{ptr: out.raw}, nil
 }
 
-// Compare compares two public keys. Returns 0 if equal, negative if k < other, positive if k > other.
-func (k *PublicKey) Compare(other *PublicKey) (int, error) {
-	var out C.int32_t
+// Equals checks if two public keys are equal.
+func (k *PublicKey) Equals(other *PublicKey) (bool, error) {
+	var out C.bool
 	k1 := C.SignalConstPointerPublicKey{raw: k.ptr}
 	k2 := C.SignalConstPointerPublicKey{raw: other.ptr}
-	if err := wrapError(C.signal_publickey_compare(&out, k1, k2)); err != nil {
+	if err := wrapError(C.signal_publickey_equals(&out, k1, k2)); err != nil {
+		return false, err
+	}
+	return bool(out), nil
+}
+
+// Compare compares two public keys. Returns 0 if equal, non-zero otherwise.
+// Note: v0.87.0 removed ordering comparison; this only tests equality.
+func (k *PublicKey) Compare(other *PublicKey) (int, error) {
+	eq, err := k.Equals(other)
+	if err != nil {
 		return 0, err
 	}
-	return int(out), nil
+	if eq {
+		return 0, nil
+	}
+	return 1, nil
 }
 
 // Verify checks that signature is valid for message under this public key.

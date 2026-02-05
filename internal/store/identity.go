@@ -35,15 +35,35 @@ func (s *Store) GetLocalRegistrationID() (uint32, error) {
 }
 
 // SaveIdentityKey stores a remote identity key for the given address.
-func (s *Store) SaveIdentityKey(address *libsignal.Address, key *libsignal.PublicKey) error {
+// Returns true if this replaced an existing different identity key.
+func (s *Store) SaveIdentityKey(address *libsignal.Address, key *libsignal.PublicKey) (bool, error) {
 	name, err := address.Name()
 	if err != nil {
-		return fmt.Errorf("store: identity address name: %w", err)
+		return false, fmt.Errorf("store: identity address name: %w", err)
 	}
 
 	data, err := key.Serialize()
 	if err != nil {
-		return fmt.Errorf("store: serialize identity key: %w", err)
+		return false, fmt.Errorf("store: serialize identity key: %w", err)
+	}
+
+	// Check if there's an existing different identity
+	var existingData []byte
+	err = s.db.QueryRow(
+		"SELECT public_key FROM identity WHERE address = ?", name,
+	).Scan(&existingData)
+
+	replaced := false
+	if err == nil && len(existingData) > 0 {
+		// Compare with existing key - replaced if different
+		existingKey, err := libsignal.DeserializePublicKey(existingData)
+		if err == nil {
+			cmp, cmpErr := existingKey.Compare(key)
+			existingKey.Destroy()
+			if cmpErr == nil && cmp != 0 {
+				replaced = true
+			}
+		}
 	}
 
 	_, err = s.db.Exec(
@@ -51,9 +71,9 @@ func (s *Store) SaveIdentityKey(address *libsignal.Address, key *libsignal.Publi
 		name, data,
 	)
 	if err != nil {
-		return fmt.Errorf("store: save identity key: %w", err)
+		return false, fmt.Errorf("store: save identity key: %w", err)
 	}
-	return nil
+	return replaced, nil
 }
 
 // GetIdentityKey loads a remote identity key for the given address.

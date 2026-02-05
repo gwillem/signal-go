@@ -43,15 +43,14 @@ func (kp *IdentityKeyPair) Serialize() ([]byte, error) {
 
 // DeserializeIdentityKeyPair reconstructs an identity key pair from serialized form.
 func DeserializeIdentityKeyPair(data []byte) (*IdentityKeyPair, error) {
-	var privOut C.SignalMutPointerPrivateKey
-	var pubOut C.SignalMutPointerPublicKey
+	var pairOut C.SignalPairOfMutPointerPublicKeyMutPointerPrivateKey
 	borrowed := borrowedBuffer(data)
-	if err := wrapError(C.signal_identitykeypair_deserialize(&privOut, &pubOut, borrowed)); err != nil {
+	if err := wrapError(C.signal_identitykeypair_deserialize(&pairOut, borrowed)); err != nil {
 		return nil, err
 	}
 	return &IdentityKeyPair{
-		PublicKey:  &PublicKey{ptr: pubOut.raw},
-		PrivateKey: &PrivateKey{ptr: privOut.raw},
+		PublicKey:  &PublicKey{ptr: pairOut.first.raw},
+		PrivateKey: &PrivateKey{ptr: pairOut.second.raw},
 	}, nil
 }
 

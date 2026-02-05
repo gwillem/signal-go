@@ -238,7 +238,7 @@ func TestEndToEndWithoutPaddingFails(t *testing.T) {
 	bobSignedPreKeyStore := libsignal.NewMemorySignedPreKeyStore()
 	bobKyberPreKeyStore := libsignal.NewMemoryKyberPreKeyStore()
 
-	// Generate Bob's keys (simplified - no Kyber for brevity).
+	// Generate Bob's keys.
 	bobSPKPriv, _ := libsignal.GeneratePrivateKey()
 	defer bobSPKPriv.Destroy()
 	bobSPKPub, _ := bobSPKPriv.PublicKey()
@@ -256,11 +256,23 @@ func TestEndToEndWithoutPaddingFails(t *testing.T) {
 	bobPreKeyRec, _ := libsignal.NewPreKeyRecord(100, bobPreKeyPub, bobPreKeyPriv)
 	bobPreKeyStore.StorePreKey(100, bobPreKeyRec)
 
+	// Generate Bob's Kyber key (required in libsignal v0.87+).
+	bobKyberKP, _ := libsignal.GenerateKyberKeyPair()
+	defer bobKyberKP.Destroy()
+	bobKyberPub, _ := bobKyberKP.PublicKey()
+	defer bobKyberPub.Destroy()
+	bobKyberPubBytes, _ := bobKyberPub.Serialize()
+	bobKyberSig, _ := bobIdentity.Sign(bobKyberPubBytes)
+
+	// Store Kyber pre-key.
+	bobKyberRec, _ := libsignal.NewKyberPreKeyRecord(1, uint64(time.Now().UnixMilli()), bobKyberKP, bobKyberSig)
+	bobKyberPreKeyStore.StoreKyberPreKey(1, bobKyberRec)
+
 	bobIdentityPub, _ := bobIdentity.PublicKey()
 	defer bobIdentityPub.Destroy()
 
-	// Create bundle without Kyber.
-	bundle, _ := libsignal.NewPreKeyBundle(2, 1, 100, bobPreKeyPub, 1, bobSPKPub, bobSPKSig, bobIdentityPub, 0xFFFFFFFF, nil, nil)
+	// Create bundle with Kyber (required in libsignal v0.87+).
+	bundle, _ := libsignal.NewPreKeyBundle(2, 1, 100, bobPreKeyPub, 1, bobSPKPub, bobSPKSig, bobIdentityPub, 1, bobKyberPub, bobKyberSig)
 	defer bundle.Destroy()
 
 	bobAddr, _ := libsignal.NewAddress("bob-aci", 1)

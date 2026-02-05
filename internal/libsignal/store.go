@@ -10,7 +10,9 @@ type SessionStore interface {
 type IdentityKeyStore interface {
 	GetIdentityKeyPair() (*PrivateKey, error)
 	GetLocalRegistrationID() (uint32, error)
-	SaveIdentityKey(address *Address, key *PublicKey) error
+	// SaveIdentityKey stores a remote identity key. Returns true if this replaced
+	// an existing different identity key (identity change), false if new or unchanged.
+	SaveIdentityKey(address *Address, key *PublicKey) (replaced bool, err error)
 	GetIdentityKey(address *Address) (*PublicKey, error)
 	IsTrustedIdentity(address *Address, key *PublicKey, direction uint) (bool, error)
 }
@@ -32,5 +34,7 @@ type SignedPreKeyStore interface {
 type KyberPreKeyStore interface {
 	LoadKyberPreKey(id uint32) (*KyberPreKeyRecord, error)
 	StoreKyberPreKey(id uint32, record *KyberPreKeyRecord) error
-	MarkKyberPreKeyUsed(id uint32) error
+	// MarkKyberPreKeyUsed marks a Kyber pre-key as used. The ecPreKeyID and baseKey
+	// parameters can be used for reuse tracking (optional; implementations may ignore them).
+	MarkKyberPreKeyUsed(id uint32, ecPreKeyID uint32, baseKey *PublicKey) error
 }

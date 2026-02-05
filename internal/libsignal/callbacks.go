@@ -5,24 +5,29 @@ package libsignal
 
 // Bridge functions defined in bridge.c — each wraps a Go //export function,
 // converting by-value wrapper structs to raw pointers.
-extern int bridge_load_session(void *ctx, SignalMutPointerSessionRecord *recordp, SignalConstPointerProtocolAddress address);
-extern int bridge_store_session(void *ctx, SignalConstPointerProtocolAddress address, SignalConstPointerSessionRecord record);
+extern int bridge_load_session(void *ctx, SignalMutPointerSessionRecord *recordp, SignalMutPointerProtocolAddress address);
+extern int bridge_store_session(void *ctx, SignalMutPointerProtocolAddress address, SignalMutPointerSessionRecord record);
 extern int bridge_get_identity_key_pair(void *ctx, SignalMutPointerPrivateKey *keyp);
 extern int bridge_get_local_registration_id(void *ctx, uint32_t *idp);
-extern int bridge_save_identity_key(void *ctx, SignalConstPointerProtocolAddress address, SignalConstPointerPublicKey key);
-extern int bridge_get_identity_key(void *ctx, SignalMutPointerPublicKey *keyp, SignalConstPointerProtocolAddress address);
-extern int bridge_is_trusted_identity(void *ctx, SignalConstPointerProtocolAddress address, SignalConstPointerPublicKey key, unsigned int direction);
+extern int bridge_save_identity_key(void *ctx, uint8_t *out, SignalMutPointerProtocolAddress address, SignalMutPointerPublicKey key);
+extern int bridge_get_identity_key(void *ctx, SignalMutPointerPublicKey *keyp, SignalMutPointerProtocolAddress address);
+extern int bridge_is_trusted_identity(void *ctx, bool *out, SignalMutPointerProtocolAddress address, SignalMutPointerPublicKey key, uint32_t direction);
 extern int bridge_load_pre_key(void *ctx, SignalMutPointerPreKeyRecord *recordp, uint32_t id);
-extern int bridge_store_pre_key(void *ctx, uint32_t id, SignalConstPointerPreKeyRecord record);
+extern int bridge_store_pre_key(void *ctx, uint32_t id, SignalMutPointerPreKeyRecord record);
 extern int bridge_remove_pre_key(void *ctx, uint32_t id);
 extern int bridge_load_signed_pre_key(void *ctx, SignalMutPointerSignedPreKeyRecord *recordp, uint32_t id);
-extern int bridge_store_signed_pre_key(void *ctx, uint32_t id, SignalConstPointerSignedPreKeyRecord record);
+extern int bridge_store_signed_pre_key(void *ctx, uint32_t id, SignalMutPointerSignedPreKeyRecord record);
 extern int bridge_load_kyber_pre_key(void *ctx, SignalMutPointerKyberPreKeyRecord *recordp, uint32_t id);
-extern int bridge_store_kyber_pre_key(void *ctx, uint32_t id, SignalConstPointerKyberPreKeyRecord record);
-extern int bridge_mark_kyber_pre_key_used(void *ctx, uint32_t id);
+extern int bridge_store_kyber_pre_key(void *ctx, uint32_t id, SignalMutPointerKyberPreKeyRecord record);
+extern int bridge_mark_kyber_pre_key_used(void *ctx, uint32_t id, uint32_t ec_prekey_id, SignalMutPointerPublicKey base_key);
+// No-op destroy function - Go handles actual cleanup via deferred cleanup functions.
+extern void bridge_noop_destroy(void *ctx);
 */
 import "C"
-import "unsafe"
+import (
+	"runtime"
+	"unsafe"
+)
 
 // --- Session Store callbacks ---
 
@@ -92,7 +97,7 @@ func goGetLocalRegistrationId(ctx unsafe.Pointer, idp *C.uint32_t) C.int {
 }
 
 //export goSaveIdentityKey
-func goSaveIdentityKey(ctx unsafe.Pointer, address *C.SignalProtocolAddress, key *C.SignalPublicKey) C.int {
+func goSaveIdentityKey(ctx unsafe.Pointer, out *C.uint8_t, address *C.SignalProtocolAddress, key *C.SignalPublicKey) C.int {
 	store := restorePointer(ctx).(IdentityKeyStore)
 	addr := &Address{ptr: address}
 
@@ -107,10 +112,17 @@ func goSaveIdentityKey(ctx unsafe.Pointer, address *C.SignalProtocolAddress, key
 		return -1
 	}
 
-	err = store.SaveIdentityKey(addr, pubKey)
+	replaced, err := store.SaveIdentityKey(addr, pubKey)
 	addr.ptr = nil
 	if err != nil {
 		return -1
+	}
+
+	// Return IdentityChange enum: 0 = NewOrUnchanged, 1 = ReplacedExisting
+	if replaced {
+		*out = 1
+	} else {
+		*out = 0
 	}
 	return 0
 }
@@ -131,7 +143,7 @@ func goGetIdentityKey(ctx unsafe.Pointer, keyp *C.SignalMutPointerPublicKey, add
 }
 
 //export goIsTrustedIdentity
-func goIsTrustedIdentity(ctx unsafe.Pointer, address *C.SignalProtocolAddress, key *C.SignalPublicKey, direction C.uint) C.int {
+func goIsTrustedIdentity(ctx unsafe.Pointer, out *C.bool, address *C.SignalProtocolAddress, key *C.SignalPublicKey, direction C.uint32_t) C.int {
 	store := restorePointer(ctx).(IdentityKeyStore)
 	addr := &Address{ptr: address}
 	pub := &PublicKey{ptr: key}
@@ -141,9 +153,7 @@ func goIsTrustedIdentity(ctx unsafe.Pointer, address *C.SignalProtocolAddress, k
 	if err != nil {
 		return -1
 	}
-	if trusted {
-		return 1
-	}
+	*out = C.bool(trusted)
 	return 0
 }
 
@@ -263,9 +273,25 @@ func goStoreKyberPreKey(ctx unsafe.Pointer, id C.uint32_t, record *C.SignalKyber
 }
 
 //export goMarkKyberPreKeyUsed
-func goMarkKyberPreKeyUsed(ctx unsafe.Pointer, id C.uint32_t) C.int {
+func goMarkKyberPreKeyUsed(ctx unsafe.Pointer, id C.uint32_t, ecPreKeyID C.uint32_t, baseKey *C.SignalPublicKey) C.int {
 	store := restorePointer(ctx).(KyberPreKeyStore)
-	if err := store.MarkKyberPreKeyUsed(uint32(id)); err != nil {
+
+	// Clone the base key if provided (may be NULL)
+	var pubKey *PublicKey
+	if baseKey != nil {
+		var buf C.SignalOwnedBuffer
+		if err := wrapError(C.signal_publickey_serialize(&buf, C.SignalConstPointerPublicKey{raw: baseKey})); err != nil {
+			return -1
+		}
+		data := freeOwnedBuffer(buf)
+		var err error
+		pubKey, err = DeserializePublicKey(data)
+		if err != nil {
+			return -1
+		}
+	}
+
+	if err := store.MarkKyberPreKeyUsed(uint32(id), uint32(ecPreKeyID), pubKey); err != nil {
 		return -1
 	}
 	return 0
@@ -275,50 +301,90 @@ func goMarkKyberPreKeyUsed(ctx unsafe.Pointer, id C.uint32_t) C.int {
 
 func wrapSessionStore(store SessionStore) (*C.SignalSessionStore, func()) {
 	ctx := savePointer(store)
-	return &C.SignalSessionStore{
+	cStore := &C.SignalSessionStore{
 		ctx:           ctx,
-		load_session:  C.SignalLoadSession(C.bridge_load_session),
-		store_session: C.SignalStoreSession(C.bridge_store_session),
-	}, func() { deletePointer(ctx) }
+		load_session:  C.SignalFfiBridgeSessionStoreLoadSession(C.bridge_load_session),
+		store_session: C.SignalFfiBridgeSessionStoreStoreSession(C.bridge_store_session),
+		destroy:       C.SignalFfiBridgeSessionStoreDestroy(C.bridge_noop_destroy),
+	}
+	// Pin the C struct so GC doesn't move it during Rust callbacks
+	var pinner runtime.Pinner
+	pinner.Pin(cStore)
+	return cStore, func() {
+		pinner.Unpin()
+		deletePointer(ctx)
+	}
 }
 
 func wrapIdentityKeyStore(store IdentityKeyStore) (*C.SignalIdentityKeyStore, func()) {
 	ctx := savePointer(store)
-	return &C.SignalIdentityKeyStore{
-		ctx:                       ctx,
-		get_identity_key_pair:     C.SignalGetIdentityKeyPair(C.bridge_get_identity_key_pair),
-		get_local_registration_id: C.SignalGetLocalRegistrationId(C.bridge_get_local_registration_id),
-		save_identity:             C.SignalSaveIdentityKey(C.bridge_save_identity_key),
-		get_identity:              C.SignalGetIdentityKey(C.bridge_get_identity_key),
-		is_trusted_identity:       C.SignalIsTrustedIdentity(C.bridge_is_trusted_identity),
-	}, func() { deletePointer(ctx) }
+	cStore := &C.SignalIdentityKeyStore{
+		ctx:                            ctx,
+		get_local_identity_private_key: C.SignalFfiBridgeIdentityKeyStoreGetLocalIdentityPrivateKey(C.bridge_get_identity_key_pair),
+		get_local_registration_id:      C.SignalFfiBridgeIdentityKeyStoreGetLocalRegistrationId(C.bridge_get_local_registration_id),
+		get_identity_key:               C.SignalFfiBridgeIdentityKeyStoreGetIdentityKey(C.bridge_get_identity_key),
+		save_identity_key:              C.SignalFfiBridgeIdentityKeyStoreSaveIdentityKey(C.bridge_save_identity_key),
+		is_trusted_identity:            C.SignalFfiBridgeIdentityKeyStoreIsTrustedIdentity(C.bridge_is_trusted_identity),
+		destroy:                        C.SignalFfiBridgeIdentityKeyStoreDestroy(C.bridge_noop_destroy),
+	}
+	// Pin the C struct so GC doesn't move it during Rust callbacks
+	var pinner runtime.Pinner
+	pinner.Pin(cStore)
+	return cStore, func() {
+		pinner.Unpin()
+		deletePointer(ctx)
+	}
 }
 
 func wrapPreKeyStore(store PreKeyStore) (*C.SignalPreKeyStore, func()) {
 	ctx := savePointer(store)
-	return &C.SignalPreKeyStore{
+	cStore := &C.SignalPreKeyStore{
 		ctx:            ctx,
-		load_pre_key:   C.SignalLoadPreKey(C.bridge_load_pre_key),
-		store_pre_key:  C.SignalStorePreKey(C.bridge_store_pre_key),
-		remove_pre_key: C.SignalRemovePreKey(C.bridge_remove_pre_key),
-	}, func() { deletePointer(ctx) }
+		load_pre_key:   C.SignalFfiBridgePreKeyStoreLoadPreKey(C.bridge_load_pre_key),
+		store_pre_key:  C.SignalFfiBridgePreKeyStoreStorePreKey(C.bridge_store_pre_key),
+		remove_pre_key: C.SignalFfiBridgePreKeyStoreRemovePreKey(C.bridge_remove_pre_key),
+		destroy:        C.SignalFfiBridgePreKeyStoreDestroy(C.bridge_noop_destroy),
+	}
+	// Pin the C struct so GC doesn't move it during Rust callbacks
+	var pinner runtime.Pinner
+	pinner.Pin(cStore)
+	return cStore, func() {
+		pinner.Unpin()
+		deletePointer(ctx)
+	}
 }
 
 func wrapSignedPreKeyStore(store SignedPreKeyStore) (*C.SignalSignedPreKeyStore, func()) {
 	ctx := savePointer(store)
-	return &C.SignalSignedPreKeyStore{
+	cStore := &C.SignalSignedPreKeyStore{
 		ctx:                  ctx,
-		load_signed_pre_key:  C.SignalLoadSignedPreKey(C.bridge_load_signed_pre_key),
-		store_signed_pre_key: C.SignalStoreSignedPreKey(C.bridge_store_signed_pre_key),
-	}, func() { deletePointer(ctx) }
+		load_signed_pre_key:  C.SignalFfiBridgeSignedPreKeyStoreLoadSignedPreKey(C.bridge_load_signed_pre_key),
+		store_signed_pre_key: C.SignalFfiBridgeSignedPreKeyStoreStoreSignedPreKey(C.bridge_store_signed_pre_key),
+		destroy:              C.SignalFfiBridgeSignedPreKeyStoreDestroy(C.bridge_noop_destroy),
+	}
+	// Pin the C struct so GC doesn't move it during Rust callbacks
+	var pinner runtime.Pinner
+	pinner.Pin(cStore)
+	return cStore, func() {
+		pinner.Unpin()
+		deletePointer(ctx)
+	}
 }
 
 func wrapKyberPreKeyStore(store KyberPreKeyStore) (*C.SignalKyberPreKeyStore, func()) {
 	ctx := savePointer(store)
-	return &C.SignalKyberPreKeyStore{
+	cStore := &C.SignalKyberPreKeyStore{
 		ctx:                     ctx,
-		load_kyber_pre_key:      C.SignalLoadKyberPreKey(C.bridge_load_kyber_pre_key),
-		store_kyber_pre_key:     C.SignalStoreKyberPreKey(C.bridge_store_kyber_pre_key),
-		mark_kyber_pre_key_used: C.SignalMarkKyberPreKeyUsed(C.bridge_mark_kyber_pre_key_used),
-	}, func() { deletePointer(ctx) }
+		load_kyber_pre_key:      C.SignalFfiBridgeKyberPreKeyStoreLoadKyberPreKey(C.bridge_load_kyber_pre_key),
+		store_kyber_pre_key:     C.SignalFfiBridgeKyberPreKeyStoreStoreKyberPreKey(C.bridge_store_kyber_pre_key),
+		mark_kyber_pre_key_used: C.SignalFfiBridgeKyberPreKeyStoreMarkKyberPreKeyUsed(C.bridge_mark_kyber_pre_key_used),
+		destroy:                 C.SignalFfiBridgeKyberPreKeyStoreDestroy(C.bridge_noop_destroy),
+	}
+	// Pin the C struct so GC doesn't move it during Rust callbacks
+	var pinner runtime.Pinner
+	pinner.Pin(cStore)
+	return cStore, func() {
+		pinner.Unpin()
+		deletePointer(ctx)
+	}
 }

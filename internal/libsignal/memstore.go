@@ -68,13 +68,19 @@ func (s *MemoryIdentityKeyStore) GetLocalRegistrationID() (uint32, error) {
 	return s.registrationID, nil
 }
 
-func (s *MemoryIdentityKeyStore) SaveIdentityKey(address *Address, key *PublicKey) error {
+func (s *MemoryIdentityKeyStore) SaveIdentityKey(address *Address, key *PublicKey) (bool, error) {
 	k := addressKey(address)
+	replaced := false
 	if old := s.identities[k]; old != nil {
+		// Check if the key changed
+		cmp, err := old.Compare(key)
+		if err == nil && cmp != 0 {
+			replaced = true
+		}
 		old.Destroy()
 	}
 	s.identities[k] = key
-	return nil
+	return replaced, nil
 }
 
 func (s *MemoryIdentityKeyStore) GetIdentityKey(address *Address) (*PublicKey, error) {
@@ -191,7 +197,8 @@ func (s *MemoryKyberPreKeyStore) StoreKyberPreKey(id uint32, record *KyberPreKey
 	return nil
 }
 
-func (s *MemoryKyberPreKeyStore) MarkKyberPreKeyUsed(id uint32) error {
+func (s *MemoryKyberPreKeyStore) MarkKyberPreKeyUsed(id uint32, ecPreKeyID uint32, baseKey *PublicKey) error {
+	// ecPreKeyID and baseKey are provided for optional reuse tracking but ignored here
 	s.used[id] = true
 	return nil
 }

@@ -7,15 +7,6 @@ package libsignal
 import "C"
 import "unsafe"
 
-// SealedSenderResult holds the decrypted plaintext and sender information
-// from a sealed sender (UNIDENTIFIED_SENDER) envelope.
-type SealedSenderResult struct {
-	Plaintext    []byte
-	SenderUUID   string
-	SenderE164   string // may be empty
-	SenderDevice uint32
-}
-
 // UnidentifiedSenderMessageContent wraps the decrypted outer layer of a
 // sealed sender message. Contains the sender certificate and the inner
 // encrypted message.
@@ -108,8 +99,13 @@ func (sc *SenderCertificate) DeviceID() (uint32, error) {
 func (sc *SenderCertificate) Validate(trustRoot *PublicKey, timestamp uint64) (bool, error) {
 	var out C.bool
 	cCert := C.SignalConstPointerSenderCertificate{raw: sc.ptr}
+	// v0.87.0 changed to take a slice of trust roots
 	cKey := C.SignalConstPointerPublicKey{raw: trustRoot.ptr}
-	if err := wrapError(C.signal_sender_certificate_validate(&out, cCert, cKey, C.uint64_t(timestamp))); err != nil {
+	cTrustRoots := C.SignalBorrowedSliceOfConstPointerPublicKey{
+		base:   &cKey,
+		length: 1,
+	}
+	if err := wrapError(C.signal_sender_certificate_validate(&out, cCert, cTrustRoots, C.uint64_t(timestamp))); err != nil {
 		return false, err
 	}
 	return bool(out), nil
@@ -141,90 +137,6 @@ func SealedSenderDecryptToUSMC(
 		return nil, err
 	}
 	return &UnidentifiedSenderMessageContent{ptr: out.raw}, nil
-}
-
-// SealedSenderDecrypt decrypts a sealed sender ciphertext using
-// signal_sealed_session_cipher_decrypt. Note: this function does NOT
-// support Kyber/PQXDH pre-keys. For modern messages, use the two-step
-// approach: SealedSenderDecryptToUSMC + manual inner decrypt.
-func SealedSenderDecrypt(
-	ctext []byte,
-	trustRoot *PublicKey,
-	timestamp uint64,
-	localE164 string,
-	localUUID string,
-	localDeviceID uint32,
-	sessionStore SessionStore,
-	identityStore IdentityKeyStore,
-	preKeyStore PreKeyStore,
-	signedPreKeyStore SignedPreKeyStore,
-) (*SealedSenderResult, error) {
-	var out C.SignalOwnedBuffer
-	var senderE164 *C.char
-	var senderUUID *C.char
-	var senderDeviceID C.uint32_t
-
-	cTrustRoot := C.SignalConstPointerPublicKey{raw: trustRoot.ptr}
-
-	// local_e164 can be NULL
-	var cLocalE164 *C.char
-	if localE164 != "" {
-		cLocalE164 = C.CString(localE164)
-		defer C.free(unsafe.Pointer(cLocalE164))
-	}
-
-	cLocalUUID := C.CString(localUUID)
-	defer C.free(unsafe.Pointer(cLocalUUID))
-
-	cSessionStore, cleanupSession := wrapSessionStore(sessionStore)
-	defer cleanupSession()
-	cIdentityStore, cleanupIdentity := wrapIdentityKeyStore(identityStore)
-	defer cleanupIdentity()
-	cPreKeyStore, cleanupPreKey := wrapPreKeyStore(preKeyStore)
-	defer cleanupPreKey()
-	cSignedStore, cleanupSigned := wrapSignedPreKeyStore(signedPreKeyStore)
-	defer cleanupSigned()
-
-	cSession := C.SignalConstPointerFfiSessionStoreStruct{raw: cSessionStore}
-	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: cIdentityStore}
-	cPreKey := C.SignalConstPointerFfiPreKeyStoreStruct{raw: cPreKeyStore}
-	cSigned := C.SignalConstPointerFfiSignedPreKeyStoreStruct{raw: cSignedStore}
-
-	err := wrapError(C.signal_sealed_session_cipher_decrypt(
-		&out,
-		&senderE164,
-		&senderUUID,
-		&senderDeviceID,
-		borrowedBuffer(ctext),
-		cTrustRoot,
-		C.uint64_t(timestamp),
-		cLocalE164,
-		cLocalUUID,
-		C.uint(localDeviceID),
-		cSession,
-		cIdentity,
-		cPreKey,
-		cSigned,
-	))
-	if err != nil {
-		return nil, err
-	}
-
-	result := &SealedSenderResult{
-		Plaintext:    freeOwnedBuffer(out),
-		SenderDevice: uint32(senderDeviceID),
-	}
-
-	if senderUUID != nil {
-		result.SenderUUID = C.GoString(senderUUID)
-		C.signal_free_string(senderUUID)
-	}
-	if senderE164 != nil {
-		result.SenderE164 = C.GoString(senderE164)
-		C.signal_free_string(senderE164)
-	}
-
-	return result, nil
 }
 
 // ContentHint constants for UnidentifiedSenderMessageContent.

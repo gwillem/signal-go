@@ -31,7 +31,9 @@ func wrapError(err *C.SignalFfiError) error {
 	code := C.signal_error_get_type(err)
 
 	var msgPtr *C.char
-	C.signal_error_get_message(err, &msgPtr)
+	// v0.87.0 changed the signature and now this can return an error too.
+	// We ignore the error from get_message since we already have an error.
+	_ = C.signal_error_get_message(&msgPtr, C.SignalUnwindSafeArgSignalFfiError(err))
 	var msg string
 	if msgPtr != nil {
 		msg = C.GoString(msgPtr)

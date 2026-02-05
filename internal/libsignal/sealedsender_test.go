@@ -6,41 +6,6 @@ import (
 	"time"
 )
 
-// TestSealedSenderDecryptInvalidCiphertext verifies that SealedSenderDecrypt
-// returns a proper error when given invalid ciphertext (not a panic/crash).
-func TestSealedSenderDecryptInvalidCiphertext(t *testing.T) {
-	bob := newParty(t, 2)
-
-	// Generate a trust root key (in production this is Signal's server key).
-	trustRootPriv, err := GeneratePrivateKey()
-	if err != nil {
-		t.Fatalf("GeneratePrivateKey: %v", err)
-	}
-	trustRootPub, err := trustRootPriv.PublicKey()
-	if err != nil {
-		t.Fatalf("PublicKey: %v", err)
-	}
-	defer trustRootPub.Destroy()
-
-	// Call with garbage ciphertext — should return an error, not crash.
-	_, err = SealedSenderDecrypt(
-		[]byte("not-valid-sealed-sender-ciphertext"),
-		trustRootPub,
-		1000,
-		"",
-		"bob-uuid",
-		1,
-		bob.sessionStore,
-		bob.identityStore,
-		bob.preKeyStore,
-		bob.signedPreKeyStore,
-	)
-	if err == nil {
-		t.Fatal("expected error for invalid ciphertext, got nil")
-	}
-	t.Logf("got expected error: %v", err)
-}
-
 // TestSealedSenderDecryptToUSMCInvalidCiphertext verifies that the two-step
 // approach also returns proper errors for invalid ciphertext.
 func TestSealedSenderDecryptToUSMCInvalidCiphertext(t *testing.T) {
@@ -162,7 +127,7 @@ func TestSealedSenderEncryptDecrypt(t *testing.T) {
 
 	// 6. Encrypt with sealed sender (uses bob's identity for ECDH).
 	// First we need bob's identity in alice's identity store.
-	err = alice.identityStore.SaveIdentityKey(bobAddr, bob.identityPub)
+	_, err = alice.identityStore.SaveIdentityKey(bobAddr, bob.identityPub)
 	if err != nil {
 		t.Fatalf("SaveIdentityKey: %v", err)
 	}
@@ -302,7 +267,7 @@ func TestSealedSenderWrongIdentityKey(t *testing.T) {
 	defer usmc.Destroy()
 
 	// Save bob's CORRECT identity for sealed sender encryption.
-	alice.identityStore.SaveIdentityKey(bobAddr, bob.identityPub)
+	_, _ = alice.identityStore.SaveIdentityKey(bobAddr, bob.identityPub)
 
 	sealed, err := SealedSenderEncrypt(bobAddr, usmc, alice.identityStore)
 	if err != nil {

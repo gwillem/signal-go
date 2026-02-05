@@ -330,7 +330,7 @@ func TestIdentityKeyStore(t *testing.T) {
 	}
 
 	// Save identity.
-	if err := s.SaveIdentityKey(addr, bobPub); err != nil {
+	if _, err := s.SaveIdentityKey(addr, bobPub); err != nil {
 		t.Fatal(err)
 	}
 
@@ -691,7 +691,7 @@ func TestKyberPreKeyStore(t *testing.T) {
 	defer loaded.Destroy()
 
 	// Mark used.
-	if err := s.MarkKyberPreKeyUsed(1); err != nil {
+	if err := s.MarkKyberPreKeyUsed(1, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 }

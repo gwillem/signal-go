@@ -109,7 +109,11 @@ func (s *Store) StoreKyberPreKey(id uint32, record *libsignal.KyberPreKeyRecord)
 }
 
 // MarkKyberPreKeyUsed marks a Kyber pre-key as used.
-func (s *Store) MarkKyberPreKeyUsed(id uint32) error {
+// The ecPreKeyID and baseKey parameters are provided for optional reuse tracking
+// but are currently ignored (we just mark the key as used).
+func (s *Store) MarkKyberPreKeyUsed(id uint32, ecPreKeyID uint32, baseKey *libsignal.PublicKey) error {
+	// Note: ecPreKeyID and baseKey could be stored for reuse attack detection,
+	// but for now we just mark the key as used.
 	_, err := s.db.Exec(
 		"UPDATE kyber_pre_key SET used = 1 WHERE id = ?", id,
 	)
