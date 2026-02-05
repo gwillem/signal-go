@@ -26,7 +26,7 @@ Signal groups (V2) use a complex architecture:
 | Process sender key distribution | Done (task 13) |
 | zkgroup bindings | **Done** (GroupMasterKey, GroupSecretParams, GroupPublicParams, GroupIdentifier) |
 | Group storage (SQLite) | **Done** (master key, name, revision) |
-| Extract group info from received messages | **Done** (populateGroupInfo in receiver.go) |
+| Extract group info from received messages | **Done** (populateGroupInfo in receiver.go, auto-fetches name on first message) |
 | Public API (Groups, GetGroup, SyncGroups) | **Done** |
 | Storage Service sync | **Done** (Phase 1 complete, uses RecordIkm key derivation) |
 | CLI `sgnl groups` command | **Done** (list groups, --sync flag, --fetch flag) |

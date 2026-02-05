@@ -410,7 +410,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 		// Handle group context if present
 		if gv2 := dm.GetGroupV2(); gv2 != nil && len(gv2.GetMasterKey()) == 32 {
-			populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, logger)
+			populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, rc.service, logger)
 		}
 
 		populateContactInfo(ctx, msg, st, rc.service)
@@ -436,7 +436,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 				// Handle group context if present
 				if gv2 := dm.GetGroupV2(); gv2 != nil && len(gv2.GetMasterKey()) == 32 {
-					populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, logger)
+					populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, rc.service, logger)
 				}
 
 				populateContactInfo(ctx, msg, st, rc.service)
@@ -722,7 +722,7 @@ func processSenderKeyDistribution(senderACI string, senderDevice uint32, skdmByt
 
 // populateGroupInfo extracts group info from a master key and populates the message.
 // It also stores/updates the group in the database for future reference.
-func populateGroupInfo(msg *Message, masterKeyBytes []byte, revision int, st *store.Store, logger *log.Logger) {
+func populateGroupInfo(msg *Message, masterKeyBytes []byte, revision int, st *store.Store, svc *Service, logger *log.Logger) {
 	if len(masterKeyBytes) != 32 {
 		return
 	}
@@ -757,8 +757,13 @@ func populateGroupInfo(msg *Message, masterKeyBytes []byte, revision int, st *st
 				logf(logger, "failed to update group revision: %v", err)
 			}
 		}
+		// Fetch name if not yet known
+		if existing.Name == "" {
+			fetchGroupName(existing, svc, st, logger)
+			msg.GroupName = existing.Name
+		}
 	} else {
-		// Store new group (without name - we'll need to fetch it from server later)
+		// Store new group
 		newGroup := &store.Group{
 			GroupID:   msg.GroupID,
 			MasterKey: masterKeyBytes,
@@ -768,6 +773,22 @@ func populateGroupInfo(msg *Message, masterKeyBytes []byte, revision int, st *st
 			logf(logger, "failed to save group: %v", err)
 		} else {
 			logf(logger, "stored new group groupID=%s", msg.GroupID)
+			fetchGroupName(newGroup, svc, st, logger)
+			msg.GroupName = newGroup.Name
+		}
+	}
+}
+
+// fetchGroupName fetches the group name from the Groups V2 API and updates the group in the store.
+func fetchGroupName(group *store.Group, svc *Service, st *store.Store, logger *log.Logger) {
+	if err := svc.FetchGroupDetails(context.Background(), group); err != nil {
+		logf(logger, "failed to fetch group name for %s: %v", group.GroupID, err)
+		return
+	}
+	if group.Name != "" {
+		logf(logger, "fetched group name for %s: %q", group.GroupID, group.Name)
+		if err := st.SaveGroup(group); err != nil {
+			logf(logger, "failed to save group name: %v", err)
 		}
 	}
 }

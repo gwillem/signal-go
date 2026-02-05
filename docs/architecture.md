@@ -336,7 +336,7 @@ Groups are stored in Signal's **Storage Service**, not the messaging protocol:
 2. Parse `GroupV2Record` entries containing group master keys
 3. Use Groups V2 API with zero-knowledge credentials to fetch group state
 
-This requires libsignal's `zkgroup` module for zero-knowledge proofs. signal-go does not currently implement Storage Service sync or Groups V2 API.
+This requires libsignal's `zkgroup` module for zero-knowledge proofs. signal-go implements Storage Service sync, Groups V2 API, and auto-fetches group names on first message via `FetchGroupDetails`.
 
 ## Reference sources
 
