@@ -38,6 +38,67 @@ func NewHTTPClient(baseURL string, tlsConf *tls.Config, logger *log.Logger) *HTT
 	}
 }
 
+// authType specifies the authentication method for API requests.
+type authType int
+
+const (
+	authNone  authType = iota // No authentication
+	authBasic                 // HTTP Basic auth
+	authUAK                   // Unidentified-Access-Key header (sealed sender)
+)
+
+// apiRequest holds parameters for a JSON API call.
+type apiRequest struct {
+	method   string
+	path     string
+	body     any      // marshaled to JSON if non-nil
+	authType authType // authentication type
+	auth     BasicAuth
+	uak      []byte // Unidentified-Access-Key for sealed sender
+}
+
+// doJSON executes a JSON API request and returns the response body and status code.
+// The caller should check the status code and handle errors appropriately.
+func (c *HTTPClient) doJSON(ctx context.Context, req apiRequest) ([]byte, int, error) {
+	var bodyReader io.Reader
+	if req.body != nil {
+		data, err := json.Marshal(req.body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("httpclient: marshal request: %w", err)
+		}
+		bodyReader = bytes.NewReader(data)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, req.method, c.baseURL+req.path, bodyReader)
+	if err != nil {
+		return nil, 0, fmt.Errorf("httpclient: new request: %w", err)
+	}
+
+	if req.body != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+
+	switch req.authType {
+	case authBasic:
+		httpReq.SetBasicAuth(req.auth.Username, req.auth.Password)
+	case authUAK:
+		httpReq.Header.Set("Unidentified-Access-Key", encodeBase64(req.uak))
+	}
+
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("httpclient: read response: %w", err)
+	}
+
+	return respBody, resp.StatusCode, nil
+}
+
 // do executes an HTTP request with automatic retry on 429 (Too Many Requests).
 // It respects the Retry-After header, capping the wait at 10 minutes.
 // Falls back to exponential backoff (5s, 10s, 20s) if no Retry-After is present.
@@ -112,71 +173,48 @@ func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
 // Signal requires Basic auth with the phone number (e164) as username and a
 // pre-generated password.
 func (c *HTTPClient) RegisterSecondaryDevice(ctx context.Context, req *RegisterRequest, auth BasicAuth) (*RegisterResponse, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: marshal register request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/devices/link", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPut,
+		path:     "/v1/devices/link",
+		body:     req,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: register: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: register: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: register: status %d: %s", status, respBody)
 	}
 
 	var result RegisterResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal response: %w", err)
 	}
-
 	return &result, nil
 }
 
 // GetPreKeys fetches a recipient's pre-key bundle.
 // GET /v2/keys/{destination}/{deviceId}
 func (c *HTTPClient) GetPreKeys(ctx context.Context, destination string, deviceID int, auth BasicAuth) (*PreKeyResponse, error) {
-	url := fmt.Sprintf("%s/v2/keys/%s/%d", c.baseURL, destination, deviceID)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(httpReq)
+	path := fmt.Sprintf("/v2/keys/%s/%d", destination, deviceID)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodGet,
+		path:     path,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: get pre-keys: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: get pre-keys: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get pre-keys: status %d: %s", status, respBody)
 	}
 
 	var result PreKeyResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal pre-keys: %w", err)
 	}
-
 	return &result, nil
 }
 
@@ -208,30 +246,23 @@ func (e *MismatchedDevicesError) Error() string {
 // Returns *StaleDevicesError for 410 and *MismatchedDevicesError for 409,
 // allowing callers to handle session refresh and retry.
 func (c *HTTPClient) SendMessage(ctx context.Context, destination string, msg *OutgoingMessageList, auth BasicAuth) error {
-	body, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("httpclient: marshal message: %w", err)
-	}
-
-	// Log the full request JSON for debugging.
-	logf(c.logger, "http PUT /v1/messages/%s body=%s", destination, string(body))
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/messages/"+destination, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPut,
+		path:     "/v1/messages/" + destination,
+		body:     msg,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return fmt.Errorf("httpclient: send message: %w", err)
 	}
-	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	return c.handleMessageResponse(status, respBody)
+}
 
-	switch resp.StatusCode {
+// handleMessageResponse handles 409/410 errors for message sending.
+func (c *HTTPClient) handleMessageResponse(status int, respBody []byte) error {
+	switch status {
 	case http.StatusOK, http.StatusCreated:
 		return nil
 	case http.StatusGone: // 410
@@ -249,94 +280,65 @@ func (c *HTTPClient) SendMessage(ctx context.Context, destination string, msg *O
 		}
 		return &parsed
 	default:
-		return fmt.Errorf("httpclient: send message: status %d: %s", resp.StatusCode, respBody)
+		return fmt.Errorf("httpclient: send message: status %d: %s", status, respBody)
 	}
 }
 
 // SetAccountAttributes calls PUT /v1/accounts/attributes/ to update account attributes.
 func (c *HTTPClient) SetAccountAttributes(ctx context.Context, attrs *AccountAttributes, auth BasicAuth) error {
-	body, err := json.Marshal(attrs)
-	if err != nil {
-		return fmt.Errorf("httpclient: marshal attributes: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/accounts/attributes/", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPut,
+		path:     "/v1/accounts/attributes/",
+		body:     attrs,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return fmt.Errorf("httpclient: set attributes: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("httpclient: set attributes: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return fmt.Errorf("httpclient: set attributes: status %d: %s", status, respBody)
 	}
-
 	return nil
 }
 
 // GetDevices calls GET /v1/devices/ to list registered devices for this account.
 func (c *HTTPClient) GetDevices(ctx context.Context, auth BasicAuth) ([]DeviceInfo, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/devices/", nil)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodGet,
+		path:     "/v1/devices/",
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: get devices: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: get devices: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get devices: status %d: %s", status, respBody)
 	}
 
 	var result DeviceListResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal devices: %w", err)
 	}
-
 	return result.Devices, nil
 }
 
 // UploadPreKeys calls PUT /v2/keys?identity={aci|pni} to upload pre-keys.
 func (c *HTTPClient) UploadPreKeys(ctx context.Context, identity string, keys *PreKeyUpload, auth BasicAuth) error {
-	body, err := json.Marshal(keys)
-	if err != nil {
-		return fmt.Errorf("httpclient: marshal pre-keys: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v2/keys?identity="+identity, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPut,
+		path:     "/v2/keys?identity=" + identity,
+		body:     keys,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return fmt.Errorf("httpclient: upload keys: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("httpclient: upload keys: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return fmt.Errorf("httpclient: upload keys: status %d: %s", status, respBody)
 	}
-
 	return nil
 }
 
@@ -344,68 +346,45 @@ func (c *HTTPClient) UploadPreKeys(ctx context.Context, identity string, keys *P
 // POST /v1/verification/session
 func (c *HTTPClient) CreateVerificationSession(ctx context.Context, number string) (*VerificationSessionResponse, error) {
 	req := &VerificationSessionRequest{Number: number}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: marshal session request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/verification/session", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPost,
+		path:     "/v1/verification/session",
+		body:     req,
+		authType: authNone,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: create session: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: create session: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: create session: status %d: %s", status, respBody)
 	}
 
 	var result VerificationSessionResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
 	}
-
 	return &result, nil
 }
 
 // GetSessionStatus retrieves the current state of a verification session.
 // GET /v1/verification/session/{sessionId}
 func (c *HTTPClient) GetSessionStatus(ctx context.Context, sessionID string) (*VerificationSessionResponse, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/verification/session/"+sessionID, nil)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodGet,
+		path:     "/v1/verification/session/" + sessionID,
+		authType: authNone,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: get session: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: get session: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get session: status %d: %s", status, respBody)
 	}
 
 	var result VerificationSessionResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
 	}
-
 	return &result, nil
 }
 
@@ -416,37 +395,23 @@ func (c *HTTPClient) RequestVerificationCode(ctx context.Context, sessionID, tra
 		Transport: transport,
 		Client:    "android-2024-01",
 	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: marshal code request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/verification/session/"+sessionID+"/code", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPost,
+		path:     "/v1/verification/session/" + sessionID + "/code",
+		body:     req,
+		authType: authNone,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: request code: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: request code: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: request code: status %d: %s", status, respBody)
 	}
 
 	var result VerificationSessionResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
 	}
-
 	return &result, nil
 }
 
@@ -454,74 +419,46 @@ func (c *HTTPClient) RequestVerificationCode(ctx context.Context, sessionID, tra
 // PUT /v1/verification/session/{sessionId}/code
 func (c *HTTPClient) SubmitVerificationCode(ctx context.Context, sessionID, code string) (*VerificationSessionResponse, error) {
 	req := &SubmitVerificationCodeRequest{Code: code}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: marshal submit request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/verification/session/"+sessionID+"/code", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPut,
+		path:     "/v1/verification/session/" + sessionID + "/code",
+		body:     req,
+		authType: authNone,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: submit code: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: submit code: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: submit code: status %d: %s", status, respBody)
 	}
 
 	var result VerificationSessionResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
 	}
-
 	return &result, nil
 }
 
 // UpdateSession submits a CAPTCHA or push challenge response.
 // PATCH /v1/verification/session/{sessionId}
 func (c *HTTPClient) UpdateSession(ctx context.Context, sessionID string, req *UpdateSessionRequest) (*VerificationSessionResponse, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: marshal update request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.baseURL+"/v1/verification/session/"+sessionID, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPatch,
+		path:     "/v1/verification/session/" + sessionID,
+		body:     req,
+		authType: authNone,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: update session: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: update session: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: update session: status %d: %s", status, respBody)
 	}
 
 	var result VerificationSessionResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal session: %w", err)
 	}
-
 	return &result, nil
 }
 
@@ -529,38 +466,24 @@ func (c *HTTPClient) UpdateSession(ctx context.Context, sessionID string, req *U
 // POST /v1/registration
 // Auth uses phone number as username and generated password.
 func (c *HTTPClient) RegisterPrimaryDevice(ctx context.Context, req *PrimaryRegistrationRequest, auth BasicAuth) (*PrimaryRegistrationResponse, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: marshal registration: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/registration", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(httpReq)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPost,
+		path:     "/v1/registration",
+		body:     req,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: register primary: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: register primary: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: register primary: status %d: %s", status, respBody)
 	}
 
 	var result PrimaryRegistrationResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal registration: %w", err)
 	}
-
 	return &result, nil
 }
 
@@ -636,33 +559,20 @@ func (c *HTTPClient) SetProfileWithOptions(ctx context.Context, aci string, prof
 		BadgeIDs:           []string{},
 	}
 
-	body, err := json.Marshal(profileWrite)
-	if err != nil {
-		return fmt.Errorf("httpclient: marshal profile: %w", err)
-	}
-
 	logf(c.logger, "setting profile: version=%s name=%q", version, name)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/profile", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("httpclient: new request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(req)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPut,
+		path:     "/v1/profile",
+		body:     profileWrite,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return fmt.Errorf("httpclient: set profile: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("httpclient: set profile: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return fmt.Errorf("httpclient: set profile: status %d: %s", status, respBody)
 	}
 
 	logf(c.logger, "profile set successfully")
@@ -687,35 +597,26 @@ func (c *HTTPClient) GetProfile(ctx context.Context, aci string, profileKey []by
 		return nil, fmt.Errorf("httpclient: get profile key version: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/v1/profile/%s/%s", c.baseURL, aci, version)
+	path := fmt.Sprintf("/v1/profile/%s/%s", aci, version)
 	logf(c.logger, "fetching profile: aci=%s version=%s", aci, version)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	req.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(req)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodGet,
+		path:     path,
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: get profile: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: get profile: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get profile: status %d: %s", status, respBody)
 	}
 
 	var profile ProfileResponse
 	if err := json.Unmarshal(respBody, &profile); err != nil {
 		return nil, fmt.Errorf("httpclient: unmarshal profile: %w", err)
 	}
-
 	return &profile, nil
 }
 
@@ -723,27 +624,17 @@ func (c *HTTPClient) GetProfile(ctx context.Context, aci string, profileKey []by
 // GET /v1/certificate/delivery
 // The certificate is valid for about 24 hours and should be cached.
 func (c *HTTPClient) GetSenderCertificate(ctx context.Context, auth BasicAuth) ([]byte, error) {
-	url := fmt.Sprintf("%s/v1/certificate/delivery", c.baseURL)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: new request: %w", err)
-	}
-	req.SetBasicAuth(auth.Username, auth.Password)
-
-	resp, err := c.do(req)
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodGet,
+		path:     "/v1/certificate/delivery",
+		authType: authBasic,
+		auth:     auth,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: get sender certificate: %w", err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("httpclient: get sender certificate: status %d: %s", resp.StatusCode, respBody)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("httpclient: get sender certificate: status %d: %s", status, respBody)
 	}
 
 	var certResp SenderCertificateResponse
@@ -753,14 +644,12 @@ func (c *HTTPClient) GetSenderCertificate(ctx context.Context, auth BasicAuth) (
 
 	logf(c.logger, "sender cert base64 len=%d value=%s", len(certResp.Certificate), certResp.Certificate)
 
-	// Decode base64 certificate
 	certBytes, err := decodeBase64(certResp.Certificate)
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: decode sender certificate: %w", err)
 	}
 
 	logf(c.logger, "sender cert bytes len=%d first20=%x", len(certBytes), truncateBytes(certBytes, 20))
-
 	return certBytes, nil
 }
 
@@ -782,35 +671,19 @@ func truncateBytes(b []byte, n int) []byte {
 // PUT /v1/messages/{destination}
 // Uses the Unidentified-Access-Key header for sealed sender authentication.
 func (c *HTTPClient) SendSealedMessage(ctx context.Context, destination string, msg *OutgoingMessageList, unidentifiedAccessKey []byte) error {
-	url := fmt.Sprintf("%s/v1/messages/%s", c.baseURL, destination)
-
-	body, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("httpclient: marshal sealed message: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("httpclient: new request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// Use Unidentified-Access-Key header instead of Basic Auth
-	accessKeyB64 := encodeBase64(unidentifiedAccessKey)
-	req.Header.Set("Unidentified-Access-Key", accessKeyB64)
-
-	resp, err := c.do(req)
+	path := "/v1/messages/" + destination
+	respBody, status, err := c.doJSON(ctx, apiRequest{
+		method:   http.MethodPut,
+		path:     path,
+		body:     msg,
+		authType: authUAK,
+		uak:      unidentifiedAccessKey,
+	})
 	if err != nil {
 		return fmt.Errorf("httpclient: send sealed message: %w", err)
 	}
-	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("httpclient: read response: %w", err)
-	}
-
-	switch resp.StatusCode {
+	switch status {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
 		return nil
 	case http.StatusConflict: // 409: mismatched devices
@@ -828,7 +701,7 @@ func (c *HTTPClient) SendSealedMessage(ctx context.Context, destination string, 
 	case http.StatusUnauthorized: // 401: access key rejected
 		return fmt.Errorf("httpclient: sealed sender: access key rejected (401): recipient may have sealed sender disabled")
 	default:
-		return fmt.Errorf("httpclient: send sealed message: status %d: %s", resp.StatusCode, respBody)
+		return fmt.Errorf("httpclient: send sealed message: status %d: %s", status, respBody)
 	}
 }
 

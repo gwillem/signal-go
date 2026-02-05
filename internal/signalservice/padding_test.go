@@ -6,7 +6,7 @@ import "testing"
 // Reference: Signal-Android/lib/libsignal-service/src/test/java/org/whispersystems/signalservice/api/push/PushTransportDetailsTest.kt
 func TestPadMessage(t *testing.T) {
 	// Messages 0-78 bytes should pad to 79 bytes
-	for i := 0; i < 79; i++ {
+	for i := range 79 {
 		msg := make([]byte, i)
 		padded := padMessage(msg)
 		if len(padded) != 79 {

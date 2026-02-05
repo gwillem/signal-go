@@ -3,8 +3,10 @@ package signalservice
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -128,26 +130,11 @@ func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSign
 
 // uuidToBytes converts a UUID string (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) to 16 bytes.
 func uuidToBytes(uuidStr string) ([]byte, error) {
-	// Remove dashes and decode hex.
-	hex := ""
-	for _, c := range uuidStr {
-		if c != '-' {
-			hex += string(c)
-		}
+	hexStr := strings.ReplaceAll(uuidStr, "-", "")
+	if len(hexStr) != 32 {
+		return nil, fmt.Errorf("invalid UUID length: %d", len(hexStr))
 	}
-	if len(hex) != 32 {
-		return nil, fmt.Errorf("invalid UUID length: %d", len(hex))
-	}
-	result := make([]byte, 16)
-	for i := 0; i < 16; i++ {
-		var b byte
-		_, err := fmt.Sscanf(hex[i*2:i*2+2], "%02x", &b)
-		if err != nil {
-			return nil, fmt.Errorf("invalid UUID hex at %d: %w", i, err)
-		}
-		result[i] = b
-	}
-	return result, nil
+	return hex.DecodeString(hexStr)
 }
 
 // envelopeTypeForCiphertext maps libsignal CiphertextMessage types to Signal
