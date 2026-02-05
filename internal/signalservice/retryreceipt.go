@@ -196,6 +196,70 @@ func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, co
 	return nil
 }
 
+// sendEncryptedMessageWithTimestamp is like sendEncryptedMessage but uses an explicit timestamp.
+// This is needed for sync messages where the envelope timestamp must match the DataMessage timestamp.
+func (s *Service) sendEncryptedMessageWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
+	sendingToSelf := recipient == s.localACI
+	logf(s.logger, "send with timestamp: localDeviceID=%d recipient=%s sendingToSelf=%v timestamp=%d", s.localDeviceID, recipient, sendingToSelf, timestamp)
+
+	// Load cached devices, or start with device 1 if not cached.
+	deviceIDs, _ := s.store.GetDevices(recipient)
+	if len(deviceIDs) == 0 {
+		deviceIDs = []int{1}
+	}
+
+	// When sending to self, filter out our own device from the initial list.
+	if sendingToSelf {
+		deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == s.localDeviceID })
+		if len(deviceIDs) == 0 {
+			return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
+		}
+	}
+
+	const maxAttempts = 5
+	for attempt := range maxAttempts {
+		logf(s.logger, "send with timestamp: attempt %d/%d devices=%v", attempt+1, maxAttempts, deviceIDs)
+		err := s.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, deviceIDs, timestamp)
+		if err == nil {
+			_ = s.store.SetDevices(recipient, deviceIDs)
+			return nil
+		}
+		if attempt == maxAttempts-1 {
+			return err
+		}
+
+		var staleErr *StaleDevicesError
+		var mismatchErr *MismatchedDevicesError
+
+		switch {
+		case errors.As(err, &staleErr):
+			logf(s.logger, "send with timestamp: 410 stale=%v devices=%v", staleErr.StaleDevices, deviceIDs)
+			for _, deviceID := range staleErr.StaleDevices {
+				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
+			}
+		case errors.As(err, &mismatchErr):
+			logf(s.logger, "send with timestamp: 409 missing=%v extra=%v devices=%v",
+				mismatchErr.MissingDevices, mismatchErr.ExtraDevices, deviceIDs)
+			for _, deviceID := range deviceIDs {
+				_ = s.store.ArchiveSession(recipient, uint32(deviceID))
+			}
+			for _, deviceID := range mismatchErr.ExtraDevices {
+				deviceIDs = slices.DeleteFunc(deviceIDs, func(id int) bool { return id == deviceID })
+			}
+			for _, deviceID := range mismatchErr.MissingDevices {
+				skipOwnDevice := sendingToSelf && deviceID == s.localDeviceID
+				if !skipOwnDevice && !slices.Contains(deviceIDs, deviceID) {
+					deviceIDs = append(deviceIDs, deviceID)
+				}
+			}
+			_ = s.store.SetDevices(recipient, deviceIDs)
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
 // sendEncryptedMessageWithDevices encrypts and sends Content bytes starting with the
 // given initial device list. Like sendEncryptedMessage, it handles the 409/410 retry
 // loop, but starts with a known device list to reduce round trips.
@@ -267,8 +331,13 @@ func (s *Service) sendEncryptedMessageWithDevices(ctx context.Context, recipient
 
 // encryptAndSend performs a single encrypt-and-send attempt for the given device IDs.
 func (s *Service) encryptAndSend(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int) error {
+	return s.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, deviceIDs, uint64(time.Now().UnixMilli()))
+}
+
+// encryptAndSendWithTimestamp performs a single encrypt-and-send attempt with an explicit timestamp.
+// This is used for sync messages where the envelope timestamp must match the DataMessage timestamp.
+func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int, timestamp uint64) error {
 	now := time.Now()
-	timestamp := uint64(now.UnixMilli())
 
 	// Add Signal transport padding before encryption.
 	// Format: [content] [0x80] [0x00...] padded to 80-byte blocks.

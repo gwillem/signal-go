@@ -375,6 +375,8 @@ func updateDeviceList(current []int, missing, extra []int) []int {
 // sendGroupSyncMessage sends a SyncMessage.Sent to our other devices so they
 // display the outgoing group message in the conversation.
 func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessage, timestamp uint64, recipients []string, senderCert *libsignal.SenderCertificate) error {
+	logf(s.logger, "sync: sending group sync message timestamp=%d recipients=%d", timestamp, len(recipients))
+
 	acct, err := s.store.LoadAccount()
 	if err != nil {
 		return fmt.Errorf("load account: %w", err)
@@ -410,6 +412,10 @@ func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessag
 		return fmt.Errorf("marshal sync message: %w", err)
 	}
 
+	// Log sync message details for debugging
+	logf(s.logger, "sync: message has GroupV2=%v masterKeyLen=%d statusCount=%d",
+		dm.GroupV2 != nil, len(dm.GetGroupV2().GetMasterKey()), len(statuses))
+
 	// Get our devices and exclude the current one
 	deviceIDs, _ := s.store.GetDevices(acct.ACI)
 	if len(deviceIDs) == 0 {
@@ -430,6 +436,8 @@ func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessag
 		return nil
 	}
 
+	logf(s.logger, "sync: sending to other devices %v (our device is %d)", otherDevices, acct.DeviceID)
+
 	// Temporarily set the device list for self to only include other devices
 	s.store.SetDevices(acct.ACI, otherDevices)
 	defer func() {
@@ -439,8 +447,10 @@ func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessag
 	}()
 
 	// For sync messages to self, use regular encrypted messages (not sealed sender)
-	// to avoid access key issues with the server's device list validation
-	return s.sendEncryptedMessage(ctx, acct.ACI, contentBytes)
+	// to avoid access key issues with the server's device list validation.
+	// IMPORTANT: Use the same timestamp as the DataMessage - Signal Desktop validates
+	// that the envelope timestamp matches the DataMessage timestamp.
+	return s.sendEncryptedMessageWithTimestamp(ctx, acct.ACI, contentBytes, timestamp)
 }
 
 func createSenderKeyUSMC(senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) (*libsignal.UnidentifiedSenderMessageContent, error) {
