@@ -57,14 +57,23 @@ err = client.SyncContacts(ctx)
 │  client.go                  (public API)    │
 │  - Client: Link, Load, Send, Receive        │
 │  - SyncContacts, LookupNumber               │
-│  - hides WebSocket URLs, crypto, stores     │
+│  - owns Service, delegates to it            │
 ├─────────────────────────────────────────────┤
-│  internal/signalservice     (pure Go)       │
-│  - HTTP client for Signal REST API          │
-│  - WebSocket for message push               │
-│  - device provisioning (linking)            │
-│  - message send / receive / retry receipts  │
-│  - contact sync + attachment download       │
+│  internal/signalservice                     │
+│  ┌────────────────────────────────────────┐ │
+│  │  Service        (high-level API)       │ │
+│  │  - SendTextMessage, ReceiveMessages    │ │
+│  │  - GetPreKeys, UploadPreKeys           │ │
+│  │  - GetProfile, SetProfile              │ │
+│  │  - owns Transport, Store, Auth         │ │
+│  ├────────────────────────────────────────┤ │
+│  │  Transport      (HTTP mechanics)       │ │
+│  │  - rate limiting (429 retry)           │ │
+│  │  - auth header injection               │ │
+│  │  - Get, Put, Post, Patch helpers       │ │
+│  └────────────────────────────────────────┘ │
+│  + provisioning, registration (one-time)    │
+│  + WebSocket for message push               │
 ├─────────────────────────────────────────────┤
 │  internal/libsignal         (CGO bindings)  │
 │  - key generation, session management       │
@@ -77,6 +86,19 @@ err = client.SyncContacts(ctx)
 │  - source at ../libsignal                   │
 └─────────────────────────────────────────────┘
 ```
+
+### Service / Transport separation
+
+The `signalservice` package separates concerns:
+
+- **Transport** (`transport.go`) — HTTP mechanics only: rate limiting, retries, auth headers, base URL. Provides `Get`, `Put`, `Post`, `Patch` methods.
+
+- **Service** (`service.go`) — High-level API operations. Owns Transport, Store, and credentials. Methods like `SendTextMessage`, `GetPreKeys`, `SetProfile` use Transport internally but hide HTTP details from callers.
+
+This separation means:
+1. Business logic doesn't know about TLS config or rate limiting
+2. HTTP client is reused (connection pooling)
+3. Auth credentials are configured once, not passed per-call
 
 ## Build prerequisites
 

@@ -32,7 +32,7 @@ func (c *HTTPClient) doRequest(ctx context.Context, method, url string, body []b
 #### 1.4 HTTPClient Instantiation (client.go - 8 occurrences) ✅ FIXED
 ~~`signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)` repeated throughout.~~
 
-**Fixed:** Added method `func (c *Client) httpClient() *HTTPClient`
+**Fixed:** HTTPClient is now cached in the Client struct (`c.http`) and initialized once in `NewClient()`. This enables HTTP connection pooling and reuse.
 
 #### 1.5 Pre-Key Store Methods (internal/store/prekey.go)
 `StorePreKey`, `StoreSignedPreKey`, `StoreKyberPreKey` have identical serialize-insert patterns.

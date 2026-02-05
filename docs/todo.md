@@ -15,6 +15,7 @@
 - [ ] Remove duplicate code, identify simplifications
 - [ ] Simplify SendTextMessage gigantic signature
 - [ ] logf > c.logf
+- [ ] speed up tests
 
 ## Completed
 

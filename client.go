@@ -32,6 +32,7 @@ const (
 type Client struct {
 	provisioningURL   string
 	apiURL            string
+	wsURL             string
 	tlsConfig         *tls.Config
 	dbPath            string
 	debugDir          string
@@ -45,19 +46,31 @@ type Client struct {
 	number            string
 	registrationID    int
 	pniRegistrationID int
+	service           *signalservice.Service
+}
+
+// initService creates the Service after credentials are known (called from Link/Load).
+func (c *Client) initService() {
+	c.service = signalservice.NewService(signalservice.ServiceConfig{
+		APIURL:        c.apiURL,
+		WSURL:         c.wsURL,
+		TLSConfig:     c.tlsConfig,
+		Store:         c.store,
+		Auth:          c.auth(),
+		LocalACI:      c.aci,
+		LocalDeviceID: c.deviceID,
+		Logger:        c.logger,
+		DebugDir:      c.debugDir,
+	})
 }
 
 // auth returns the BasicAuth credentials for API requests.
+// Used by functions not yet migrated to Service.
 func (c *Client) auth() signalservice.BasicAuth {
 	return signalservice.BasicAuth{
 		Username: fmt.Sprintf("%s.%d", c.aci, c.deviceID),
 		Password: c.password,
 	}
-}
-
-// httpClient returns a new HTTPClient for API requests.
-func (c *Client) httpClient() *signalservice.HTTPClient {
-	return signalservice.NewHTTPClient(c.apiURL, c.tlsConfig, c.logger)
 }
 
 // Option configures a Client.
@@ -102,6 +115,7 @@ func NewClient(opts ...Option) *Client {
 	c := &Client{
 		provisioningURL: defaultProvisioningURL,
 		apiURL:          defaultAPIURL,
+		wsURL:           defaultWSURL,
 		tlsConfig:       signalservice.TLSConfig(),
 	}
 	for _, o := range opts {
@@ -210,7 +224,11 @@ func (c *Client) Register(
 		PNIIdentityKeyPublic:  reg.PNIIdentityKeyPublic,
 		ProfileKey:            signalservice.GenerateProfileKey(),
 	}
-	return c.store.SaveAccount(acct)
+	if err := c.store.SaveAccount(acct); err != nil {
+		return err
+	}
+	c.initService()
+	return nil
 }
 
 func (c *Client) storePrimaryPreKeys(reg *signalservice.PrimaryRegistrationResult) error {
@@ -343,6 +361,7 @@ func (c *Client) Load() error {
 		}
 	}
 
+	c.initService()
 	return nil
 }
 
@@ -433,52 +452,47 @@ func (c *Client) SendWithPNI(ctx context.Context, recipient string, text string)
 // This hides the sender's identity from the Signal server.
 // Requires the recipient's profile key to be stored (for deriving unidentified access key).
 func (c *Client) SendSealed(ctx context.Context, recipient string, text string) error {
-	if c.store == nil {
+	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-	auth := c.auth()
-	return signalservice.SendSealedSenderMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig, c.logger)
+	return c.service.SendSealedSenderMessage(ctx, recipient, text)
 }
 
 func (c *Client) sendInternal(ctx context.Context, recipient string, text string, usePNI bool) error {
-	if c.store == nil {
+	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
 	// Note: Server only accepts ACI for authentication, not PNI.
 	// When usePNI=true, we use PNI identity for encryption but ACI for auth.
 	// This creates a mismatch that recipients may not handle correctly.
 	// The proper solution is sealed sender (not yet implemented).
-	auth := c.auth()
 	if usePNI {
 		c.store.UsePNI(true)
 		defer c.store.UsePNI(false)
 	}
-	return signalservice.SendTextMessage(ctx, c.apiURL, recipient, text, c.store, auth, c.tlsConfig, c.logger, c.debugDir)
+	return c.service.SendTextMessage(ctx, recipient, text)
 }
 
 // Receive returns an iterator that yields incoming text messages.
 // It connects to the authenticated WebSocket and decrypts messages.
 // The iterator stops when the context is cancelled or the caller breaks.
 func (c *Client) Receive(ctx context.Context) iter.Seq2[Message, error] {
-	if c.store == nil {
+	if c.service == nil {
 		return func(yield func(Message, error) bool) {
 			yield(Message{}, fmt.Errorf("client: not linked (call Link or Load first)"))
 		}
 	}
-	auth := c.auth()
-	wsURL := defaultWSURL
-	return signalservice.ReceiveMessages(ctx, wsURL, c.apiURL, c.store, auth, c.aci, uint32(c.deviceID), c.tlsConfig, c.logger, c.debugDir)
+	return c.service.ReceiveMessages(ctx)
 }
 
 // SyncContacts requests a contact sync from the primary device.
 // The primary device will respond with a SyncMessage.Contacts that is
 // automatically handled by the receive loop, populating the local contact store.
 func (c *Client) SyncContacts(ctx context.Context) error {
-	if c.store == nil {
+	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-	auth := c.auth()
-	return signalservice.RequestContactSync(ctx, c.apiURL, c.store, auth, c.aci, c.tlsConfig, c.logger)
+	return c.service.RequestContactSync(ctx)
 }
 
 // LookupNumber returns the phone number for the given ACI UUID from the local
@@ -512,9 +526,7 @@ func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []b
 	localKey = acct.ACIIdentityKeyPublic
 
 	// Query server for our pre-keys (includes identity key)
-	auth := c.auth()
-	httpClient := c.httpClient()
-	preKeys, err := httpClient.GetPreKeys(ctx, c.aci, c.deviceID, auth)
+	preKeys, err := c.service.GetPreKeys(ctx, c.aci, c.deviceID)
 	if err != nil {
 		return nil, localKey, false, fmt.Errorf("client: get pre-keys from server: %w", err)
 	}
@@ -530,9 +542,7 @@ func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []b
 
 // GetDeviceIdentityKey fetches the identity key for a specific device from the server.
 func (c *Client) GetDeviceIdentityKey(ctx context.Context, deviceID int) (string, error) {
-	auth := c.auth()
-	httpClient := c.httpClient()
-	preKeys, err := httpClient.GetPreKeys(ctx, c.aci, deviceID, auth)
+	preKeys, err := c.service.GetPreKeys(ctx, c.aci, deviceID)
 	if err != nil {
 		return "", err
 	}
@@ -544,9 +554,7 @@ type DeviceInfo = signalservice.DeviceInfo
 
 // Devices returns the list of registered devices for this account.
 func (c *Client) Devices(ctx context.Context) ([]DeviceInfo, error) {
-	auth := c.auth()
-	httpClient := c.httpClient()
-	return httpClient.GetDevices(ctx, auth)
+	return c.service.GetDevices(ctx)
 }
 
 // UpdateAttributes updates account attributes on the Signal server.
@@ -562,8 +570,6 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 	if acct == nil {
 		return fmt.Errorf("client: no account found")
 	}
-
-	auth := c.auth()
 
 	attrs := &signalservice.AccountAttributes{
 		RegistrationID:    acct.RegistrationID,
@@ -587,8 +593,7 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 		attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
 	}
 
-	httpClient := c.httpClient()
-	return httpClient.SetAccountAttributes(ctx, attrs, auth)
+	return c.service.SetAccountAttributes(ctx, attrs)
 }
 
 // AccountSettings contains configurable account settings.
@@ -624,9 +629,6 @@ func (c *Client) UpdateAccountSettings(ctx context.Context, settings *AccountSet
 		}
 	}
 
-	auth := c.auth()
-	httpClient := c.httpClient()
-
 	// Update account attributes if any attribute settings are provided.
 	if settings.DiscoverableByPhoneNumber != nil || settings.UnrestrictedUnidentifiedAccess != nil {
 		attrs := &signalservice.AccountAttributes{
@@ -658,7 +660,7 @@ func (c *Client) UpdateAccountSettings(ctx context.Context, settings *AccountSet
 			attrs.UnrestrictedUnidentifiedAccess = *settings.UnrestrictedUnidentifiedAccess
 		}
 
-		if err := httpClient.SetAccountAttributes(ctx, attrs, auth); err != nil {
+		if err := c.service.SetAccountAttributes(ctx, attrs); err != nil {
 			return fmt.Errorf("client: set account attributes: %w", err)
 		}
 	}
@@ -672,9 +674,6 @@ func (c *Client) RefreshPreKeys(ctx context.Context) error {
 	if c.store == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-
-	auth := c.auth()
-	httpClient := c.httpClient()
 
 	// Upload ACI pre-keys (ID 1)
 	aciSignedPreKey, err := c.store.LoadSignedPreKey(1)
@@ -704,10 +703,10 @@ func (c *Client) RefreshPreKeys(ctx context.Context) error {
 		return fmt.Errorf("client: convert ACI Kyber pre-key: %w", err)
 	}
 
-	if err := httpClient.UploadPreKeys(ctx, "aci", &signalservice.PreKeyUpload{
+	if err := c.service.UploadPreKeys(ctx, "aci", &signalservice.PreKeyUpload{
 		SignedPreKey:    aciSPK,
 		PqLastResortKey: aciKPK,
-	}, auth); err != nil {
+	}); err != nil {
 		return fmt.Errorf("client: upload ACI pre-keys: %w", err)
 	}
 
@@ -739,10 +738,10 @@ func (c *Client) RefreshPreKeys(ctx context.Context) error {
 		return fmt.Errorf("client: convert PNI Kyber pre-key: %w", err)
 	}
 
-	if err := httpClient.UploadPreKeys(ctx, "pni", &signalservice.PreKeyUpload{
+	if err := c.service.UploadPreKeys(ctx, "pni", &signalservice.PreKeyUpload{
 		SignedPreKey:    pniSPK,
 		PqLastResortKey: pniKPK,
-	}, auth); err != nil {
+	}); err != nil {
 		return fmt.Errorf("client: upload PNI pre-keys: %w", err)
 	}
 
@@ -871,7 +870,11 @@ func (c *Client) saveAccount() error {
 		acct.MasterKey = c.data.MasterKey
 	}
 
-	return c.store.SaveAccount(acct)
+	if err := c.store.SaveAccount(acct); err != nil {
+		return err
+	}
+	c.initService()
+	return nil
 }
 
 // ProfileInfo contains basic profile information for display.
@@ -931,13 +934,7 @@ func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
 		return nil, fmt.Errorf("no profile key available")
 	}
 
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", acct.ACI, acct.DeviceID),
-		Password: acct.Password,
-	}
-
-	httpClient := c.httpClient()
-	resp, err := httpClient.GetProfile(ctx, acct.ACI, acct.ProfileKey, auth)
+	resp, err := c.service.GetProfile(ctx, acct.ACI, acct.ProfileKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1012,20 +1009,13 @@ func (c *Client) SetProfile(ctx context.Context, name string, numberSharing *boo
 		}
 	}
 
-	auth := signalservice.BasicAuth{
-		Username: fmt.Sprintf("%s.%d", acct.ACI, acct.DeviceID),
-		Password: acct.Password,
-	}
-
-	httpClient := c.httpClient()
-
 	// Build profile options, fetching current name if not provided
 	var profileName *string
 	if name != "" {
 		profileName = &name
 	} else {
 		// Fetch current name to preserve it
-		resp, err := httpClient.GetProfile(ctx, acct.ACI, acct.ProfileKey, auth)
+		resp, err := c.service.GetProfile(ctx, acct.ACI, acct.ProfileKey)
 		if err == nil && resp.Name != "" {
 			cipher, err := signalservice.NewProfileCipher(acct.ProfileKey)
 			if err == nil {
@@ -1042,7 +1032,7 @@ func (c *Client) SetProfile(ctx context.Context, name string, numberSharing *boo
 		Name:               profileName,
 		PhoneNumberSharing: numberSharing,
 	}
-	return httpClient.SetProfileWithOptions(ctx, acct.ACI, acct.ProfileKey, opts, auth)
+	return c.service.SetProfile(ctx, acct.ACI, acct.ProfileKey, opts)
 }
 
 // discoverDB finds the .db file in the default data directory.
