@@ -512,6 +512,16 @@ func (c *Client) GetGroup(groupID string) (*Group, error) {
 	return c.store.GetGroup(groupID)
 }
 
+// SyncGroups fetches group master keys from the Storage Service and stores them locally.
+// This requires the account's master key to be available (set during device linking).
+// Returns the number of groups synced.
+func (c *Client) SyncGroups(ctx context.Context) (int, error) {
+	if c.service == nil {
+		return 0, fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	return c.service.SyncGroupsFromStorage(ctx)
+}
+
 // VerifyIdentityKey checks if the server has the same identity key as locally stored.
 // Returns (serverKey, localKey, match, error).
 func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []byte, match bool, err error) {

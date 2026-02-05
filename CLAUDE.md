@@ -99,7 +99,7 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 
 | File                                     | Purpose                                                                                            |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `client.go`                              | Public API: Client, Link, Load, Send, Receive, SyncContacts, LookupNumber, Groups, Close, Number, DeviceID |
+| `client.go`                              | Public API: Client, Link, Load, Send, Receive, SyncContacts, SyncGroups, LookupNumber, Groups, Close |
 | `libsignal.go`                           | CGO preamble (LDFLAGS, includes)                                                                   |
 | `error.go`                               | FFI error wrapping, owned buffer handling                                                          |
 | `privatekey.go`                          | PrivateKey: generate, serialize, sign, agree                                                       |
@@ -132,6 +132,9 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/signalservice/receiver.go`     | ReceiveMessages: WebSocket receive loop + decryption + retry receipts + contact sync + iterator    |
 | `internal/signalservice/attachment.go`   | DownloadAttachment, DecryptAttachment: CDN download + AES-CBC decryption                           |
 | `internal/signalservice/contactsync.go`  | ParseContactStream, RequestContactSync: contact sync request + response parsing                    |
+| `internal/signalservice/storage.go`      | SyncGroupsFromStorage: Storage Service client for group discovery                                  |
+| `internal/signalservice/storagekeys.go`  | StorageKey, ManifestKey, ItemKey: key derivation for Storage Service encryption                    |
+| `internal/signalservice/storagecrypto.go`| AES-256-GCM decryption for Storage Service records                                                 |
 | `internal/signalservice/trustroot.go`    | Signal sealed sender trust root public keys                                                        |
 | `internal/libsignal/decryptionerror.go`  | DecryptionErrorMessage: CGO bindings for retry receipts                                            |
 | `internal/libsignal/plaintextcontent.go` | PlaintextContent: CGO bindings for unencrypted retry receipt delivery                              |

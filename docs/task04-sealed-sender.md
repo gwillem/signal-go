@@ -101,3 +101,13 @@ libsignal v0.87.0 has pre-embedded server certificates for IDs 2 and 3 in `seale
 5. Validate sender certificate against trust roots
 6. Decrypt inner message using session cipher
 ```
+
+## Sealed Sender v2 (Multi-Recipient)
+
+Signal uses **Sealed Sender v2** for group messages. Version is indicated by the first byte:
+- `0x11` → v1 (single recipient, used for 1:1 messages)
+- `0x22`/`0x23` → v2 (multi-recipient, used for groups)
+
+**Decryption**: Both versions are handled automatically by libsignal's `sealed_sender_decrypt`. No changes needed.
+
+**Sending**: v2 requires `sealed_sender_multi_recipient_encrypt` which is not yet bound. See [task14-group-support.md](task14-group-support.md#sealed-sender-v1-vs-v2) for details on implementing group send with v2.

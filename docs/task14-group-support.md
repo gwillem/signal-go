@@ -27,8 +27,8 @@ Signal groups (V2) use a complex architecture:
 | zkgroup bindings | **Done** (GroupMasterKey, GroupSecretParams, GroupPublicParams, GroupIdentifier) |
 | Group storage (SQLite) | **Done** (master key, name, revision) |
 | Extract group info from received messages | **Done** (populateGroupInfo in receiver.go) |
-| Public API (Groups, GetGroup) | **Done** |
-| Storage Service sync | Not implemented |
+| Public API (Groups, GetGroup, SyncGroups) | **Done** |
+| Storage Service sync | **Done** (Phase 1 complete) |
 | Groups V2 API | Not implemented |
 | Send to groups | Not implemented |
 
@@ -38,7 +38,11 @@ Signal groups (V2) use a complex architecture:
 - `internal/libsignal/zkgroup_test.go` - Tests for zkgroup bindings
 - `internal/store/group.go` - SQLite group storage (SaveGroup, GetGroup, GetAllGroups)
 - `internal/signalservice/receiver.go` - populateGroupInfo() extracts and stores group info from messages
-- `client.go` - Groups(), GetGroup() public API methods
+- `internal/signalservice/storagekeys.go` - Storage key derivation (StorageKey, ManifestKey, ItemKey)
+- `internal/signalservice/storagecrypto.go` - AES-256-GCM decryption for storage records
+- `internal/signalservice/storage.go` - Storage Service client (SyncGroupsFromStorage)
+- `internal/proto/StorageService.proto` - Storage Service protobuf definitions
+- `client.go` - Groups(), GetGroup(), SyncGroups() public API methods
 
 ## Architecture Overview
 
@@ -357,6 +361,50 @@ Total: ~11 files, significant complexity due to zkgroup crypto.
 | Groups V2 Operations | `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/groupsv2/` |
 | Group Database | `app/src/main/java/org/thoughtcrime/securesms/database/GroupTable.java` |
 | Group Send | `app/src/main/java/org/thoughtcrime/securesms/messages/GroupSendUtil.java` |
+
+## Sealed Sender v1 vs v2
+
+Signal uses two versions of sealed sender encryption:
+
+| Version | Use Case | Method | Wire Format |
+|---------|----------|--------|-------------|
+| **v1** | 1:1 direct messages | Single-recipient KEM | Protobuf (`0x11` version byte) |
+| **v2** | Group messages | Multi-recipient KEM | Flat binary (`0x22`/`0x23` version byte) |
+
+### Version Selection
+
+The version is determined by the encryption method called:
+- `sealed_sender_encrypt()` → v1 (single recipient)
+- `sealed_sender_multi_recipient_encrypt()` → v2 (multiple recipients)
+
+### Key Differences
+
+| Aspect | v1 | v2 |
+|--------|-----|-----|
+| Symmetric cipher | AES-256-CTR + HMAC-SHA256 | AES-256-GCM-SIV |
+| Key derivation | Per-recipient DH | Single ephemeral, per-recipient XOR |
+| Encryption | Re-encrypt for each recipient | Encrypt once, share with all |
+| Efficiency | O(n) encryptions | O(1) encryption + O(n) key material |
+
+### Current signal-go Status
+
+**Receiving (both v1 and v2)**: ✅ Already supported. libsignal's `sealed_sender_decrypt` detects the version byte and routes automatically. No changes needed.
+
+**Sending 1:1 (v1)**: ✅ Already supported via `SealedSenderEncrypt()` in `sealedsender.go`.
+
+**Sending groups (v2)**: ❌ Not yet implemented. Requires:
+1. CGO binding for `signal_sealed_sender_multi_recipient_encrypt`
+2. Building recipient list with sessions from database
+3. Server splits multi-recipient message and delivers to each recipient
+
+### Implementation Note for Phase 4
+
+When implementing group send, the choice is:
+
+1. **Use v2 (recommended)**: More efficient, matches Signal-Android behavior. Requires new CGO binding.
+2. **Use v1 per-recipient**: Simpler, works with existing code. Less efficient but functional.
+
+Signal-Android uses v2 for all group messages via `encryptForGroup()` in `SignalServiceCipher.java`.
 
 ## Alternative: Simpler Group Send
 
