@@ -163,6 +163,19 @@ func (t *Transport) PutWithHeader(ctx context.Context, path string, body []byte,
 	return t.doAndRead(req)
 }
 
+// PutBinary performs a PUT request with a raw binary body and custom headers.
+// Used for multi-recipient sealed sender messages.
+func (t *Transport) PutBinary(ctx context.Context, path string, body []byte, headers map[string]string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, t.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, fmt.Errorf("transport: new request: %w", err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return t.doAndRead(req)
+}
+
 // doAndRead executes the request and reads the response body.
 func (t *Transport) doAndRead(req *http.Request) ([]byte, int, error) {
 	resp, err := t.Do(req)

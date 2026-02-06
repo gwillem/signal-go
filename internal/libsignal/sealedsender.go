@@ -298,6 +298,79 @@ func NewUnidentifiedSenderMessageContentFromType(
 	return &UnidentifiedSenderMessageContent{ptr: out.raw}, nil
 }
 
+// SealedSenderMultiRecipientEncrypt encrypts a USMC for multiple recipients at once (SSv2).
+// Returns a multi-recipient message blob suitable for PUT /v1/messages/multi_recipient.
+func SealedSenderMultiRecipientEncrypt(
+	recipients []*Address,
+	sessions []*SessionRecord,
+	content *UnidentifiedSenderMessageContent,
+	identityStore IdentityKeyStore,
+) ([]byte, error) {
+	if len(recipients) != len(sessions) {
+		return nil, &Error{Message: "recipients and sessions must have same length"}
+	}
+	if len(recipients) == 0 {
+		return nil, &Error{Message: "recipients must not be empty"}
+	}
+
+	var out C.SignalOwnedBuffer
+
+	// Build recipient address slice
+	cAddrs := make([]C.SignalConstPointerProtocolAddress, len(recipients))
+	for i, r := range recipients {
+		cAddrs[i] = C.SignalConstPointerProtocolAddress{raw: r.ptr}
+	}
+	cAddrSlice := C.SignalBorrowedSliceOfConstPointerProtocolAddress{
+		base:   &cAddrs[0],
+		length: C.size_t(len(cAddrs)),
+	}
+
+	// Build session record slice
+	cSessions := make([]C.SignalConstPointerSessionRecord, len(sessions))
+	for i, s := range sessions {
+		cSessions[i] = C.SignalConstPointerSessionRecord{raw: s.ptr}
+	}
+	cSessionSlice := C.SignalBorrowedSliceOfConstPointerSessionRecord{
+		base:   &cSessions[0],
+		length: C.size_t(len(cSessions)),
+	}
+
+	// Empty excluded recipients
+	emptyExcluded := borrowedBuffer(nil)
+
+	cContent := C.SignalConstPointerUnidentifiedSenderMessageContent{raw: content.ptr}
+
+	cIdentityStore, cleanupIdentity := wrapIdentityKeyStore(identityStore)
+	defer cleanupIdentity()
+	cIdentity := C.SignalConstPointerFfiIdentityKeyStoreStruct{raw: cIdentityStore}
+
+	if err := wrapError(C.signal_sealed_sender_multi_recipient_encrypt(
+		&out,
+		cAddrSlice,
+		cSessionSlice,
+		emptyExcluded,
+		cContent,
+		cIdentity,
+	)); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(out), nil
+}
+
+// SealedSenderMultiRecipientMessageForSingleRecipient extracts a single
+// recipient's message from a multi-recipient message blob.
+// This produces a v1-compatible sealed sender message for one recipient.
+func SealedSenderMultiRecipientMessageForSingleRecipient(encoded []byte) ([]byte, error) {
+	var out C.SignalOwnedBuffer
+	if err := wrapError(C.signal_sealed_sender_multi_recipient_message_for_single_recipient(
+		&out,
+		borrowedBuffer(encoded),
+	)); err != nil {
+		return nil, err
+	}
+	return freeOwnedBuffer(out), nil
+}
+
 // SealedSenderEncrypt encrypts a USMC using sealed sender (SSv1).
 // Uses the recipient's identity key for ECDH.
 func SealedSenderEncrypt(

@@ -417,6 +417,9 @@ func (s *Service) trySendSealed(ctx context.Context, recipient string,
 			return fmt.Errorf("sealed sender: encrypt: %w", err)
 		}
 
+		// Capture ciphertext type before destroying (for diagnostics)
+		innerType, _ := ciphertext.Type()
+
 		// Create USMC wrapping the encrypted message with sender certificate
 		usmc, err := libsignal.NewUnidentifiedSenderMessageContent(
 			ciphertext,
@@ -445,7 +448,7 @@ func (s *Service) trySendSealed(ctx context.Context, recipient string,
 			Content:                   base64.StdEncoding.EncodeToString(sealed),
 		})
 
-		logf(s.logger, "sealed sender: prepared message for device %d", deviceID)
+		logf(s.logger, "sealed sender: prepared message for device %d (inner type=%d, PreKey=%v)", deviceID, innerType, innerType == libsignal.CiphertextMessageTypePreKey)
 	}
 
 	// Send via sealed sender endpoint

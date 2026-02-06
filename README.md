@@ -88,6 +88,10 @@ internal/store           — SQLite persistent storage (sessions, keys, account)
 - [ ] Sealed sender — UNIDENTIFIED_SENDER envelope decryption
 - [ ] Sync messages — request contacts, groups, configuration from primary
 
+## Notes
+
+**Run a receive loop for group messaging.** Group messages use sender keys distributed via 1:1 sessions. The library tracks which recipients have received the sender key and skips re-sending on subsequent messages. If a recipient's session becomes stale (e.g. they re-installed), the server sends a retry receipt that triggers re-distribution. Without a receive loop (`client.Receive`), these retry receipts are never processed and the recipient won't be able to decrypt group messages.
+
 ## License
 
 [AGPL-3.0](LICENSE) (required by libsignal static linking)

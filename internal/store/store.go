@@ -142,6 +142,33 @@ func runMigrations(db *sql.DB) error {
 	if err != nil && !isColumnExistsError(err) {
 		return fmt.Errorf("add profile_key column: %w", err)
 	}
+
+	// Migration: Add endorsement columns to groups table
+	_, err = db.Exec("ALTER TABLE groups ADD COLUMN endorsements_response BLOB")
+	if err != nil && !isColumnExistsError(err) {
+		return fmt.Errorf("add endorsements_response column: %w", err)
+	}
+	_, err = db.Exec("ALTER TABLE groups ADD COLUMN endorsements_expiry INTEGER DEFAULT 0")
+	if err != nil && !isColumnExistsError(err) {
+		return fmt.Errorf("add endorsements_expiry column: %w", err)
+	}
+
+	// Migration: Add distribution_id column to groups table
+	_, err = db.Exec("ALTER TABLE groups ADD COLUMN distribution_id TEXT DEFAULT ''")
+	if err != nil && !isColumnExistsError(err) {
+		return fmt.Errorf("add distribution_id column: %w", err)
+	}
+
+	// Migration: Create sender_key_shared table for SKDM distribution tracking
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS sender_key_shared (
+		distribution_id BLOB NOT NULL,
+		address TEXT NOT NULL,
+		PRIMARY KEY (distribution_id, address)
+	)`)
+	if err != nil {
+		return fmt.Errorf("create sender_key_shared table: %w", err)
+	}
+
 	return nil
 }
 

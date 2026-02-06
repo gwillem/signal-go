@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -14,7 +15,7 @@ import (
 )
 
 // SendGroupMessage sends a text message to a group.
-// Uses sender key encryption (type 7) with sealed sender delivery.
+// Uses sender key encryption (type 7) with sealed sender v2 multi-recipient delivery.
 func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text string) error {
 	timestamp := uint64(time.Now().UnixMilli())
 
@@ -27,9 +28,8 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 		return fmt.Errorf("group not found: %s", groupID)
 	}
 
-	// Ensure we have member list
-	if len(group.MemberACIs) == 0 {
-		// Try to fetch group details
+	// Ensure we have member list and endorsements
+	if len(group.MemberACIs) == 0 || s.endorsementsExpired(group) {
 		if err := s.FetchGroupDetails(ctx, group); err != nil {
 			return fmt.Errorf("fetch group details: %w", err)
 		}
@@ -47,8 +47,7 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 		return fmt.Errorf("load account: %w", err)
 	}
 
-	// Derive distribution ID from group master key
-	// The distribution ID is the first 16 bytes of the GroupIdentifier
+	// Derive group crypto params
 	var masterKey libsignal.GroupMasterKey
 	copy(masterKey[:], group.MasterKey)
 
@@ -67,11 +66,24 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 		return fmt.Errorf("get group identifier: %w", err)
 	}
 
-	// Distribution ID is derived from the group - use first 16 bytes of GroupIdentifier
-	var distributionID [16]byte
-	copy(distributionID[:], groupIdentifier[:16])
+	// Distribution ID is a random UUID per group (matching Signal-Android).
+	// Generate one on first use and persist it.
+	if group.DistributionID == "" {
+		group.DistributionID = store.GenerateDistributionID()
+		if err := s.store.SaveGroup(group); err != nil {
+			return fmt.Errorf("save group distribution ID: %w", err)
+		}
+		logf(s.logger, "group send: generated new distributionID=%s", group.DistributionID)
+	}
 
-	logf(s.logger, "group send: distributionID=%x groupIdentifier=%x", distributionID, groupIdentifier)
+	distIDBytes, err := parseUUID(group.DistributionID)
+	if err != nil {
+		return fmt.Errorf("parse distribution ID %q: %w", group.DistributionID, err)
+	}
+	var distributionID [16]byte
+	copy(distributionID[:], distIDBytes)
+
+	logf(s.logger, "group send: distributionID=%s groupIdentifier=%x", group.DistributionID, groupIdentifier[:])
 
 	// Build GroupContextV2 for the message
 	revision := uint32(group.Revision)
@@ -142,30 +154,63 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 
 	logf(s.logger, "group send: sending to %d members in group %s", len(recipients), group.Name)
 
-	// Step 1: Distribute sender keys to members who don't have them
-	// Create sender key distribution message
-	skdm, err := libsignal.CreateSenderKeyDistributionMessage(localAddr, distributionID, s.store)
-	if err != nil {
-		return fmt.Errorf("create sender key distribution message: %w", err)
-	}
-	defer skdm.Destroy()
-
-	skdmBytes, err := skdm.Serialize()
-	if err != nil {
-		return fmt.Errorf("serialize skdm: %w", err)
+	// Step 1: Send SKDM to members who haven't received our sender key yet.
+	// Tracking is per distribution ID + "aci.deviceID" address.
+	// ArchiveSession clears tracking, so stale sessions trigger re-send.
+	sharedWith, _ := s.store.GetSenderKeySharedWith(distributionID)
+	sharedSet := make(map[string]bool, len(sharedWith))
+	for _, addr := range sharedWith {
+		sharedSet[addr] = true
 	}
 
-	logf(s.logger, "group send: created SKDM (len=%d) for distributionID=%x", len(skdmBytes), distributionID)
-
-	// Send SKDM to each member via regular encrypted message
-	// In production, we'd track who has received the SKDM and only send to new members
+	// Find recipients that need SKDM (any device not in sharedSet)
+	var needsSKDM []string
 	for _, recipient := range recipients {
-		if err := s.sendSenderKeyDistribution(ctx, recipient, skdmBytes, senderCert); err != nil {
-			logf(s.logger, "group send: failed to send SKDM to %s: %v (continuing)", recipient, err)
-			// Continue - they may already have our sender key from previous messages
-		} else {
-			logf(s.logger, "group send: sent SKDM to %s", recipient)
+		devices, _ := s.store.GetDevices(recipient)
+		if len(devices) == 0 {
+			devices = []int{1}
 		}
+		for _, deviceID := range devices {
+			addr := fmt.Sprintf("%s.%d", recipient, deviceID)
+			if !sharedSet[addr] {
+				needsSKDM = append(needsSKDM, recipient)
+				break
+			}
+		}
+	}
+
+	if len(needsSKDM) > 0 {
+		skdm, err := libsignal.CreateSenderKeyDistributionMessage(localAddr, distributionID, s.store)
+		if err != nil {
+			return fmt.Errorf("create sender key distribution message: %w", err)
+		}
+		defer skdm.Destroy()
+
+		skdmBytes, err := skdm.Serialize()
+		if err != nil {
+			return fmt.Errorf("serialize skdm: %w", err)
+		}
+
+		logf(s.logger, "group send: sending SKDM to %d/%d members", len(needsSKDM), len(recipients))
+		for _, recipient := range needsSKDM {
+			if err := s.sendSenderKeyDistribution(ctx, recipient, skdmBytes, senderCert); err != nil {
+				logf(s.logger, "group send: failed to send SKDM to %s: %v (continuing)", recipient, err)
+			} else {
+				// Mark all devices of this recipient as having received the SKDM
+				devices, _ := s.store.GetDevices(recipient)
+				if len(devices) == 0 {
+					devices = []int{1}
+				}
+				var addrs []string
+				for _, deviceID := range devices {
+					addrs = append(addrs, fmt.Sprintf("%s.%d", recipient, deviceID))
+				}
+				_ = s.store.MarkSenderKeySharedWith(distributionID, addrs)
+				logf(s.logger, "group send: sent SKDM to %s", recipient)
+			}
+		}
+	} else {
+		logf(s.logger, "group send: SKDM already shared with all %d members", len(recipients))
 	}
 
 	// Step 2: Encrypt the message once with sender key
@@ -182,15 +227,262 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 
 	logf(s.logger, "group send: encrypted message with sender key (type 7)")
 
-	// Step 3: Wrap in sealed sender and send to each member
-	var succeeded, failed int
+	// Step 3: Compute Group-Send-Token from endorsements
+	groupSendToken, err := s.computeGroupSendToken(group, recipients, acct.ACI, secretParams)
+	if err != nil {
+		logf(s.logger, "group send: failed to compute group send token: %v", err)
+		// Fall back to per-recipient v1 sealed sender
+		return s.sendGroupV1Fallback(ctx, recipients, senderKeyBytes, senderCert, groupIdentifier[:],
+			dm, timestamp)
+	}
+
+	// Step 4: Multi-recipient encrypt + send with group-level retry
+	err = s.withGroupDeviceRetry(ctx, func() error {
+		return s.trySendMultiRecipient(ctx, recipients, senderKeyBytes, senderCert,
+			groupIdentifier[:], groupSendToken, timestamp)
+	})
+	if err != nil {
+		return fmt.Errorf("group send: %w", err)
+	}
+
+	logf(s.logger, "group send: sent via multi_recipient to %d members", len(recipients))
+
+	// Step 5: Send sync message to our other devices
+	if err := s.sendGroupSyncMessage(ctx, dm, timestamp, recipients); err != nil {
+		logf(s.logger, "group send: failed to send sync message: %v", err)
+	} else {
+		logf(s.logger, "group send: sent sync message to self")
+	}
+
+	return nil
+}
+
+// trySendMultiRecipient builds the multi-recipient message and sends it.
+func (s *Service) trySendMultiRecipient(
+	ctx context.Context,
+	recipients []string,
+	senderKeyBytes []byte,
+	senderCert *libsignal.SenderCertificate,
+	groupID []byte,
+	groupSendToken []byte,
+	timestamp uint64,
+) error {
+	// Build list of all recipient addresses + sessions
+	var allAddrs []*libsignal.Address
+	var allSessions []*libsignal.SessionRecord
+	var cleanups []func()
+
+	defer func() {
+		for _, fn := range cleanups {
+			fn()
+		}
+	}()
+
 	for _, recipient := range recipients {
-		if err := s.sendGroupSealedMessage(ctx, recipient, senderKeyBytes, senderCert, groupIdentifier[:]); err != nil {
+		devices, _ := s.store.GetDevices(recipient)
+		if len(devices) == 0 {
+			devices = []int{1}
+		}
+
+		for _, deviceID := range devices {
+			addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
+			if err != nil {
+				return fmt.Errorf("create address for %s.%d: %w", recipient, deviceID, err)
+			}
+			cleanups = append(cleanups, addr.Destroy)
+
+			// Load or establish session
+			session, err := s.store.LoadSession(addr)
+			if err != nil {
+				return fmt.Errorf("load session for %s.%d: %w", recipient, deviceID, err)
+			}
+			if session == nil {
+				// Fetch pre-keys and establish session
+				preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
+				if err != nil {
+					return fmt.Errorf("get prekeys for %s.%d: %w", recipient, deviceID, err)
+				}
+				if len(preKeyResp.Devices) == 0 {
+					return fmt.Errorf("no devices in prekey response for %s.%d", recipient, deviceID)
+				}
+				bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, preKeyResp.Devices[0])
+				if err != nil {
+					return fmt.Errorf("build prekey bundle for %s.%d: %w", recipient, deviceID, err)
+				}
+				if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, s.store, time.Now()); err != nil {
+					bundle.Destroy()
+					return fmt.Errorf("process prekey bundle for %s.%d: %w", recipient, deviceID, err)
+				}
+				bundle.Destroy()
+
+				// Reload session after establishing
+				session, err = s.store.LoadSession(addr)
+				if err != nil || session == nil {
+					return fmt.Errorf("session not established for %s.%d", recipient, deviceID)
+				}
+			}
+
+			allAddrs = append(allAddrs, addr)
+			allSessions = append(allSessions, session)
+			cleanups = append(cleanups, session.Destroy)
+		}
+	}
+
+	// Create USMC with ContentHint = IMPLICIT (Signal-Android parity)
+	usmc, err := createSenderKeyUSMC(senderKeyBytes, senderCert, groupID)
+	if err != nil {
+		return fmt.Errorf("create sender key USMC: %w", err)
+	}
+	defer usmc.Destroy()
+
+	// Multi-recipient encrypt
+	mrmBlob, err := libsignal.SealedSenderMultiRecipientEncrypt(allAddrs, allSessions, usmc, s.store)
+	if err != nil {
+		return fmt.Errorf("multi-recipient encrypt: %w", err)
+	}
+
+	logf(s.logger, "group send: MRM blob size=%d for %d addresses", len(mrmBlob), len(allAddrs))
+
+	// Send via multi_recipient endpoint
+	return s.SendMultiRecipientMessage(ctx, mrmBlob, groupSendToken, timestamp)
+}
+
+// endorsementsExpired returns true if the group's endorsements are missing or expired.
+func (s *Service) endorsementsExpired(group *store.Group) bool {
+	if len(group.EndorsementsResponse) == 0 {
+		return true
+	}
+	return time.Now().After(group.EndorsementsExpiry)
+}
+
+
+// computeGroupSendToken processes endorsements and produces a Group-Send-Token.
+func (s *Service) computeGroupSendToken(
+	group *store.Group,
+	recipients []string,
+	localACI string,
+	secretParams libsignal.GroupSecretParams,
+) ([]byte, error) {
+	if len(group.EndorsementsResponse) == 0 {
+		return nil, fmt.Errorf("no endorsements available")
+	}
+
+	serverParams, err := libsignal.GetSignalServerPublicParams()
+	if err != nil {
+		return nil, fmt.Errorf("get server public params: %w", err)
+	}
+	defer serverParams.Close()
+
+	// Build concatenated 17-byte service IDs for ALL members (including self)
+	allMembers := group.MemberACIs
+	var groupMembersBytes []byte
+	for _, aci := range allMembers {
+		serviceID, err := aciToServiceID(aci)
+		if err != nil {
+			return nil, fmt.Errorf("convert ACI %s to service ID: %w", aci[:8], err)
+		}
+		groupMembersBytes = append(groupMembersBytes, serviceID[:]...)
+	}
+
+	// Build local user service ID
+	localServiceID, err := aciToServiceID(localACI)
+	if err != nil {
+		return nil, fmt.Errorf("convert local ACI to service ID: %w", err)
+	}
+
+	// Receive endorsements (one per member, excluding local user)
+	now := uint64(time.Now().Unix())
+	endorsements, err := libsignal.ReceiveEndorsements(
+		group.EndorsementsResponse,
+		groupMembersBytes,
+		localServiceID,
+		now,
+		secretParams,
+		serverParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("receive endorsements: %w", err)
+	}
+
+	// The returned endorsements are in the same order as allMembers, excluding localUser.
+	// We need to pick only the ones for our target recipients.
+	recipientSet := make(map[string]bool, len(recipients))
+	for _, r := range recipients {
+		recipientSet[r] = true
+	}
+
+	var selectedEndorsements [][]byte
+	endorsementIdx := 0
+	for _, aci := range allMembers {
+		if aci == localACI {
+			continue // local user is excluded from endorsements
+		}
+		if endorsementIdx >= len(endorsements) {
+			break
+		}
+		if recipientSet[aci] {
+			selectedEndorsements = append(selectedEndorsements, endorsements[endorsementIdx])
+		}
+		endorsementIdx++
+	}
+
+	if len(selectedEndorsements) == 0 {
+		return nil, fmt.Errorf("no endorsements matched recipients")
+	}
+
+	// Combine endorsements
+	combined, err := libsignal.CombineEndorsements(selectedEndorsements)
+	if err != nil {
+		return nil, fmt.Errorf("combine endorsements: %w", err)
+	}
+
+	// Get expiration from the endorsements response
+	expiration, err := libsignal.EndorsementExpiration(group.EndorsementsResponse)
+	if err != nil {
+		return nil, fmt.Errorf("get endorsement expiration: %w", err)
+	}
+
+	// Convert to full token
+	fullToken, err := libsignal.EndorsementToFullToken(combined, secretParams, expiration)
+	if err != nil {
+		return nil, fmt.Errorf("endorsement to full token: %w", err)
+	}
+
+	return fullToken, nil
+}
+
+// aciToServiceID converts an ACI UUID string to a 17-byte ServiceIdFixedWidthBinaryBytes.
+// Format: [0x00 (ACI type prefix)] [16 bytes UUID]
+func aciToServiceID(aci string) ([17]byte, error) {
+	uuidBytes, err := parseUUID(aci)
+	if err != nil {
+		return [17]byte{}, fmt.Errorf("parse UUID: %w", err)
+	}
+	var serviceID [17]byte
+	serviceID[0] = 0x00 // ACI type prefix
+	copy(serviceID[1:], uuidBytes)
+	return serviceID, nil
+}
+
+// sendGroupV1Fallback falls back to per-recipient sealed sender v1 when endorsements
+// are not available. This is the old behavior.
+func (s *Service) sendGroupV1Fallback(
+	ctx context.Context,
+	recipients []string,
+	senderKeyBytes []byte,
+	senderCert *libsignal.SenderCertificate,
+	groupID []byte,
+	dm *proto.DataMessage,
+	timestamp uint64,
+) error {
+	logf(s.logger, "group send: falling back to per-recipient v1 sealed sender")
+
+	var succeeded int
+	for _, recipient := range recipients {
+		if err := s.sendGroupSealedMessage(ctx, recipient, senderKeyBytes, senderCert, groupID); err != nil {
 			logf(s.logger, "group send: failed to send to %s: %v", recipient, err)
-			failed++
 			continue
 		}
-		logf(s.logger, "group send: sent to %s", recipient)
 		succeeded++
 	}
 
@@ -198,14 +490,10 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 		return fmt.Errorf("failed to send to any of %d recipients", len(recipients))
 	}
 
-	logf(s.logger, "group send: sent to %d/%d members", succeeded, len(recipients))
+	logf(s.logger, "group send: sent to %d/%d members (v1 fallback)", succeeded, len(recipients))
 
-	// Step 4: Send sync message to our other devices so they show the sent message
-	if err := s.sendGroupSyncMessage(ctx, dm, timestamp, recipients, senderCert); err != nil {
+	if err := s.sendGroupSyncMessage(ctx, dm, timestamp, recipients); err != nil {
 		logf(s.logger, "group send: failed to send sync message: %v", err)
-		// Don't fail the whole send - the message was delivered to recipients
-	} else {
-		logf(s.logger, "group send: sent sync message to self")
 	}
 
 	return nil
@@ -243,10 +531,8 @@ func (s *Service) sendSenderKeyDistribution(ctx context.Context, recipient strin
 	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
 }
 
-// sendGroupSealedMessage wraps a sender key ciphertext in sealed sender and sends it.
-// This is different from regular sealed sender because the inner message is already
-// encrypted with sender key (type 7), not a session message.
-// Handles 409/410 device mismatch with retry.
+// sendGroupSealedMessage wraps a sender key ciphertext in sealed sender v1 and sends it.
+// Used as fallback when endorsements are not available.
 func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) error {
 	contact, err := s.store.GetContactByACI(recipient)
 	if err != nil {
@@ -268,7 +554,7 @@ func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, 
 	})
 }
 
-// trySendGroupSealed attempts to send a sender key message to specific devices.
+// trySendGroupSealed attempts to send a sender key message to specific devices using v1 sealed sender.
 func (s *Service) trySendGroupSealed(ctx context.Context, recipient string, senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte, accessKey []byte, deviceIDs []int) error {
 	timestamp := uint64(time.Now().UnixMilli())
 	var messages []OutgoingMessage
@@ -321,11 +607,9 @@ func (s *Service) trySendGroupSealed(ctx context.Context, recipient string, send
 	return s.SendSealedMessage(ctx, recipient, msgList, accessKey)
 }
 
-// createSenderKeyUSMC creates an UnidentifiedSenderMessageContent for a sender key message.
-// Sender key messages (type 7) need to be wrapped in USMC differently than session messages.
 // sendGroupSyncMessage sends a SyncMessage.Sent to our other devices so they
 // display the outgoing group message in the conversation.
-func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessage, timestamp uint64, recipients []string, senderCert *libsignal.SenderCertificate) error {
+func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessage, timestamp uint64, recipients []string) error {
 	logf(s.logger, "sync: sending group sync message timestamp=%d recipients=%d", timestamp, len(recipients))
 
 	acct, err := s.store.LoadAccount()
@@ -363,54 +647,29 @@ func (s *Service) sendGroupSyncMessage(ctx context.Context, dm *proto.DataMessag
 		return fmt.Errorf("marshal sync message: %w", err)
 	}
 
-	// Log sync message details for debugging
 	logf(s.logger, "sync: message has GroupV2=%v masterKeyLen=%d statusCount=%d",
 		dm.GroupV2 != nil, len(dm.GetGroupV2().GetMasterKey()), len(statuses))
 
-	// Get our devices and exclude the current one
-	deviceIDs, _ := s.store.GetDevices(acct.ACI)
-	if len(deviceIDs) == 0 {
-		// Default to devices 1 and 2 if we don't have device info
-		deviceIDs = []int{1, 2}
-	}
-
-	// Filter out our own device
-	var otherDevices []int
-	for _, d := range deviceIDs {
-		if d != acct.DeviceID {
-			otherDevices = append(otherDevices, d)
-		}
-	}
-
-	if len(otherDevices) == 0 {
+	// sendEncryptedMessageWithTimestamp handles self-send correctly:
+	// it calls initialDevices(aci, sendingToSelf=true) which filters out
+	// our own device and returns "no other devices" if we're the only one.
+	err = s.sendEncryptedMessageWithTimestamp(ctx, acct.ACI, contentBytes, timestamp)
+	if err != nil && (strings.Contains(err.Error(), "no other devices") ||
+		strings.Contains(err.Error(), "no reachable devices")) {
 		logf(s.logger, "sync: no other devices to sync to")
 		return nil
 	}
-
-	logf(s.logger, "sync: sending to other devices %v (our device is %d)", otherDevices, acct.DeviceID)
-
-	// Temporarily set the device list for self to only include other devices
-	s.store.SetDevices(acct.ACI, otherDevices)
-	defer func() {
-		// Restore full device list including our device
-		allDevices := append(otherDevices, acct.DeviceID)
-		s.store.SetDevices(acct.ACI, allDevices)
-	}()
-
-	// For sync messages to self, use regular encrypted messages (not sealed sender)
-	// to avoid access key issues with the server's device list validation.
-	// IMPORTANT: Use the same timestamp as the DataMessage - Signal Desktop validates
-	// that the envelope timestamp matches the DataMessage timestamp.
-	return s.sendEncryptedMessageWithTimestamp(ctx, acct.ACI, contentBytes, timestamp)
+	return err
 }
 
+// createSenderKeyUSMC creates an UnidentifiedSenderMessageContent for a sender key message.
+// Uses ContentHint = IMPLICIT (2) to match Signal-Android behavior.
 func createSenderKeyUSMC(senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) (*libsignal.UnidentifiedSenderMessageContent, error) {
-	// Use the type-aware constructor for sender key messages (type 7)
 	return libsignal.NewUnidentifiedSenderMessageContentFromType(
 		senderKeyBytes,
 		libsignal.CiphertextMessageTypeSenderKey,
 		senderCert,
-		libsignal.ContentHintResendable,
+		libsignal.ContentHintImplicit, // Signal-Android parity: IMPLICIT (2) for group messages
 		groupID,
 	)
 }
@@ -424,3 +683,4 @@ func (s *Service) GetGroupByIdentifier(groupID string) (*store.Group, error) {
 func parseGroupID(groupID string) ([]byte, error) {
 	return hex.DecodeString(groupID)
 }
+

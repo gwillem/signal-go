@@ -370,7 +370,7 @@ Total: ~11 files, significant complexity due to zkgroup crypto.
 | Group Database | `app/src/main/java/org/thoughtcrime/securesms/database/GroupTable.java` |
 | Group Send | `app/src/main/java/org/thoughtcrime/securesms/messages/GroupSendUtil.java` |
 
-## Sealed Sender v1 vs v2
+## Sealed Sender v1 vs v2 (See [Task 15](task15-sealed-sender-v2.md))
 
 Signal uses two versions of sealed sender encryption:
 

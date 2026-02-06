@@ -292,8 +292,9 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		case libsignal.CiphertextMessageTypePlaintext:
 			// Plaintext messages (type 8) contain unencrypted content.
 			// Used for retry receipts where the content is a DecryptionErrorMessage.
+			// Route to handlePlaintextContent which properly extracts the DEM.
 			logf(logger, "sealed sender: processing plaintext message (retry receipt)")
-			plaintext = innerContent
+			return handlePlaintextContent(ctx, innerContent, senderACI, senderDevice, rc)
 
 		default:
 			return nil, fmt.Errorf("sealed sender: unsupported inner message type %d", msgType)

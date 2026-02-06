@@ -172,6 +172,49 @@ func (s *Service) SendSealedMessage(ctx context.Context, destination string, msg
 	}
 }
 
+// SendMultiRecipientMessage sends a multi-recipient sealed sender message (SSv2).
+// body is the MRM binary blob from SealedSenderMultiRecipientEncrypt.
+// groupSendToken is the full token for the Group-Send-Token header.
+func (s *Service) SendMultiRecipientMessage(ctx context.Context, body []byte, groupSendToken []byte, timestamp uint64) error {
+	path := fmt.Sprintf("/v1/messages/multi_recipient?ts=%d&online=false&urgent=true&story=false", timestamp)
+
+	headers := map[string]string{
+		"Content-Type":     "application/vnd.signal-messenger.mrm",
+		"Group-Send-Token": base64.StdEncoding.EncodeToString(groupSendToken),
+	}
+
+	respBody, status, err := s.transport.PutBinary(ctx, path, body, headers)
+	if err != nil {
+		return fmt.Errorf("send multi-recipient message: %w", err)
+	}
+
+	switch status {
+	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
+		// Check for uuids404 in the response (recipients the server couldn't deliver to).
+		if len(respBody) > 0 {
+			var result SendGroupMessageResponse
+			if err := json.Unmarshal(respBody, &result); err == nil && len(result.UUIDs404) > 0 {
+				logf(s.logger, "multi_recipient: uuids404=%v", result.UUIDs404)
+			}
+		}
+		return nil
+	case http.StatusConflict: // 409
+		var entries []GroupMismatchedDevices
+		if err := json.Unmarshal(respBody, &entries); err != nil {
+			return fmt.Errorf("send multi-recipient 409: %s", respBody)
+		}
+		return &GroupMismatchedDevicesError{Entries: entries}
+	case http.StatusGone: // 410
+		var entries []GroupStaleDevices
+		if err := json.Unmarshal(respBody, &entries); err != nil {
+			return fmt.Errorf("send multi-recipient 410: %s", respBody)
+		}
+		return &GroupStaleDevicesError{Entries: entries}
+	default:
+		return fmt.Errorf("send multi-recipient message: status %d: %s", status, respBody)
+	}
+}
+
 // --- Account API ---
 
 // GetDevices returns the list of registered devices for this account.

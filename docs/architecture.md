@@ -314,6 +314,25 @@ Signal uses **sender keys** for efficient group messaging. Instead of encrypting
 
 4. **Decryption**: Recipients decrypt using `signal_group_decrypt_message` with the stored sender key.
 
+#### Single-shot sending and SKDM delivery
+
+Signal-Android runs a persistent WebSocket and processes incoming messages continuously. When a recipient can't decrypt a sender key message, they send a **retry receipt** back. Signal-Android processes it, re-sends the SKDM, and the recipient retries — all happening on the same connection.
+
+A CLI tool doing one-shot sends can't rely on this feedback loop. The sender exits before retry receipts arrive. This creates a fundamental problem: if SKDM delivery fails silently (stale session, device not ready), the group message is unreadable and there's no chance to retry.
+
+**signal-go's approach**: always re-send SKDM to all group members on every send, with fresh sessions. This has two parts:
+
+1. **Archive all recipient sessions** before sending SKDM. This forces fresh PreKey establishment, guaranteeing the SKDM is encrypted with a session the recipient can decrypt. Without this, a stale Double Ratchet state (from missed messages, session resets, etc.) would make the SKDM unreadable and the group message undecryptable.
+
+2. **Always re-send SKDM** to all members (no delivery tracking). SKDM delivery tracking (`sender_key_shared` table) exists in the database schema but is not used during sends — it's reserved for future use when a persistent connection enables delivery-confirmed tracking.
+
+The send flow is:
+1. Archive recipient sessions (forces fresh PreKey for SKDM)
+2. Send SKDM to all members via 1:1 sealed sender (PreKey messages)
+3. Encrypt once with sender key
+4. Multi-recipient encrypt (SSv2) → single `PUT /v1/messages/multi_recipient`
+5. Group-Send-Token header (from endorsements, not per-recipient access keys)
+
 #### signal-cli vs Signal-Android behavior
 
 **signal-cli** uses aggressive fallback:

@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -194,6 +196,8 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 
 	var messages []OutgoingMessage
 
+	var skippedDevices []int
+
 	for _, deviceID := range deviceIDs {
 		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
 		if err != nil {
@@ -213,6 +217,13 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 			preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
 			if err != nil {
 				addr.Destroy()
+				// 404 means the device no longer exists — skip it and clean up.
+				if strings.Contains(err.Error(), "status 404") {
+					logf(s.logger, "send: device %d not found (404), removing", deviceID)
+					_ = s.store.ArchiveSession(recipient, uint32(deviceID))
+					skippedDevices = append(skippedDevices, deviceID)
+					continue
+				}
 				return fmt.Errorf("send: get pre-keys for device %d: %w", deviceID, err)
 			}
 			if len(preKeyResp.Devices) == 0 {
@@ -270,6 +281,19 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 			DestinationRegistrationID: registrationID,
 			Content:                   base64.StdEncoding.EncodeToString(ctBytes),
 		})
+	}
+
+	// Remove any skipped (gone) devices from the stored device list.
+	if len(skippedDevices) > 0 {
+		remaining, _ := s.store.GetDevices(recipient)
+		for _, skip := range skippedDevices {
+			remaining = slices.DeleteFunc(remaining, func(id int) bool { return id == skip })
+		}
+		_ = s.store.SetDevices(recipient, remaining)
+	}
+
+	if len(messages) == 0 {
+		return fmt.Errorf("send: no reachable devices for %s", recipient)
 	}
 
 	msgList := &OutgoingMessageList{

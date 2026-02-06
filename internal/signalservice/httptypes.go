@@ -230,3 +230,40 @@ type MismatchedDevicesError struct {
 func (e *MismatchedDevicesError) Error() string {
 	return fmt.Sprintf("mismatched devices: missing=%v extra=%v", e.MissingDevices, e.ExtraDevices)
 }
+
+// SendGroupMessageResponse is the JSON response from PUT /v1/messages/multi_recipient.
+type SendGroupMessageResponse struct {
+	UUIDs404 []string `json:"uuids404"`
+}
+
+// GroupMismatchedDevices represents a single recipient's device mismatch in a multi-recipient 409.
+type GroupMismatchedDevices struct {
+	UUID    string              `json:"uuid"`
+	Devices MismatchedDevicesError `json:"devices"`
+}
+
+// GroupMismatchedDevicesError is returned on 409 from multi_recipient endpoint.
+// Contains device mismatch info for multiple recipients at once.
+type GroupMismatchedDevicesError struct {
+	Entries []GroupMismatchedDevices
+}
+
+func (e *GroupMismatchedDevicesError) Error() string {
+	return fmt.Sprintf("group mismatched devices: %d recipients", len(e.Entries))
+}
+
+// GroupStaleDevices represents a single recipient's stale devices in a multi-recipient 410.
+type GroupStaleDevices struct {
+	UUID    string         `json:"uuid"`
+	Devices StaleDevicesError `json:"devices"`
+}
+
+// GroupStaleDevicesError is returned on 410 from multi_recipient endpoint.
+// Contains stale device info for multiple recipients at once.
+type GroupStaleDevicesError struct {
+	Entries []GroupStaleDevices
+}
+
+func (e *GroupStaleDevicesError) Error() string {
+	return fmt.Sprintf("group stale devices: %d recipients", len(e.Entries))
+}

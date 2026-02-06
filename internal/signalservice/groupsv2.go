@@ -73,9 +73,22 @@ func (s *Service) FetchGroupDetails(ctx context.Context, group *store.Group) err
 	password := hex.EncodeToString(presentation)
 
 	// Fetch group from API
-	groupProto, err := s.fetchGroup(ctx, username, password)
+	groupResp, err := s.fetchGroup(ctx, username, password)
 	if err != nil {
 		return fmt.Errorf("fetch group: %w", err)
+	}
+	groupProto := groupResp.Group
+
+	// Capture group send endorsements if present
+	if len(groupResp.GroupSendEndorsementsResponse) > 0 {
+		group.EndorsementsResponse = groupResp.GroupSendEndorsementsResponse
+		expiry, err := libsignal.EndorsementExpiration(groupResp.GroupSendEndorsementsResponse)
+		if err != nil {
+			logf(s.logger, "failed to get endorsement expiration: %v", err)
+		} else {
+			group.EndorsementsExpiry = time.Unix(int64(expiry), 0)
+			logf(s.logger, "captured group endorsements, expiry=%v", group.EndorsementsExpiry)
+		}
 	}
 
 	// Decrypt title
@@ -234,7 +247,8 @@ func (s *Service) getAuthCredentialForToday(ctx context.Context) ([]byte, error)
 
 // fetchGroup fetches the encrypted group from the Groups V2 API.
 // Groups V2 API is on storage.signal.org, same as Storage Service.
-func (s *Service) fetchGroup(ctx context.Context, username, password string) (*proto.Group, error) {
+// Returns the full GroupResponse including endorsements.
+func (s *Service) fetchGroup(ctx context.Context, username, password string) (*proto.GroupResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", storageServiceURL+"/v2/groups/", nil)
 	if err != nil {
 		return nil, err
@@ -270,10 +284,10 @@ func (s *Service) fetchGroup(ctx context.Context, username, password string) (*p
 		if err2 := gproto.Unmarshal(data, &group); err2 != nil {
 			return nil, fmt.Errorf("unmarshal group response: %w", err)
 		}
-		return &group, nil
+		return &proto.GroupResponse{Group: &group}, nil
 	}
 
-	return groupResp.Group, nil
+	return &groupResp, nil
 }
 
 // parseUUID parses a UUID string into 16 bytes.
