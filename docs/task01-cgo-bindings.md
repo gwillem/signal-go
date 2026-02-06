@@ -10,43 +10,44 @@ Goal: prove that Go can call libsignal's Rust C FFI — generate keys, establish
 
 - Rust nightly toolchain: `rustup install nightly`
 - cbindgen: `cargo install cbindgen`
-- Local libsignal checkout at `../libsignal`
+- libsignal source at `build/libsignal/` (git submodule, pinned to v0.87.0)
 
 ### Makefile
 
 ```makefile
-LIBSIGNAL_DIR := ../libsignal
-LIBSIGNAL_FFI := $(LIBSIGNAL_DIR)/target/release/libsignal_ffi.a
-HEADER         := internal/libsignal/libsignal-ffi.h
-NIGHTLY_BIN   := $(HOME)/.rustup/toolchains/nightly-aarch64-apple-darwin/bin
+LIBSIGNAL_SRC := build/libsignal
+LIB_DIR       := internal/libsignal/lib
+HEADER        := $(LIB_DIR)/libsignal-ffi.h
+CARGO         := $(shell rustup which --toolchain nightly cargo 2>/dev/null)
 
-build: $(LIBSIGNAL_FFI) $(HEADER)
+deps:
+	$(MAKE) deps-darwin-arm64  # or deps-linux-amd64
 
-$(LIBSIGNAL_FFI): $(LIBSIGNAL_DIR)/rust/bridge/ffi/Cargo.toml
-	"$(NIGHTLY_BIN)/cargo" build --release --manifest-path $(LIBSIGNAL_DIR)/rust/bridge/ffi/Cargo.toml
+deps-darwin-arm64:
+	"$(CARGO)" build --release --target aarch64-apple-darwin \
+		--manifest-path $(LIBSIGNAL_SRC)/rust/bridge/ffi/Cargo.toml
+	cp $(LIBSIGNAL_SRC)/target/aarch64-apple-darwin/release/libsignal_ffi.a \
+		$(LIB_DIR)/darwin-arm64/
+	cbindgen --profile release $(LIBSIGNAL_SRC)/rust/bridge/ffi -o $(HEADER)
 
-$(HEADER): $(LIBSIGNAL_FFI)
-	PATH="$(NIGHTLY_BIN):$(HOME)/.cargo/bin:$$PATH" cbindgen --profile release \
-		$(LIBSIGNAL_DIR)/rust/bridge/ffi -o $(HEADER)
-
-test: build
-	go test ./...
+test:
+	CGO_LDFLAGS_ALLOW='-Wl,-w' CGO_LDFLAGS='-Wl,-w' go test ./...
 ```
 
 Nightly is required because cbindgen uses `rustc -Zunpretty=expanded` to expand macros, which is a nightly-only flag. The static library itself can be built with stable, but we use nightly for both to avoid toolchain mismatch.
 
 Build output:
-- `../libsignal/target/release/libsignal_ffi.a` — 48MB static library
-- `internal/libsignal/libsignal-ffi.h` — 2080 lines, 102KB
+- `internal/libsignal/lib/<os>-<arch>/libsignal_ffi.a` — 48MB static library
+- `internal/libsignal/lib/libsignal-ffi.h` — 2080 lines, 102KB
 
 ### CGO preamble (`internal/libsignal/libsignal.go`)
 
 ```go
 package libsignal
 
-// #cgo CFLAGS: -I${SRCDIR}
-// #cgo linux LDFLAGS: ${SRCDIR}/../../libsignal/target/release/libsignal_ffi.a -ldl -lm -lpthread
-// #cgo darwin LDFLAGS: ${SRCDIR}/../../libsignal/target/release/libsignal_ffi.a -framework Security -framework Foundation -lm
+// #cgo CFLAGS: -I${SRCDIR}/lib
+// #cgo darwin,arm64 LDFLAGS: ${SRCDIR}/lib/darwin-arm64/libsignal_ffi.a -framework Security -framework Foundation -lm
+// #cgo linux,amd64 LDFLAGS: ${SRCDIR}/lib/linux-amd64/libsignal_ffi.a -ldl -lm -lpthread
 // #include "libsignal-ffi.h"
 import "C"
 ```
@@ -347,4 +348,4 @@ After `ProcessPreKeyBundle`, Alice's first encrypt produces a `PreKeySignalMessa
 ## Reference
 
 - `internal/libsignal/libsignal-ffi.h` — the actual generated header (source of truth for signatures)
-- `../libsignal/rust/bridge/ffi/` — Rust FFI source and cbindgen config
+- `build/libsignal/rust/bridge/ffi/` — Rust FFI source and cbindgen config (git submodule)

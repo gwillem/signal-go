@@ -60,13 +60,21 @@ These mistakes have caused bugs in the past:
 - Go 1.25+
 - Rust nightly toolchain (`rustup install nightly`)
 - cbindgen (`cargo install cbindgen`)
-- Local libsignal checkout at `../libsignal`
+- libsignal source is included as a git submodule at `build/libsignal/` (pinned to v0.87.0)
 
 ## Building
 
 ```
-make build    # builds libsignal_ffi.a + generates libsignal-ffi.h
+git submodule update --init   # fetch libsignal source (first time only)
+make deps     # builds libsignal_ffi.a + generates header for current platform
 make test     # runs go test ./...
+```
+
+Cross-compilation:
+```
+make deps-darwin-arm64   # build for macOS ARM64
+make deps-linux-amd64    # build for Linux x86_64 (requires musl-cross toolchain)
+make deps-all            # build for all platforms
 ```
 
 ## Testing

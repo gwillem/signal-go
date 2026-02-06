@@ -1,11 +1,10 @@
 # signal-go
 
-Go library for [Signal](https://signal.org) messenger:
+Go library for [Signal](https://signal.org) messenger with CGO bindings for the official [libsignal](https://github.com/signalapp/libsignal).
 
-- CGO bindings to the Rust C FFI
-- Partial service implementation of Signal-Android
+Supported: device linking (secondary device via QR), device registration (primary via SMS/voice), sending and receiving 1:1 messages, group messaging (sender keys, sealed sender v2, multi-recipient encrypt), sealed sender, contact and group sync, profile management, attachment downloading.
 
-> **Status:** Early development. Device linking, message sending, and message receiving work.
+Not yet supported: media/attachment sending, voice/video calls, stories, payments, message editing/deletion, read receipts, typing indicators.
 
 ## Example
 
@@ -54,14 +53,27 @@ func main() {
 ## Prerequisites
 
 - Go 1.25+
-- Rust nightly (`rustup install nightly`)
+- Rust nightly (`rustup install nightly-2025-09-24`)
 - cbindgen (`cargo install cbindgen`)
+- Native target: `rustup target add aarch64-apple-darwin --toolchain nightly-2025-09-24`
+- Linux cross-compile target: `rustup target add x86_64-unknown-linux-musl --toolchain nightly-2025-09-24`
 
 ## Build & test
 
 ```bash
-make build   # builds libsignal_ffi.a + generates headers
-make test    # builds if needed, then runs tests with correct CGO flags
+make deps    # builds libsignal_ffi.a + generates headers (native platform)
+make test    # runs tests with correct CGO flags
+```
+
+## Cross-compile for Linux (static)
+
+Requires [musl-cross](https://github.com/FiloSottile/homebrew-musl-cross) on macOS:
+
+```bash
+brew install FiloSottile/musl-cross/musl-cross
+make deps-linux-amd64
+CGO_ENABLED=1 CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 \
+  go build -ldflags '-extldflags "-static"' -o sgnl-linux ./cmd/sgnl
 ```
 
 ## Architecture
@@ -81,12 +93,17 @@ internal/store           — SQLite persistent storage (sessions, keys, account)
 
 - [x] CGO bindings — key generation, session establishment, encrypt/decrypt
 - [x] Device provisioning — link as secondary device via QR code
-- [x] Device registration — pre-key upload, complete linking
-- [x] Message sending — encrypt and deliver to Signal servers
+- [x] Device registration — primary device via SMS/voice verification
+- [x] Message sending — 1:1 encrypted message delivery
 - [x] Message receiving — authenticated WebSocket, decrypt incoming
+- [x] Sealed sender — unidentified sender for 1:1 and group messages
+- [x] Group messaging — sender keys, sealed sender v2, multi-recipient encrypt
+- [x] Contact and group sync — Storage Service, Groups V2 API
+- [x] Profile management — get/set name, phone number sharing
 - [x] Persistent storage — SQLite-backed key/session stores
-- [ ] Sealed sender — UNIDENTIFIED_SENDER envelope decryption
-- [ ] Sync messages — request contacts, groups, configuration from primary
+- [ ] Attachment sending — encrypt and upload media
+- [ ] Typing indicators, read receipts
+- [ ] Message editing and deletion
 
 ## Notes
 
