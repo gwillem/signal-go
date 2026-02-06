@@ -390,7 +390,8 @@ func (s *Service) computeGroupSendToken(
 		return nil, fmt.Errorf("convert local ACI to service ID: %w", err)
 	}
 
-	// Receive endorsements (one per member, excluding local user)
+	// Receive endorsements: returns N individual + 1 pre-combined (last element),
+	// where N = len(allMembers) - 1 (excluding local user).
 	now := uint64(time.Now().Unix())
 	endorsements, err := libsignal.ReceiveEndorsements(
 		group.EndorsementsResponse,
@@ -404,37 +405,15 @@ func (s *Service) computeGroupSendToken(
 		return nil, fmt.Errorf("receive endorsements: %w", err)
 	}
 
-	// The returned endorsements are in the same order as allMembers, excluding localUser.
-	// We need to pick only the ones for our target recipients.
-	recipientSet := make(map[string]bool, len(recipients))
-	for _, r := range recipients {
-		recipientSet[r] = true
-	}
+	logf(s.logger, "group send: endorsements: members=%d recipients=%d received=%d",
+		len(allMembers), len(recipients), len(endorsements))
 
-	var selectedEndorsements [][]byte
-	endorsementIdx := 0
-	for _, aci := range allMembers {
-		if aci == localACI {
-			continue // local user is excluded from endorsements
-		}
-		if endorsementIdx >= len(endorsements) {
-			break
-		}
-		if recipientSet[aci] {
-			selectedEndorsements = append(selectedEndorsements, endorsements[endorsementIdx])
-		}
-		endorsementIdx++
+	// The last element is the pre-combined endorsement for all non-self members.
+	// Use it directly when sending to all recipients (the common case).
+	if len(endorsements) == 0 {
+		return nil, fmt.Errorf("no endorsements received")
 	}
-
-	if len(selectedEndorsements) == 0 {
-		return nil, fmt.Errorf("no endorsements matched recipients")
-	}
-
-	// Combine endorsements
-	combined, err := libsignal.CombineEndorsements(selectedEndorsements)
-	if err != nil {
-		return nil, fmt.Errorf("combine endorsements: %w", err)
-	}
+	combined := endorsements[len(endorsements)-1]
 
 	// Get expiration from the endorsements response
 	expiration, err := libsignal.EndorsementExpiration(group.EndorsementsResponse)
@@ -442,12 +421,15 @@ func (s *Service) computeGroupSendToken(
 		return nil, fmt.Errorf("get endorsement expiration: %w", err)
 	}
 
+	logf(s.logger, "group send: endorsement expiration=%d combined_len=%d", expiration, len(combined))
+
 	// Convert to full token
 	fullToken, err := libsignal.EndorsementToFullToken(combined, secretParams, expiration)
 	if err != nil {
 		return nil, fmt.Errorf("endorsement to full token: %w", err)
 	}
 
+	logf(s.logger, "group send: full_token_len=%d", len(fullToken))
 	return fullToken, nil
 }
 

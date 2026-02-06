@@ -597,6 +597,7 @@ func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts
 
 // populateContactInfo fills SenderNumber/SenderName/SyncToNumber/SyncToName from the contact store.
 // If a contact has a profile key but no cached name, it fetches the profile from the server.
+// For the local account (sync messages from own devices), falls back to the account table.
 func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, service *Service) {
 	logger := service.logger
 	if c, _ := st.GetContactByACI(msg.Sender); c != nil {
@@ -607,6 +608,18 @@ func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, ser
 			name := fetchAndCacheProfileName(ctx, msg.Sender, c.ProfileKey, st, service, logger)
 			if name != "" {
 				msg.SenderName = name
+			}
+		}
+	}
+	// Fallback for local account: use account table for number and profile key.
+	// Handles both cases: contact not found, or contact found without name/profile key.
+	if msg.Sender == service.localACI && (msg.SenderNumber == "" || msg.SenderName == "") {
+		if acct, _ := st.LoadAccount(); acct != nil {
+			if msg.SenderNumber == "" {
+				msg.SenderNumber = acct.Number
+			}
+			if msg.SenderName == "" && len(acct.ProfileKey) == 32 {
+				msg.SenderName = fetchAndCacheProfileName(ctx, msg.Sender, acct.ProfileKey, st, service, logger)
 			}
 		}
 	}
