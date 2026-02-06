@@ -169,6 +169,20 @@ func NewClient(opts ...Option) *Client {
 	return c
 }
 
+// Open opens an existing account by phone number (e.g. "+31647272794").
+// It finds the database in the default data directory, opens it, and loads credentials.
+func Open(number string, opts ...Option) (*Client, error) {
+	dbPath, err := DiscoverDBByNumber(number)
+	if err != nil {
+		return nil, err
+	}
+	c := NewClient(append(opts, WithDBPath(dbPath))...)
+	if err := c.Load(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 // Link connects as a secondary device. It blocks until the primary device
 // scans the QR code and completes provisioning, then registers the device
 // with the Signal server. The onQR callback is called with the device link

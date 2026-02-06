@@ -46,6 +46,12 @@ type Message struct {
 // cancelled or when the caller breaks out of the range loop.
 func (s *Service) receiveMessages(ctx context.Context) iter.Seq2[Message, error] {
 	return func(yield func(Message, error) bool) {
+		if !s.receiving.CompareAndSwap(false, true) {
+			yield(Message{}, fmt.Errorf("receiver: already running"))
+			return
+		}
+		defer s.receiving.Store(false)
+
 		wsEndpoint := s.wsURL + "/v1/websocket/"
 		headers := buildWebSocketHeaders(s.auth)
 		logf(s.logger, "connecting to WebSocket url=%s user=%s", wsEndpoint, s.auth.Username)

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-
-	client "github.com/gwillem/signal-go"
 )
 
 type sendCommand struct {
@@ -22,11 +20,7 @@ func (cmd *sendCommand) Execute(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	c := client.NewClient(clientOpts()...)
-
-	if err := c.Load(); err != nil {
-		return err
-	}
+	c := loadClient()
 	defer c.Close()
 
 	var err error

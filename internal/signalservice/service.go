@@ -9,6 +9,7 @@ import (
 	"iter"
 	"log"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/store"
@@ -26,6 +27,7 @@ type Service struct {
 	tlsConfig     *tls.Config
 	logger        *log.Logger
 	debugDir      string
+	receiving     atomic.Bool // guards against concurrent receiveMessages calls
 }
 
 // ServiceConfig holds configuration for creating a Service.

@@ -4,17 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-
-	client "github.com/gwillem/signal-go"
 )
 
 type checkAllKeysCommand struct{}
 
 func (c *checkAllKeysCommand) Execute(args []string) error {
-	cl := client.NewClient(clientOpts()...)
-	if err := cl.Load(); err != nil {
-		return fmt.Errorf("load: %w", err)
-	}
+	cl := loadClient()
 	defer cl.Close()
 
 	// Get devices

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-
-	client "github.com/gwillem/signal-go"
 )
 
 type syncContactsCommand struct{}
@@ -15,11 +13,7 @@ func (cmd *syncContactsCommand) Execute(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	c := client.NewClient(clientOpts()...)
-
-	if err := c.Load(); err != nil {
-		return err
-	}
+	c := loadClient()
 	defer c.Close()
 
 	fmt.Println("Requesting contact sync from primary device...")

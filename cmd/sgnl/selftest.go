@@ -20,11 +20,7 @@ func (cmd *selftestCommand) Execute(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	c := client.NewClient(clientOpts()...)
-
-	if err := c.Load(); err != nil {
-		return err
-	}
+	c := loadClient()
 	defer c.Close()
 
 	// Get our own ACI from the store

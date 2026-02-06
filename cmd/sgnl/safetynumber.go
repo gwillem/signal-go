@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
-
-	client "github.com/gwillem/signal-go"
 )
 
 type safetyNumberCommand struct {
@@ -16,10 +14,7 @@ type safetyNumberCommand struct {
 }
 
 func (cmd *safetyNumberCommand) Execute(args []string) error {
-	c := client.NewClient(clientOpts()...)
-	if err := c.Load(); err != nil {
-		return err
-	}
+	c := loadClient()
 	defer c.Close()
 
 	// Get our identity key

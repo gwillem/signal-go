@@ -18,10 +18,10 @@ import (
 )
 
 type globalOpts struct {
-	DB       string          `long:"db" description:"Path to database file"`
-	Account  string          `short:"a" long:"account" description:"Phone number of account to use (e.g. +1234567890)"`
-	Verbose  bool            `short:"v" long:"verbose" description:"Enable verbose logging"`
-	DebugDir string          `long:"debug-dir" description:"Directory for dumping raw envelopes before decryption"`
+	DB             string                `long:"db" description:"Path to database file"`
+	Account        string                `short:"a" long:"account" description:"Phone number of account to use (e.g. +1234567890)"`
+	Verbose        bool                  `short:"v" long:"verbose" description:"Enable verbose logging"`
+	DebugDir       string                `long:"debug-dir" description:"Directory for dumping raw envelopes before decryption"`
 	Register       registerCommand       `command:"register" description:"Register a new Signal account (primary device)"`
 	Link           linkCommand           `command:"link" description:"Link as a secondary Signal device"`
 	Send           sendCommand           `command:"send" description:"Send a text message"`
@@ -60,21 +60,9 @@ func main() {
 
 func clientOpts() []client.Option {
 	var copts []client.Option
-
-	// Resolve database path from --db or --account
-	dbPath := opts.DB
-	if dbPath == "" && opts.Account != "" {
-		var err error
-		dbPath, err = client.DiscoverDBByNumber(opts.Account)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+	if opts.DB != "" {
+		copts = append(copts, client.WithDBPath(opts.DB))
 	}
-	if dbPath != "" {
-		copts = append(copts, client.WithDBPath(dbPath))
-	}
-
 	if opts.Verbose {
 		copts = append(copts, client.WithLogger(log.New(os.Stderr, "", log.LstdFlags)))
 	}
@@ -82,4 +70,24 @@ func clientOpts() []client.Option {
 		copts = append(copts, client.WithDebugDir(opts.DebugDir))
 	}
 	return copts
+}
+
+// loadClient opens an existing account. Uses --account (phone number) or --db path,
+// falling back to auto-discovery if neither is set.
+func loadClient() *client.Client {
+	copts := clientOpts()
+	if opts.Account != "" {
+		c, err := client.Open(opts.Account, copts...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return c
+	}
+	c := client.NewClient(copts...)
+	if err := c.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	return c
 }

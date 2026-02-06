@@ -3,17 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-
-	client "github.com/gwillem/signal-go"
 )
 
 type verifyIdentityCommand struct{}
 
 func (v *verifyIdentityCommand) Execute(args []string) error {
-	c := client.NewClient(clientOpts()...)
-	if err := c.Load(); err != nil {
-		return fmt.Errorf("load: %w", err)
-	}
+	c := loadClient()
 	defer c.Close()
 
 	serverKey, localKey, match, err := c.VerifyIdentityKey(context.Background())

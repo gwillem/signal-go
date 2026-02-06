@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-
-	client "github.com/gwillem/signal-go"
 )
 
 // displayName returns the best available display string for a contact.
@@ -31,11 +29,7 @@ func (cmd *receiveCommand) Execute(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	c := client.NewClient(clientOpts()...)
-
-	if err := c.Load(); err != nil {
-		return err
-	}
+	c := loadClient()
 	defer c.Close()
 
 	fmt.Println("Listening for messages... (Ctrl+C to stop)")

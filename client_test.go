@@ -346,6 +346,70 @@ func TestClientLoad(t *testing.T) {
 	}
 }
 
+func TestOpen(t *testing.T) {
+	// Use a temp dir as XDG_DATA_HOME so DiscoverDBByNumber finds our test db.
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "signal-go", "test-aci.db")
+
+	priv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := priv.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := priv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubBytes, err := pub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv.Destroy()
+	pub.Destroy()
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SaveAccount(&store.Account{
+		Number:                "+15559876543",
+		ACI:                   "test-aci",
+		Password:              "pass",
+		DeviceID:              1,
+		RegistrationID:        1,
+		ACIIdentityKeyPrivate: privBytes,
+		ACIIdentityKeyPublic:  pubBytes,
+	})
+	s.Close()
+
+	c, err := Open("+15559876543")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if c.Number() != "+15559876543" {
+		t.Fatalf("number: got %q, want +15559876543", c.Number())
+	}
+}
+
+func TestOpenNotFound(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	_, err := Open("+15550000000")
+	if err == nil {
+		t.Fatal("expected error for unknown number")
+	}
+	if !strings.Contains(err.Error(), "no account found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestClientSend(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 
