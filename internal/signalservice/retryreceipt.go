@@ -52,7 +52,9 @@ func (s *Service) sendRetryReceipt(ctx context.Context,
 		Urgent: true,
 	}
 
-	return s.SendMessage(ctx, senderACI, msgList)
+	return s.withDeviceRetry(senderACI, []int{int(senderDevice)}, 0, func(devices []int) error {
+		return s.SendMessage(ctx, senderACI, msgList)
+	})
 }
 
 // handleRetryReceipt processes an incoming retry receipt (DecryptionErrorMessage)
