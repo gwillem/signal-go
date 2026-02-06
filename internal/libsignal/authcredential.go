@@ -2,6 +2,7 @@ package libsignal
 
 /*
 #include "libsignal-ffi.h"
+#include "bridge.h"
 */
 import "C"
 import (
@@ -67,14 +68,11 @@ func (p *ServerPublicParams) ReceiveAuthCredentialWithPni(aci, pni [16]byte, red
 	pniBytes[0] = 0x01 // PNI type
 	copy(pniBytes[1:], pni[:])
 
-	aciPtr := (*C.SignalServiceIdFixedWidthBinaryBytes)(unsafe.Pointer(&aciBytes[0]))
-	pniPtr := (*C.SignalServiceIdFixedWidthBinaryBytes)(unsafe.Pointer(&pniBytes[0]))
-
 	if err := wrapError(C.signal_server_public_params_receive_auth_credential_with_pni_as_service_id(
 		&out,
 		C.SignalConstPointerServerPublicParams(p.ptr),
-		aciPtr,
-		pniPtr,
+		C.as_service_id(unsafe.Pointer(&aciBytes[0])),
+		C.as_service_id(unsafe.Pointer(&pniBytes[0])),
 		C.uint64_t(redemptionTime),
 		borrowedBuffer(response),
 	)); err != nil {

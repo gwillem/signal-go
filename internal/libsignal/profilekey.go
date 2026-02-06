@@ -2,10 +2,12 @@ package libsignal
 
 /*
 #include "libsignal-ffi.h"
+#include "bridge.h"
 */
 import "C"
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/google/uuid"
 )
@@ -32,12 +34,9 @@ func ProfileKeyGetVersion(profileKey []byte, aci string) (string, error) {
 	// Convert to fixed-width binary format for libsignal
 	// SignalServiceIdFixedWidthBinaryBytes is a [17]uint8_t
 	// ACI is encoded as 0x00 prefix + 16 UUID bytes
-	var serviceID C.SignalServiceIdFixedWidthBinaryBytes
-	aciBytes := aciUUID[:]
+	var serviceID [17]byte
 	serviceID[0] = 0x00
-	for i := range 16 {
-		serviceID[i+1] = C.uint8_t(aciBytes[i])
-	}
+	copy(serviceID[1:], aciUUID[:])
 
 	var pkArray [ProfileKeyLen]C.uchar
 	for i := range ProfileKeyLen {
@@ -49,7 +48,7 @@ func ProfileKeyGetVersion(profileKey []byte, aci string) (string, error) {
 	err = wrapError(C.signal_profile_key_get_profile_key_version(
 		&versionOut,
 		&pkArray,
-		&serviceID,
+		C.as_service_id(unsafe.Pointer(&serviceID[0])),
 	))
 	if err != nil {
 		return "", fmt.Errorf("get profile key version: %w", err)
@@ -77,12 +76,9 @@ func ProfileKeyGetCommitment(profileKey []byte, aci string) ([]byte, error) {
 	}
 
 	// Convert to fixed-width binary format for libsignal
-	var serviceID C.SignalServiceIdFixedWidthBinaryBytes
-	aciBytes := aciUUID[:]
+	var serviceID [17]byte
 	serviceID[0] = 0x00
-	for i := range 16 {
-		serviceID[i+1] = C.uint8_t(aciBytes[i])
-	}
+	copy(serviceID[1:], aciUUID[:])
 
 	var pkArray [ProfileKeyLen]C.uchar
 	for i := range ProfileKeyLen {
@@ -94,7 +90,7 @@ func ProfileKeyGetCommitment(profileKey []byte, aci string) ([]byte, error) {
 	err = wrapError(C.signal_profile_key_get_commitment(
 		&commitmentOut,
 		&pkArray,
-		&serviceID,
+		C.as_service_id(unsafe.Pointer(&serviceID[0])),
 	))
 	if err != nil {
 		return nil, fmt.Errorf("get profile key commitment: %w", err)

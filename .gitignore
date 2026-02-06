@@ -1,6 +1,6 @@
-internal/libsignal/libsignal-ffi.h
 .vscode
 /debug
 .envrc
 /NOTES.md
 CLAUDE.local.md
+internal/libsignal/lib/

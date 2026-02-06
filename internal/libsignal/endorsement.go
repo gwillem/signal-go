@@ -2,6 +2,7 @@ package libsignal
 
 /*
 #include "libsignal-ffi.h"
+#include "bridge.h"
 */
 import "C"
 import (
@@ -38,14 +39,13 @@ func ReceiveEndorsements(
 ) ([][]byte, error) {
 	var out C.SignalBytestringArray
 
-	localUserPtr := (*C.SignalServiceIdFixedWidthBinaryBytes)(unsafe.Pointer(&localUser[0]))
 	paramsPtr := (*[289]C.uchar)(unsafe.Pointer(&groupSecretParams[0]))
 
 	if err := wrapError(C.signal_group_send_endorsements_response_receive_and_combine_with_service_ids(
 		&out,
 		borrowedBuffer(responseBytes),
 		borrowedBuffer(groupMembers),
-		localUserPtr,
+		C.as_service_id(unsafe.Pointer(&localUser[0])),
 		C.uint64_t(now),
 		paramsPtr,
 		C.SignalConstPointerServerPublicParams(serverPublicParams.ptr),

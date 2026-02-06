@@ -2,6 +2,7 @@ package libsignal
 
 /*
 #include "libsignal-ffi.h"
+#include "bridge.h"
 */
 import "C"
 import (
@@ -110,9 +111,7 @@ func (p GroupSecretParams) DecryptServiceID(ciphertext [65]byte) ([17]byte, erro
 	var out [17]byte
 	paramsPtr := (*[289]C.uchar)(unsafe.Pointer(&p[0]))
 	ciphertextPtr := (*[65]C.uchar)(unsafe.Pointer(&ciphertext[0]))
-	outPtr := (*C.SignalServiceIdFixedWidthBinaryBytes)(unsafe.Pointer(&out[0]))
-
-	if err := wrapError(C.signal_group_secret_params_decrypt_service_id(outPtr, paramsPtr, ciphertextPtr)); err != nil {
+	if err := wrapError(C.signal_group_secret_params_decrypt_service_id(C.as_mut_service_id(unsafe.Pointer(&out[0])), paramsPtr, ciphertextPtr)); err != nil {
 		return [17]byte{}, fmt.Errorf("decrypt service id: %w", err)
 	}
 
@@ -127,9 +126,7 @@ func (p GroupSecretParams) DecryptProfileKey(ciphertext [65]byte, serviceID [17]
 	var out [32]C.uchar
 	paramsPtr := (*[289]C.uchar)(unsafe.Pointer(&p[0]))
 	ciphertextPtr := (*[65]C.uchar)(unsafe.Pointer(&ciphertext[0]))
-	serviceIDPtr := (*C.SignalServiceIdFixedWidthBinaryBytes)(unsafe.Pointer(&serviceID[0]))
-
-	if err := wrapError(C.signal_group_secret_params_decrypt_profile_key(&out, paramsPtr, ciphertextPtr, serviceIDPtr)); err != nil {
+	if err := wrapError(C.signal_group_secret_params_decrypt_profile_key(&out, paramsPtr, ciphertextPtr, C.as_service_id(unsafe.Pointer(&serviceID[0])))); err != nil {
 		return [32]byte{}, fmt.Errorf("decrypt profile key: %w", err)
 	}
 
