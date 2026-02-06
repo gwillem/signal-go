@@ -32,9 +32,7 @@ func TestSendRetryReceipt(t *testing.T) {
 	st.SetIdentity(priv, 1)
 
 	// Create a real ciphertext for the DecryptionErrorMessage.
-	alice := libsignal.NewMemorySessionStore()
-	aliceIdentity := libsignal.NewMemoryIdentityKeyStore(priv, 1)
-
+	// Use st as the session store so sendEncryptedMessage can find the session.
 	bobPriv, err := libsignal.GeneratePrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -115,11 +113,12 @@ func TestSendRetryReceipt(t *testing.T) {
 	}
 	defer bundle.Destroy()
 
-	if err := libsignal.ProcessPreKeyBundle(bundle, bobAddr, alice, aliceIdentity, time.Now()); err != nil {
+	// Use st so the session is available for sendEncryptedMessage.
+	if err := libsignal.ProcessPreKeyBundle(bundle, bobAddr, st, st, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	ct, err := libsignal.Encrypt([]byte("hello"), bobAddr, alice, aliceIdentity, time.Now())
+	ct, err := libsignal.Encrypt([]byte("hello"), bobAddr, st, st, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +173,9 @@ func TestSendRetryReceipt(t *testing.T) {
 	if len(receivedMsg.Messages) != 1 {
 		t.Fatalf("messages: got %d", len(receivedMsg.Messages))
 	}
-	if receivedMsg.Messages[0].Type != proto.Envelope_PLAINTEXT_CONTENT {
-		t.Errorf("type: got %d, want %d", receivedMsg.Messages[0].Type, proto.Envelope_PLAINTEXT_CONTENT)
+	// Message is now sent encrypted (PREKEY_BUNDLE for first message).
+	if receivedMsg.Messages[0].Type != proto.Envelope_PREKEY_BUNDLE {
+		t.Errorf("type: got %d, want %d", receivedMsg.Messages[0].Type, proto.Envelope_PREKEY_BUNDLE)
 	}
 	if receivedMsg.Messages[0].Content == "" {
 		t.Error("content should not be empty")

@@ -15,8 +15,9 @@ import (
 )
 
 // sendRetryReceipt sends a DecryptionErrorMessage back to a sender whose
-// message we could not decrypt. The message is wrapped as PlaintextContent
-// and sent unencrypted (type=PLAINTEXT) so no session is required.
+// message we could not decrypt. The DEM is placed in Content.decryptionErrorMessage
+// and sent as a regular encrypted message. This lets sendEncryptedMessage handle
+// session establishment, device discovery, and registration IDs automatically.
 func (s *Service) sendRetryReceipt(ctx context.Context,
 	senderACI string, senderDevice uint32,
 	originalContent []byte, originalType uint8, originalTimestamp uint64,
@@ -27,34 +28,20 @@ func (s *Service) sendRetryReceipt(ctx context.Context,
 	}
 	defer dem.Destroy()
 
-	pc, err := libsignal.NewPlaintextContentFromDecryptionError(dem)
+	demBytes, err := dem.Serialize()
 	if err != nil {
-		return fmt.Errorf("retry receipt: create PlaintextContent: %w", err)
+		return fmt.Errorf("retry receipt: serialize DEM: %w", err)
 	}
-	defer pc.Destroy()
 
-	serialized, err := pc.Serialize()
+	content := &proto.Content{
+		DecryptionErrorMessage: demBytes,
+	}
+	contentBytes, err := pb.Marshal(content)
 	if err != nil {
-		return fmt.Errorf("retry receipt: serialize: %w", err)
+		return fmt.Errorf("retry receipt: marshal content: %w", err)
 	}
 
-	timestamp := uint64(time.Now().UnixMilli())
-	msgList := &OutgoingMessageList{
-		Destination: senderACI,
-		Timestamp:   timestamp,
-		Messages: []OutgoingMessage{
-			{
-				Type:                proto.Envelope_PLAINTEXT_CONTENT,
-				DestinationDeviceID: int(senderDevice),
-				Content:             base64.StdEncoding.EncodeToString(serialized),
-			},
-		},
-		Urgent: true,
-	}
-
-	return s.withDeviceRetry(senderACI, []int{int(senderDevice)}, 0, func(devices []int) error {
-		return s.SendMessage(ctx, senderACI, msgList)
-	})
+	return s.sendEncryptedMessage(ctx, senderACI, contentBytes)
 }
 
 // handleRetryReceipt processes an incoming retry receipt (DecryptionErrorMessage)

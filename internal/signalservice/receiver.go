@@ -454,6 +454,13 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		}
 	}
 
+	// Handle DecryptionErrorMessage (retry receipt) inside Content proto.
+	// Signal-Android sends retry receipts this way (encrypted, inside Content).
+	if demBytes := contentProto.GetDecryptionErrorMessage(); len(demBytes) > 0 {
+		logf(logger, "received DecryptionErrorMessage in Content from=%s device=%d", senderACI, senderDevice)
+		return handleDecryptionErrorBytes(ctx, demBytes, senderACI, senderDevice, rc)
+	}
+
 	logf(logger, "skipping non-text content")
 	return nil, nil
 }
@@ -499,6 +506,33 @@ func handlePlaintextContent(ctx context.Context, content []byte, senderACI strin
 	}
 
 	return nil, nil // Retry receipts are not user-visible.
+}
+
+// handleDecryptionErrorBytes processes a serialized DecryptionErrorMessage
+// received inside a Content proto (field 8).
+func handleDecryptionErrorBytes(ctx context.Context, demBytes []byte, senderACI string, senderDevice uint32, rc *receiverContext) (*Message, error) {
+	dem, err := libsignal.DeserializeDecryptionErrorMessage(demBytes)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize DEM: %w", err)
+	}
+	defer dem.Destroy()
+
+	ts, _ := dem.Timestamp()
+	devID, _ := dem.DeviceID()
+	logf(rc.service.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
+
+	// Ignore old retry receipts (older than 1 minute) to break retry loops.
+	ageMs := uint64(time.Now().UnixMilli()) - ts
+	if ageMs > 60*1000 {
+		logf(rc.service.logger, "ignoring old retry receipt (age=%dms)", ageMs)
+		return nil, nil
+	}
+
+	if err := rc.service.handleRetryReceipt(ctx, senderACI, senderDevice); err != nil {
+		logf(rc.service.logger, "handle retry receipt error: %v", err)
+	}
+
+	return nil, nil
 }
 
 // sendRetryReceiptAsync sends a retry receipt to the sender in a fire-and-forget
