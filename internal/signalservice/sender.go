@@ -83,6 +83,7 @@ func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSign
 	if err != nil {
 		return nil, fmt.Errorf("get ACI identity: %w", err)
 	}
+	defer aciPriv.Destroy()
 	aciPub, err := aciPriv.PublicKey()
 	if err != nil {
 		return nil, fmt.Errorf("derive ACI public key: %w", err)
@@ -98,6 +99,7 @@ func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSign
 	if err != nil {
 		return nil, fmt.Errorf("get PNI identity: %w", err)
 	}
+	defer pniPriv.Destroy()
 	pniPub, err := pniPriv.PublicKey()
 	if err != nil {
 		return nil, fmt.Errorf("derive PNI public key: %w", err)
