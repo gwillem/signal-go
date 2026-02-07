@@ -18,11 +18,6 @@ type Conn struct {
 	ws *websocket.Conn
 }
 
-// New wraps an existing WebSocket connection.
-func New(ws *websocket.Conn) *Conn {
-	return &Conn{ws: ws}
-}
-
 // Dial opens a WebSocket connection to the given URL.
 // If tlsConf is non-nil, it is used for the TLS handshake.
 // Optional HTTP headers are added to the upgrade request.
