@@ -65,8 +65,11 @@ func (t *Transport) Do(req *http.Request) (*http.Response, error) {
 		}
 
 		// 429 — read body for logging, then close it before sleeping.
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if readErr != nil {
+			logf(t.logger, "http 429: error reading response body: %v", readErr)
+		}
 
 		wait := time.Duration(5<<attempt) * time.Second // 5s, 10s, 20s, 40s
 		if ra := resp.Header.Get("Retry-After"); ra != "" {
