@@ -41,7 +41,7 @@ func TestParseContactStream(t *testing.T) {
 		&proto.ContactDetails{Number: &num2, Aci: &aci2},
 	)
 
-	contacts, err := ParseContactStream(stream)
+	contacts, err := parseContactStream(stream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestParseContactStream(t *testing.T) {
 }
 
 func TestParseContactStream_Empty(t *testing.T) {
-	contacts, err := ParseContactStream(nil)
+	contacts, err := parseContactStream(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestParseContactStream_WithAvatar(t *testing.T) {
 	// Append 100 bytes of fake avatar data after the protobuf.
 	stream = append(stream, make([]byte, 100)...)
 
-	contacts, err := ParseContactStream(stream)
+	contacts, err := parseContactStream(stream)
 	if err != nil {
 		t.Fatal(err)
 	}

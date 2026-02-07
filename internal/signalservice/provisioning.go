@@ -12,14 +12,14 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-// ProvisionResult holds the output of a successful provisioning flow.
-type ProvisionResult struct {
+// provisionResult holds the output of a successful provisioning flow.
+type provisionResult struct {
 	Data    *provisioncrypto.ProvisionData
 	LinkURI string
 }
 
-// ProvisionCallbacks allows callers to react to provisioning events.
-type ProvisionCallbacks interface {
+// provisionCallbacks allows callers to react to provisioning events.
+type provisionCallbacks interface {
 	// OnLinkURI is called when the device link URI is ready (for QR code display).
 	OnLinkURI(uri string)
 }
@@ -27,7 +27,7 @@ type ProvisionCallbacks interface {
 // RunProvisioning connects to the provisioning WebSocket, receives the
 // provisioning address (UUID), builds a link URI, waits for the encrypted
 // provision envelope from the primary device, and decrypts it.
-func RunProvisioning(ctx context.Context, wsURL string, cb ProvisionCallbacks, tlsConf *tls.Config) (*ProvisionResult, error) {
+func RunProvisioning(ctx context.Context, wsURL string, cb provisionCallbacks, tlsConf *tls.Config) (*provisionResult, error) {
 	// Generate ephemeral key pair for provisioning.
 	privKey, err := libsignal.GeneratePrivateKey()
 	if err != nil {
@@ -62,7 +62,7 @@ func RunProvisioning(ctx context.Context, wsURL string, cb ProvisionCallbacks, t
 	}
 
 	// Build and emit the link URI.
-	uri := DeviceLinkURI(uuid, pubKeyBytes)
+	uri := deviceLinkURI(uuid, pubKeyBytes)
 	if cb != nil {
 		cb.OnLinkURI(uri)
 	}
@@ -87,7 +87,7 @@ func RunProvisioning(ctx context.Context, wsURL string, cb ProvisionCallbacks, t
 		return nil, fmt.Errorf("provisioning: parse: %w", err)
 	}
 
-	return &ProvisionResult{Data: data, LinkURI: uri}, nil
+	return &provisionResult{Data: data, LinkURI: uri}, nil
 }
 
 func readProvisioningAddress(ctx context.Context, conn *signalws.Conn) (uuid string, reqID uint64, err error) {

@@ -272,7 +272,7 @@ func TestGetTargetNameLength(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := GetTargetNameLength(tt.name)
+		got := getTargetNameLength(tt.name)
 		if got != tt.want {
 			t.Errorf("GetTargetNameLength(%d bytes) = %d, want %d", len(tt.name), got, tt.want)
 		}
@@ -295,7 +295,7 @@ func TestGetTargetAboutLength(t *testing.T) {
 
 	for _, tt := range tests {
 		about := string(make([]byte, tt.aboutLen))
-		got := GetTargetAboutLength(about)
+		got := getTargetAboutLength(about)
 		if got != tt.want {
 			t.Errorf("GetTargetAboutLength(%d bytes) = %d, want %d", tt.aboutLen, got, tt.want)
 		}

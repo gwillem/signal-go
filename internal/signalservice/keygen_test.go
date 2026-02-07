@@ -19,7 +19,7 @@ func TestGeneratePreKeySet(t *testing.T) {
 	}
 	defer identityPub.Destroy()
 
-	set, err := GeneratePreKeySet(identityPriv, 1, 1)
+	set, err := generatePreKeySet(identityPriv, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

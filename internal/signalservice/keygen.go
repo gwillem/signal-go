@@ -7,15 +7,15 @@ import (
 	"github.com/gwillem/signal-go/internal/libsignal"
 )
 
-// PreKeySet holds the keys generated for one identity (ACI or PNI).
-type PreKeySet struct {
+// preKeySet holds the keys generated for one identity (ACI or PNI).
+type preKeySet struct {
 	SignedPreKey   *libsignal.SignedPreKeyRecord
 	KyberLastResort *libsignal.KyberPreKeyRecord
 }
 
-// GeneratePreKeySet generates a signed pre-key and Kyber last-resort pre-key,
+// generatePreKeySet generates a signed pre-key and Kyber last-resort pre-key,
 // both signed by the given identity private key.
-func GeneratePreKeySet(identityPriv *libsignal.PrivateKey, signedPreKeyID, kyberPreKeyID uint32) (*PreKeySet, error) {
+func generatePreKeySet(identityPriv *libsignal.PrivateKey, signedPreKeyID, kyberPreKeyID uint32) (*preKeySet, error) {
 	now := uint64(time.Now().UnixMilli())
 
 	// Generate signed EC pre-key.
@@ -79,7 +79,7 @@ func GeneratePreKeySet(identityPriv *libsignal.PrivateKey, signedPreKeyID, kyber
 		return nil, fmt.Errorf("keygen: new Kyber pre-key: %w", err)
 	}
 
-	return &PreKeySet{
+	return &preKeySet{
 		SignedPreKey:   signedPreKey,
 		KyberLastResort: kyberPreKey,
 	}, nil

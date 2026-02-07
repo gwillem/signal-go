@@ -44,8 +44,8 @@ func dumpEnvelope(debugDir string, data []byte, env *proto.Envelope, logger *log
 	logf(logger, "dump: wrote %s (%d bytes)", path, len(data))
 }
 
-// LoadDump reads a dumped envelope file (for use in tests).
-func LoadDump(path string) ([]byte, error) {
+// loadDump reads a dumped envelope file (for use in tests).
+func loadDump(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 

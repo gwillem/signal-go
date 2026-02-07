@@ -57,7 +57,7 @@ func TestDecryptAttachment(t *testing.T) {
 	// key = aesKey || hmacKey (64 bytes)
 	key := append(aesKey, hmacKey...)
 
-	got, err := DecryptAttachment(encrypted, key)
+	got, err := decryptAttachment(encrypted, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,21 +79,21 @@ func TestDecryptAttachment_BadHMAC(t *testing.T) {
 	encrypted[len(encrypted)-1] ^= 0xff
 
 	key := append(aesKey, hmacKey...)
-	_, err := DecryptAttachment(encrypted, key)
+	_, err := decryptAttachment(encrypted, key)
 	if err == nil {
 		t.Fatal("expected HMAC error")
 	}
 }
 
 func TestDecryptAttachment_ShortKey(t *testing.T) {
-	_, err := DecryptAttachment(make([]byte, 100), make([]byte, 32))
+	_, err := decryptAttachment(make([]byte, 100), make([]byte, 32))
 	if err == nil {
 		t.Fatal("expected error for short key")
 	}
 }
 
 func TestDecryptAttachment_TooShort(t *testing.T) {
-	_, err := DecryptAttachment(make([]byte, 10), make([]byte, 64))
+	_, err := decryptAttachment(make([]byte, 10), make([]byte, 64))
 	if err == nil {
 		t.Fatal("expected error for short data")
 	}

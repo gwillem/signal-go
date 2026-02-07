@@ -103,7 +103,7 @@ func TestTransportPostJSON(t *testing.T) {
 			t.Fatalf("read body: %v", err)
 		}
 
-		var req VerificationSessionRequest
+		var req verificationSessionRequest
 		if err := json.Unmarshal(body, &req); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
@@ -112,7 +112,7 @@ func TestTransportPostJSON(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(VerificationSessionResponse{
+		json.NewEncoder(w).Encode(verificationSessionResponse{
 			ID:                   "session-123",
 			AllowedToRequestCode: true,
 			Verified:             false,
@@ -122,7 +122,7 @@ func TestTransportPostJSON(t *testing.T) {
 
 	transport := NewTransport(srv.URL, nil, nil)
 
-	req := &VerificationSessionRequest{Number: "+15551234567"}
+	req := &verificationSessionRequest{Number: "+15551234567"}
 	respBody, status, err := transport.PostJSON(context.Background(), "/v1/verification/session", req, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestTransportPostJSON(t *testing.T) {
 		t.Fatalf("status: got %d, want 200", status)
 	}
 
-	var resp VerificationSessionResponse
+	var resp verificationSessionResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestTransportPatchJSON(t *testing.T) {
 			t.Fatalf("read body: %v", err)
 		}
 
-		var req UpdateSessionRequest
+		var req updateSessionRequest
 		if err := json.Unmarshal(body, &req); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
@@ -167,7 +167,7 @@ func TestTransportPatchJSON(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(VerificationSessionResponse{
+		json.NewEncoder(w).Encode(verificationSessionResponse{
 			ID:                   "session-123",
 			AllowedToRequestCode: true,
 		})
@@ -176,7 +176,7 @@ func TestTransportPatchJSON(t *testing.T) {
 
 	transport := NewTransport(srv.URL, nil, nil)
 
-	req := &UpdateSessionRequest{Captcha: "captcha-token"}
+	req := &updateSessionRequest{Captcha: "captcha-token"}
 	respBody, status, err := transport.PatchJSON(context.Background(), "/v1/verification/session/session-123", req, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestTransportPatchJSON(t *testing.T) {
 		t.Fatalf("status: got %d, want 200", status)
 	}
 
-	var resp VerificationSessionResponse
+	var resp verificationSessionResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestTransportGetJSON(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(DeviceListResponse{
+		json.NewEncoder(w).Encode(deviceListResponse{
 			Devices: []DeviceInfo{
 				{ID: 1, Name: "Primary"},
 				{ID: 2, Name: "Secondary"},
@@ -225,7 +225,7 @@ func TestTransportGetJSON(t *testing.T) {
 	transport := NewTransport(srv.URL, nil, nil)
 	auth := BasicAuth{Username: "aci-uuid.1", Password: "password"}
 
-	var resp DeviceListResponse
+	var resp deviceListResponse
 	status, err := transport.GetJSON(context.Background(), "/v1/devices/", &auth, &resp)
 	if err != nil {
 		t.Fatal(err)

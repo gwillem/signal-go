@@ -9,9 +9,9 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-// ParseContactStream parses a varint-length-prefixed stream of ContactDetails protobufs.
+// parseContactStream parses a varint-length-prefixed stream of ContactDetails protobufs.
 // After each ContactDetails with an Avatar, the avatar bytes (Avatar.Length) are skipped.
-func ParseContactStream(data []byte) ([]*proto.ContactDetails, error) {
+func parseContactStream(data []byte) ([]*proto.ContactDetails, error) {
 	var contacts []*proto.ContactDetails
 	offset := 0
 

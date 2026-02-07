@@ -76,8 +76,8 @@ func (pc *ProfileCipher) EncryptBoolean(value bool) ([]byte, error) {
 	return pc.Encrypt(data, 1)
 }
 
-// GetTargetNameLength returns the appropriate padded length for a name.
-func GetTargetNameLength(name string) int {
+// getTargetNameLength returns the appropriate padded length for a name.
+func getTargetNameLength(name string) int {
 	nameLen := len([]byte(name))
 	if nameLen <= namePaddedLength1 {
 		return namePaddedLength1
@@ -85,8 +85,8 @@ func GetTargetNameLength(name string) int {
 	return namePaddedLength2
 }
 
-// GetTargetAboutLength returns the appropriate padded length for about text.
-func GetTargetAboutLength(about string) int {
+// getTargetAboutLength returns the appropriate padded length for about text.
+func getTargetAboutLength(about string) int {
 	aboutLen := len([]byte(about))
 	if aboutLen <= aboutPaddedLength1 {
 		return aboutPaddedLength1

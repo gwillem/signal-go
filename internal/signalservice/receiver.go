@@ -568,12 +568,12 @@ func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts
 	logf(logger, "downloading contact sync attachment (cdnId=%d cdnKey=%s cdnNumber=%d size=%d)",
 		blob.GetCdnId(), blob.GetCdnKey(), blob.GetCdnNumber(), blob.GetSize())
 
-	data, err := DownloadAttachment(ctx, blob, tlsConf)
+	data, err := downloadAttachment(ctx, blob, tlsConf)
 	if err != nil {
 		return fmt.Errorf("contact sync: download: %w", err)
 	}
 
-	parsed, err := ParseContactStream(data)
+	parsed, err := parseContactStream(data)
 	if err != nil {
 		return fmt.Errorf("contact sync: parse: %w", err)
 	}

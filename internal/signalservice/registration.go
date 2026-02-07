@@ -63,14 +63,14 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 
 	// Generate pre-key sets for ACI and PNI.
 	// PNI uses offset IDs (0x01000001) to avoid colliding with ACI in local storage.
-	aciKeys, err := GeneratePreKeySet(aciPriv, 1, 1)
+	aciKeys, err := generatePreKeySet(aciPriv, 1, 1)
 	if err != nil {
 		return nil, fmt.Errorf("registration: generate ACI keys: %w", err)
 	}
 	defer aciKeys.SignedPreKey.Destroy()
 	defer aciKeys.KyberLastResort.Destroy()
 
-	pniKeys, err := GeneratePreKeySet(pniPriv, 0x01000001, 0x01000001)
+	pniKeys, err := generatePreKeySet(pniPriv, 0x01000001, 0x01000001)
 	if err != nil {
 		return nil, fmt.Errorf("registration: generate PNI keys: %w", err)
 	}

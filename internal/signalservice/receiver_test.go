@@ -397,7 +397,7 @@ func TestDumpEnvelope(t *testing.T) {
 	}
 
 	// Verify envelope dump contents match the raw envelope bytes.
-	dumped, err := LoadDump(filepath.Join(debugDir, envDumpName))
+	dumped, err := loadDump(filepath.Join(debugDir, envDumpName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -689,7 +689,7 @@ func TestPopulateContactInfoFetchesProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	encryptedName, err := cipher.EncryptString("Alice Smith", GetTargetNameLength("Alice Smith"))
+	encryptedName, err := cipher.EncryptString("Alice Smith", getTargetNameLength("Alice Smith"))
 	if err != nil {
 		t.Fatal(err)
 	}

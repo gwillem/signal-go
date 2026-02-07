@@ -36,12 +36,12 @@ type PrimaryRegistrationResult struct {
 	PNIKyberPreKey  []byte
 }
 
-// CaptchaRequiredError is returned when a CAPTCHA challenge is required.
-type CaptchaRequiredError struct {
+// captchaRequiredError is returned when a CAPTCHA challenge is required.
+type captchaRequiredError struct {
 	SessionID string
 }
 
-func (e *CaptchaRequiredError) Error() string {
+func (e *captchaRequiredError) Error() string {
 	return "captcha required: visit https://signalcaptchas.org/registration/generate.html"
 }
 
@@ -72,7 +72,7 @@ func RegisterPrimary(
 
 	// Step 1: Create verification session (POST /v1/verification/session).
 	logf(logger, "creating verification session for %s", number)
-	sessionReq := &VerificationSessionRequest{Number: number}
+	sessionReq := &verificationSessionRequest{Number: number}
 	respBody, status, err := t.PostJSON(ctx, "/v1/verification/session", sessionReq, nil)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: create session: %w", err)
@@ -80,7 +80,7 @@ func RegisterPrimary(
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("primary registration: create session: status %d: %s", status, respBody)
 	}
-	var session VerificationSessionResponse
+	var session verificationSessionResponse
 	if err := json.Unmarshal(respBody, &session); err != nil {
 		return nil, fmt.Errorf("primary registration: unmarshal session: %w", err)
 	}
@@ -95,7 +95,7 @@ func RegisterPrimary(
 			return nil, fmt.Errorf("primary registration: get captcha: %w", err)
 		}
 		// PATCH /v1/verification/session/{sessionId}
-		respBody, status, err = t.PatchJSON(ctx, "/v1/verification/session/"+session.ID, &UpdateSessionRequest{
+		respBody, status, err = t.PatchJSON(ctx, "/v1/verification/session/"+session.ID, &updateSessionRequest{
 			Captcha: captchaToken,
 		}, nil)
 		if err != nil {
@@ -115,7 +115,7 @@ func RegisterPrimary(
 		return nil, fmt.Errorf("primary registration: not allowed to request code (session: %+v)", session)
 	}
 	logf(logger, "requesting %s verification code", transport)
-	codeReq := &RequestVerificationCodeRequest{Transport: transport, Client: "android-2024-01"}
+	codeReq := &requestVerificationCodeRequest{Transport: transport, Client: "android-2024-01"}
 	respBody, status, err = t.PostJSON(ctx, "/v1/verification/session/"+session.ID+"/code", codeReq, nil)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: request code: %w", err)
@@ -134,7 +134,7 @@ func RegisterPrimary(
 		return nil, fmt.Errorf("primary registration: get code from user: %w", err)
 	}
 	logf(logger, "submitting verification code")
-	submitReq := &SubmitVerificationCodeRequest{Code: code}
+	submitReq := &submitVerificationCodeRequest{Code: code}
 	respBody, status, err = t.PutJSON(ctx, "/v1/verification/session/"+session.ID+"/code", submitReq, nil)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: submit code: %w", err)
@@ -190,14 +190,14 @@ func RegisterPrimary(
 
 	// Step 7: Generate pre-key sets.
 	logf(logger, "generating pre-keys")
-	aciKeys, err := GeneratePreKeySet(aciIdentity.PrivateKey, 1, 1)
+	aciKeys, err := generatePreKeySet(aciIdentity.PrivateKey, 1, 1)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: generate ACI keys: %w", err)
 	}
 	defer aciKeys.SignedPreKey.Destroy()
 	defer aciKeys.KyberLastResort.Destroy()
 
-	pniKeys, err := GeneratePreKeySet(pniIdentity.PrivateKey, 0x01000001, 0x01000001)
+	pniKeys, err := generatePreKeySet(pniIdentity.PrivateKey, 0x01000001, 0x01000001)
 	if err != nil {
 		return nil, fmt.Errorf("primary registration: generate PNI keys: %w", err)
 	}
@@ -234,7 +234,7 @@ func RegisterPrimary(
 
 	logf(logger, "registering account")
 	discoverable := true
-	regReq := &PrimaryRegistrationRequest{
+	regReq := &primaryRegistrationRequest{
 		SessionID: session.ID,
 		AccountAttributes: AccountAttributes{
 			RegistrationID:            registrationID,
@@ -266,7 +266,7 @@ func RegisterPrimary(
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("primary registration: register: status %d: %s", status, respBody)
 	}
-	var regResp PrimaryRegistrationResponse
+	var regResp primaryRegistrationResponse
 	if err := json.Unmarshal(respBody, &regResp); err != nil {
 		return nil, fmt.Errorf("primary registration: unmarshal registration: %w", err)
 	}

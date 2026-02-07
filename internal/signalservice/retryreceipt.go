@@ -183,7 +183,7 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 	// Format: [content] [0x80] [0x00...] padded to 80-byte blocks.
 	paddedContent := padMessage(contentBytes)
 
-	var messages []OutgoingMessage
+	var messages []outgoingMessage
 
 	var skippedDevices []int
 
@@ -264,7 +264,7 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 			return fmt.Errorf("send: serialize ciphertext for device %d: %w", deviceID, err)
 		}
 
-		messages = append(messages, OutgoingMessage{
+		messages = append(messages, outgoingMessage{
 			Type:                      envelopeTypeForCiphertext(msgType),
 			DestinationDeviceID:       deviceID,
 			DestinationRegistrationID: registrationID,
@@ -285,7 +285,7 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 		return fmt.Errorf("send: no reachable devices for %s", recipient)
 	}
 
-	msgList := &OutgoingMessageList{
+	msgList := &outgoingMessageList{
 		Destination: recipient,
 		Timestamp:   timestamp,
 		Messages:    messages,

@@ -16,8 +16,8 @@ import (
 
 const storageServiceURL = "https://storage.signal.org"
 
-// StorageAuthResponse is the response from GET /v1/storage/auth
-type StorageAuthResponse struct {
+// storageAuthResponse is the response from GET /v1/storage/auth
+type storageAuthResponse struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -38,7 +38,7 @@ func (s *Service) SyncGroupsFromStorage(ctx context.Context) (int, error) {
 	}
 
 	// Derive storage key from master key
-	storageKey, err := DeriveStorageKey(acct.MasterKey)
+	storageKey, err := deriveStorageKey(acct.MasterKey)
 	if err != nil {
 		return 0, fmt.Errorf("derive storage key: %w", err)
 	}
@@ -74,11 +74,11 @@ func (s *Service) SyncGroupsFromStorage(ctx context.Context) (int, error) {
 	logf(s.logger, "found %d GroupV2 records to fetch", len(groupIDs))
 
 	// Read storage records (use recordIkm from manifest if present)
-	var recordIkm RecordIkm
+	var rikm recordIkm
 	if len(manifest.RecordIkm) > 0 {
-		recordIkm = RecordIkm(manifest.RecordIkm)
+		rikm = recordIkm(manifest.RecordIkm)
 	}
-	groups, err := s.readGroupRecords(ctx, auth, storageKey, recordIkm, groupIDs)
+	groups, err := s.readGroupRecords(ctx, auth, storageKey, rikm, groupIDs)
 	if err != nil {
 		return 0, fmt.Errorf("read group records: %w", err)
 	}
@@ -98,7 +98,7 @@ func (s *Service) SyncGroupsFromStorage(ctx context.Context) (int, error) {
 }
 
 // getStorageAuth fetches authentication credentials for storage service.
-func (s *Service) getStorageAuth(ctx context.Context) (*StorageAuthResponse, error) {
+func (s *Service) getStorageAuth(ctx context.Context) (*storageAuthResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", s.transport.baseURL+"/v1/storage/auth", nil)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (s *Service) getStorageAuth(ctx context.Context) (*StorageAuthResponse, err
 		return nil, fmt.Errorf("storage auth failed: %s", resp.Status)
 	}
 
-	var auth StorageAuthResponse
+	var auth storageAuthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&auth); err != nil {
 		return nil, fmt.Errorf("decode auth response: %w", err)
 	}
@@ -124,7 +124,7 @@ func (s *Service) getStorageAuth(ctx context.Context) (*StorageAuthResponse, err
 }
 
 // getStorageManifest fetches and decrypts the storage manifest.
-func (s *Service) getStorageManifest(ctx context.Context, auth *StorageAuthResponse, storageKey StorageKey) (*proto.ManifestRecord, error) {
+func (s *Service) getStorageManifest(ctx context.Context, auth *storageAuthResponse, storageKey storageKey) (*proto.ManifestRecord, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", storageServiceURL+"/v1/storage/manifest", nil)
 	if err != nil {
 		return nil, err
@@ -160,7 +160,7 @@ func (s *Service) getStorageManifest(ctx context.Context, auth *StorageAuthRespo
 
 	// Decrypt the manifest value
 	manifestKey := storageKey.DeriveManifestKey(int64(manifest.Version))
-	plaintext, err := DecryptStorageManifest(manifestKey, manifest.Value)
+	plaintext, err := decryptStorageManifest(manifestKey, manifest.Value)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt manifest: %w", err)
 	}
@@ -175,7 +175,7 @@ func (s *Service) getStorageManifest(ctx context.Context, auth *StorageAuthRespo
 }
 
 // readGroupRecords fetches and decrypts GroupV2 records from storage.
-func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthResponse, storageKey StorageKey, recordIkm RecordIkm, recordIDs [][]byte) ([]*store.Group, error) {
+func (s *Service) readGroupRecords(ctx context.Context, auth *storageAuthResponse, storageKey storageKey, recordIkm recordIkm, recordIDs [][]byte) ([]*store.Group, error) {
 	// Build read operation
 	readOp := &proto.ReadOperation{
 		ReadKey: recordIDs,
@@ -230,9 +230,9 @@ func (s *Service) readGroupRecords(ctx context.Context, auth *StorageAuthRespons
 }
 
 // decryptGroupRecord decrypts a single storage item and extracts the GroupV2Record.
-func (s *Service) decryptGroupRecord(storageKey StorageKey, recordIkm RecordIkm, item *proto.StorageItem) (*store.Group, error) {
+func (s *Service) decryptGroupRecord(storageKey storageKey, recordIkm recordIkm, item *proto.StorageItem) (*store.Group, error) {
 	// Derive item key - use recordIkm if present (new method), otherwise fallback to storageKey (legacy)
-	var itemKey StorageItemKey
+	var itemKey storageItemKey
 	if len(recordIkm) > 0 {
 		var err error
 		itemKey, err = recordIkm.DeriveItemKey(item.Key)
@@ -244,7 +244,7 @@ func (s *Service) decryptGroupRecord(storageKey StorageKey, recordIkm RecordIkm,
 	}
 
 	// Decrypt the item value
-	plaintext, err := DecryptStorageItem(itemKey, item.Value)
+	plaintext, err := decryptStorageItem(itemKey, item.Value)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt item: %w", err)
 	}

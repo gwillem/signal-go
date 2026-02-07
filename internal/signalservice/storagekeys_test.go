@@ -12,7 +12,7 @@ func TestDeriveStorageKey(t *testing.T) {
 		masterKey[i] = byte(i)
 	}
 
-	storageKey, err := DeriveStorageKey(masterKey)
+	storageKey, err := deriveStorageKey(masterKey)
 	if err != nil {
 		t.Fatalf("DeriveStorageKey: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestDeriveStorageKey(t *testing.T) {
 	}
 
 	// Verify deterministic
-	storageKey2, err := DeriveStorageKey(masterKey)
+	storageKey2, err := deriveStorageKey(masterKey)
 	if err != nil {
 		t.Fatalf("DeriveStorageKey (2): %v", err)
 	}
@@ -40,14 +40,14 @@ func TestDeriveStorageKey(t *testing.T) {
 }
 
 func TestDeriveStorageKeyInvalidLength(t *testing.T) {
-	_, err := DeriveStorageKey(make([]byte, 16))
+	_, err := deriveStorageKey(make([]byte, 16))
 	if err == nil {
 		t.Error("expected error for invalid master key length")
 	}
 }
 
 func TestDeriveManifestKey(t *testing.T) {
-	var storageKey StorageKey
+	var storageKey storageKey
 	for i := range storageKey {
 		storageKey[i] = byte(i + 100)
 	}
@@ -68,7 +68,7 @@ func TestDeriveManifestKey(t *testing.T) {
 }
 
 func TestDeriveItemKey(t *testing.T) {
-	var storageKey StorageKey
+	var storageKey storageKey
 	for i := range storageKey {
 		storageKey[i] = byte(i + 50)
 	}
@@ -95,7 +95,7 @@ func TestStorageKeyDerivationChain(t *testing.T) {
 	// Test the full derivation chain matches expected HMAC-SHA256 behavior
 	masterKey, _ := hex.DecodeString("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
 
-	storageKey, err := DeriveStorageKey(masterKey)
+	storageKey, err := deriveStorageKey(masterKey)
 	if err != nil {
 		t.Fatalf("DeriveStorageKey: %v", err)
 	}

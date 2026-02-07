@@ -39,8 +39,8 @@ func (s *Service) withDeviceRetry(recipient string, deviceIDs []int, skipDevice 
 			return err
 		}
 
-		var staleErr *StaleDevicesError
-		var mismatchErr *MismatchedDevicesError
+		var staleErr *staleDevicesError
+		var mismatchErr *mismatchedDevicesError
 
 		switch {
 		case errors.As(err, &staleErr):
@@ -86,8 +86,8 @@ func (s *Service) withGroupDeviceRetry(ctx context.Context, tryFn func() error) 
 			return err
 		}
 
-		var groupStaleErr *GroupStaleDevicesError
-		var groupMismatchErr *GroupMismatchedDevicesError
+		var groupStaleErr *groupStaleDevicesError
+		var groupMismatchErr *groupMismatchedDevicesError
 
 		switch {
 		case errors.As(err, &groupStaleErr):

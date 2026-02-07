@@ -91,25 +91,25 @@ type PreKeyEntity struct {
 	PublicKey string `json:"publicKey"`
 }
 
-// OutgoingMessageList is the JSON body for PUT /v1/messages/{destination}.
-type OutgoingMessageList struct {
+// outgoingMessageList is the JSON body for PUT /v1/messages/{destination}.
+type outgoingMessageList struct {
 	Destination string            `json:"destination"`
 	Timestamp   uint64            `json:"timestamp"`
-	Messages    []OutgoingMessage `json:"messages"`
+	Messages    []outgoingMessage `json:"messages"`
 	Online      bool              `json:"online"`
 	Urgent      bool              `json:"urgent"`
 }
 
-// OutgoingMessage is a single message in an OutgoingMessageList.
-type OutgoingMessage struct {
+// outgoingMessage is a single message in an OutgoingMessageList.
+type outgoingMessage struct {
 	Type                      proto.Envelope_Type `json:"type"`
 	DestinationDeviceID       int                 `json:"destinationDeviceId"`
 	DestinationRegistrationID int                 `json:"destinationRegistrationId"`
 	Content                   string              `json:"content"` // base64
 }
 
-// DeviceListResponse is the JSON response from GET /v1/devices/.
-type DeviceListResponse struct {
+// deviceListResponse is the JSON response from GET /v1/devices/.
+type deviceListResponse struct {
 	Devices []DeviceInfo `json:"devices"`
 }
 
@@ -121,16 +121,16 @@ type DeviceInfo struct {
 	LastSeen int64  `json:"lastSeen"`
 }
 
-// VerificationSessionRequest creates a new verification session for primary registration.
-type VerificationSessionRequest struct {
+// verificationSessionRequest creates a new verification session for primary registration.
+type verificationSessionRequest struct {
 	Number    string `json:"number"`
 	PushToken string `json:"pushToken,omitempty"`
 	MCC       string `json:"mcc,omitempty"`
 	MNC       string `json:"mnc,omitempty"`
 }
 
-// VerificationSessionResponse contains the current state of a verification session.
-type VerificationSessionResponse struct {
+// verificationSessionResponse contains the current state of a verification session.
+type verificationSessionResponse struct {
 	ID                      string   `json:"id"`
 	NextSms                 *int     `json:"nextSms"`
 	NextCall                *int     `json:"nextCall"`
@@ -140,25 +140,25 @@ type VerificationSessionResponse struct {
 	Verified                bool     `json:"verified"`
 }
 
-// RequestVerificationCodeRequest asks for an SMS or voice verification code.
-type RequestVerificationCodeRequest struct {
+// requestVerificationCodeRequest asks for an SMS or voice verification code.
+type requestVerificationCodeRequest struct {
 	Transport string `json:"transport"` // "sms" or "voice"
 	Client    string `json:"client"`    // e.g., "android-2024-01"
 }
 
-// SubmitVerificationCodeRequest submits the received 6-digit code.
-type SubmitVerificationCodeRequest struct {
+// submitVerificationCodeRequest submits the received 6-digit code.
+type submitVerificationCodeRequest struct {
 	Code string `json:"code"`
 }
 
-// UpdateSessionRequest submits CAPTCHA or push challenge response.
-type UpdateSessionRequest struct {
+// updateSessionRequest submits CAPTCHA or push challenge response.
+type updateSessionRequest struct {
 	Captcha       string `json:"captcha,omitempty"`
 	PushChallenge string `json:"pushChallenge,omitempty"`
 }
 
-// PrimaryRegistrationRequest registers a new primary device.
-type PrimaryRegistrationRequest struct {
+// primaryRegistrationRequest registers a new primary device.
+type primaryRegistrationRequest struct {
 	SessionID             string             `json:"sessionId,omitempty"`
 	RecoveryPassword      string             `json:"recoveryPassword,omitempty"`
 	AccountAttributes     AccountAttributes  `json:"accountAttributes"`
@@ -172,16 +172,16 @@ type PrimaryRegistrationRequest struct {
 	RequireAtomic         bool               `json:"requireAtomic,omitempty"`
 }
 
-// PrimaryRegistrationResponse is returned from POST /v1/registration.
-type PrimaryRegistrationResponse struct {
+// primaryRegistrationResponse is returned from POST /v1/registration.
+type primaryRegistrationResponse struct {
 	UUID           string `json:"uuid"`
 	PNI            string `json:"pni"`
 	Number         string `json:"number"`
 	StorageCapable bool   `json:"storageCapable"`
 }
 
-// ProfileWrite is the JSON body for PUT /v1/profile.
-type ProfileWrite struct {
+// profileWrite is the JSON body for PUT /v1/profile.
+type profileWrite struct {
 	Version            string   `json:"version"`            // hex-encoded profile key version
 	Name               []byte   `json:"name"`               // encrypted name
 	About              []byte   `json:"about"`              // encrypted about text
@@ -193,8 +193,8 @@ type ProfileWrite struct {
 	BadgeIDs           []string `json:"badgeIds"`           // visible badge IDs
 }
 
-// ProfileResponse is the JSON response from GET /v1/profile/{aci}/{version}.
-type ProfileResponse struct {
+// profileResponse is the JSON response from GET /v1/profile/{aci}/{version}.
+type profileResponse struct {
 	IdentityKey                    string `json:"identityKey"`
 	Name                           string `json:"name"`                          // base64 encrypted
 	About                          string `json:"about"`                         // base64 encrypted
@@ -204,66 +204,66 @@ type ProfileResponse struct {
 	UnrestrictedUnidentifiedAccess bool   `json:"unrestrictedUnidentifiedAccess"`
 }
 
-// SenderCertificateResponse is the JSON response from GET /v1/certificate/delivery.
-type SenderCertificateResponse struct {
+// senderCertificateResponse is the JSON response from GET /v1/certificate/delivery.
+type senderCertificateResponse struct {
 	Certificate string `json:"certificate"` // base64-encoded SenderCertificate protobuf
 }
 
-// StaleDevicesError is returned when the server responds with 410,
+// staleDevicesError is returned when the server responds with 410,
 // indicating that sessions for certain devices are outdated.
 // The caller should delete those sessions, re-fetch pre-keys, and retry.
-type StaleDevicesError struct {
+type staleDevicesError struct {
 	StaleDevices []int
 }
 
-func (e *StaleDevicesError) Error() string {
+func (e *staleDevicesError) Error() string {
 	return fmt.Sprintf("stale devices: %v", e.StaleDevices)
 }
 
-// MismatchedDevicesError is returned when the server responds with 409,
+// mismatchedDevicesError is returned when the server responds with 409,
 // indicating device list mismatch (missing or extra devices).
-type MismatchedDevicesError struct {
+type mismatchedDevicesError struct {
 	MissingDevices []int `json:"missingDevices"`
 	ExtraDevices   []int `json:"extraDevices"`
 }
 
-func (e *MismatchedDevicesError) Error() string {
+func (e *mismatchedDevicesError) Error() string {
 	return fmt.Sprintf("mismatched devices: missing=%v extra=%v", e.MissingDevices, e.ExtraDevices)
 }
 
-// SendGroupMessageResponse is the JSON response from PUT /v1/messages/multi_recipient.
-type SendGroupMessageResponse struct {
+// sendGroupMessageResponse is the JSON response from PUT /v1/messages/multi_recipient.
+type sendGroupMessageResponse struct {
 	UUIDs404 []string `json:"uuids404"`
 }
 
-// GroupMismatchedDevices represents a single recipient's device mismatch in a multi-recipient 409.
-type GroupMismatchedDevices struct {
+// groupMismatchedDevices represents a single recipient's device mismatch in a multi-recipient 409.
+type groupMismatchedDevices struct {
 	UUID    string              `json:"uuid"`
-	Devices MismatchedDevicesError `json:"devices"`
+	Devices mismatchedDevicesError `json:"devices"`
 }
 
-// GroupMismatchedDevicesError is returned on 409 from multi_recipient endpoint.
+// groupMismatchedDevicesError is returned on 409 from multi_recipient endpoint.
 // Contains device mismatch info for multiple recipients at once.
-type GroupMismatchedDevicesError struct {
-	Entries []GroupMismatchedDevices
+type groupMismatchedDevicesError struct {
+	Entries []groupMismatchedDevices
 }
 
-func (e *GroupMismatchedDevicesError) Error() string {
+func (e *groupMismatchedDevicesError) Error() string {
 	return fmt.Sprintf("group mismatched devices: %d recipients", len(e.Entries))
 }
 
-// GroupStaleDevices represents a single recipient's stale devices in a multi-recipient 410.
-type GroupStaleDevices struct {
+// groupStaleDevices represents a single recipient's stale devices in a multi-recipient 410.
+type groupStaleDevices struct {
 	UUID    string         `json:"uuid"`
-	Devices StaleDevicesError `json:"devices"`
+	Devices staleDevicesError `json:"devices"`
 }
 
-// GroupStaleDevicesError is returned on 410 from multi_recipient endpoint.
+// groupStaleDevicesError is returned on 410 from multi_recipient endpoint.
 // Contains stale device info for multiple recipients at once.
-type GroupStaleDevicesError struct {
-	Entries []GroupStaleDevices
+type groupStaleDevicesError struct {
+	Entries []groupStaleDevices
 }
 
-func (e *GroupStaleDevicesError) Error() string {
+func (e *groupStaleDevicesError) Error() string {
 	return fmt.Sprintf("group stale devices: %d recipients", len(e.Entries))
 }

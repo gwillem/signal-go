@@ -124,7 +124,7 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	enc := base64.RawStdEncoding.EncodeToString
 
 	// Track what the mock server receives.
-	var receivedMsg *OutgoingMessageList
+	var receivedMsg *outgoingMessageList
 
 	// Mock server: serves pre-keys on GET and accepts messages on PUT.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +156,7 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 
 		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/bob-aci":
 			body, _ := io.ReadAll(r.Body)
-			receivedMsg = new(OutgoingMessageList)
+			receivedMsg = new(outgoingMessageList)
 			json.Unmarshal(body, receivedMsg)
 			w.WriteHeader(http.StatusOK)
 
@@ -389,7 +389,7 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	// Mock server — should NOT get a GET /v2/keys request since session exists.
 	// The registration ID is stored inside the session record by ProcessPreKeyBundle.
 	preKeysFetched := false
-	var receivedMsg *OutgoingMessageList
+	var receivedMsg *outgoingMessageList
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -399,7 +399,7 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 
 		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/bob-aci":
 			body, _ := io.ReadAll(r.Body)
-			receivedMsg = new(OutgoingMessageList)
+			receivedMsg = new(outgoingMessageList)
 			json.Unmarshal(body, receivedMsg)
 			w.WriteHeader(http.StatusOK)
 
@@ -657,7 +657,7 @@ func TestSendToSelf409ThenRetry(t *testing.T) {
 			putCount++
 
 			body, _ := io.ReadAll(r.Body)
-			var msg OutgoingMessageList
+			var msg outgoingMessageList
 			json.Unmarshal(body, &msg)
 
 			// Device 2 (our device) must never appear.
@@ -672,7 +672,7 @@ func TestSendToSelf409ThenRetry(t *testing.T) {
 				// Since device 2 is our own device, it should be skipped.
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(MismatchedDevicesError{
+				json.NewEncoder(w).Encode(mismatchedDevicesError{
 					MissingDevices: []int{2},
 				})
 				return
@@ -903,7 +903,7 @@ func TestSend410OnlyArchivesSessions(t *testing.T) {
 		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/self-aci":
 			putCount++
 			body, _ := io.ReadAll(r.Body)
-			var msg OutgoingMessageList
+			var msg outgoingMessageList
 			json.Unmarshal(body, &msg)
 
 			switch putCount {
@@ -916,7 +916,7 @@ func TestSend410OnlyArchivesSessions(t *testing.T) {
 				// 409: server says device 2 is missing.
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(MismatchedDevicesError{MissingDevices: []int{2}})
+				json.NewEncoder(w).Encode(mismatchedDevicesError{MissingDevices: []int{2}})
 			case 3:
 				// Verify device 2 was added after 409.
 				hasDevice2 := false
@@ -1051,7 +1051,7 @@ func TestSend409PersistsDefaultDevice1(t *testing.T) {
 				// First PUT: 409 missing device 2.
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(MismatchedDevicesError{MissingDevices: []int{2}})
+				json.NewEncoder(w).Encode(mismatchedDevicesError{MissingDevices: []int{2}})
 				return
 			}
 			// Second PUT: accept.
@@ -1179,7 +1179,7 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/recip-aci":
 			putCount++
 			body, _ := io.ReadAll(r.Body)
-			var msg OutgoingMessageList
+			var msg outgoingMessageList
 			json.Unmarshal(body, &msg)
 
 			switch putCount {
@@ -1191,7 +1191,7 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 				// 409: device 2 is no longer registered (extra).
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(MismatchedDevicesError{ExtraDevices: []int{2}})
+				json.NewEncoder(w).Encode(mismatchedDevicesError{ExtraDevices: []int{2}})
 			case 2:
 				// Verify device 2 was removed after 409 extra.
 				for _, m := range msg.Messages {

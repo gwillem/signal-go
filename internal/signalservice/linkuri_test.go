@@ -11,7 +11,7 @@ func TestDeviceLinkURI(t *testing.T) {
 	uuid := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 	pubKey := []byte{0x05, 0x01, 0x02, 0x03, 0x04}
 
-	uri := DeviceLinkURI(uuid, pubKey)
+	uri := deviceLinkURI(uuid, pubKey)
 
 	// Should use standard base64 without padding, URL-encoded.
 	wantB64 := url.QueryEscape(base64.RawStdEncoding.EncodeToString(pubKey))
@@ -26,7 +26,7 @@ func TestDeviceLinkURIRoundTrip(t *testing.T) {
 	uuid := "test-uuid"
 	// Bytes that produce + and / in standard base64.
 	pubKey := []byte{0xfb, 0xef, 0xbe}
-	uri := DeviceLinkURI(uuid, pubKey)
+	uri := deviceLinkURI(uuid, pubKey)
 
 	// Parse URI and extract pub_key (URL-decoding happens automatically).
 	parsed, err := url.Parse(uri)
@@ -54,7 +54,7 @@ func TestDeviceLinkURIRoundTrip(t *testing.T) {
 func TestDeviceLinkURINoRawUnsafeChars(t *testing.T) {
 	// Bytes that produce + and / in standard base64.
 	pubKey := []byte{0xfb, 0xef, 0xbe}
-	uri := DeviceLinkURI("test", pubKey)
+	uri := deviceLinkURI("test", pubKey)
 
 	// The raw URI should not contain unescaped + or / in the query value.
 	parts := strings.SplitN(uri, "pub_key=", 2)

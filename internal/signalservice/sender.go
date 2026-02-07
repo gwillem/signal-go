@@ -358,7 +358,7 @@ func (s *Service) trySendSealed(ctx context.Context, recipient string,
 	now := time.Now()
 	timestamp := uint64(now.UnixMilli())
 
-	var messages []OutgoingMessage
+	var messages []outgoingMessage
 
 	for _, deviceID := range deviceIDs {
 		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
@@ -443,7 +443,7 @@ func (s *Service) trySendSealed(ctx context.Context, recipient string,
 			return fmt.Errorf("sealed sender: seal: %w", err)
 		}
 
-		messages = append(messages, OutgoingMessage{
+		messages = append(messages, outgoingMessage{
 			Type:                      proto.Envelope_UNIDENTIFIED_SENDER,
 			DestinationDeviceID:       deviceID,
 			DestinationRegistrationID: registrationID,
@@ -454,7 +454,7 @@ func (s *Service) trySendSealed(ctx context.Context, recipient string,
 	}
 
 	// Send via sealed sender endpoint
-	msgList := &OutgoingMessageList{
+	msgList := &outgoingMessageList{
 		Destination: recipient,
 		Timestamp:   timestamp,
 		Messages:    messages,

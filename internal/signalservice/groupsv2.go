@@ -16,15 +16,15 @@ import (
 	gproto "google.golang.org/protobuf/proto"
 )
 
-// TemporalCredential represents an auth credential for a specific redemption time.
-type TemporalCredential struct {
+// temporalCredential represents an auth credential for a specific redemption time.
+type temporalCredential struct {
 	Credential     []byte `json:"credential"`
 	RedemptionTime int64  `json:"redemptionTime"` // seconds since epoch
 }
 
-// CredentialResponse is the response from /v1/certificate/auth/group
-type CredentialResponse struct {
-	Credentials []TemporalCredential `json:"credentials"`
+// credentialResponse is the response from /v1/certificate/auth/group
+type credentialResponse struct {
+	Credentials []temporalCredential `json:"credentials"`
 }
 
 // FetchGroupDetails fetches and decrypts group details from the Groups V2 API.
@@ -190,7 +190,7 @@ func (s *Service) getAuthCredentialForToday(ctx context.Context) ([]byte, error)
 		return nil, fmt.Errorf("fetch auth credentials: status %d: %s", status, body)
 	}
 
-	var credResp CredentialResponse
+	var credResp credentialResponse
 	if err := json.Unmarshal(body, &credResp); err != nil {
 		return nil, fmt.Errorf("unmarshal credential response: %w", err)
 	}
@@ -200,7 +200,7 @@ func (s *Service) getAuthCredentialForToday(ctx context.Context) ([]byte, error)
 	}
 
 	// Find credential for today
-	var todayCredential *TemporalCredential
+	var todayCredential *temporalCredential
 	for i := range credResp.Credentials {
 		if credResp.Credentials[i].RedemptionTime == todaySeconds {
 			todayCredential = &credResp.Credentials[i]

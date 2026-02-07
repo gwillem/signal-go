@@ -20,10 +20,10 @@ const (
 	cdn3BaseURL = "https://cdn3.signal.org"
 )
 
-// DecryptAttachment decrypts a Signal attachment.
+// decryptAttachment decrypts a Signal attachment.
 // The data format is: IV (16 bytes) || AES-CBC ciphertext || HMAC-SHA256 (32 bytes).
 // The key is 64 bytes: 32 bytes AES key + 32 bytes HMAC key.
-func DecryptAttachment(data, key []byte) ([]byte, error) {
+func decryptAttachment(data, key []byte) ([]byte, error) {
 	if len(key) != 64 {
 		return nil, fmt.Errorf("attachment: key must be 64 bytes, got %d", len(key))
 	}
@@ -77,8 +77,8 @@ func DecryptAttachment(data, key []byte) ([]byte, error) {
 	return plaintext[:len(plaintext)-padLen], nil
 }
 
-// DownloadAttachment downloads and decrypts an attachment from Signal's CDN.
-func DownloadAttachment(ctx context.Context, ptr *proto.AttachmentPointer, tlsConf *tls.Config) ([]byte, error) {
+// downloadAttachment downloads and decrypts an attachment from Signal's CDN.
+func downloadAttachment(ctx context.Context, ptr *proto.AttachmentPointer, tlsConf *tls.Config) ([]byte, error) {
 	if ptr == nil {
 		return nil, fmt.Errorf("attachment: nil pointer")
 	}
@@ -118,7 +118,7 @@ func DownloadAttachment(ctx context.Context, ptr *proto.AttachmentPointer, tlsCo
 		return nil, fmt.Errorf("attachment: read body: %w", err)
 	}
 
-	return DecryptAttachment(data, key)
+	return decryptAttachment(data, key)
 }
 
 func attachmentURL(ptr *proto.AttachmentPointer) (string, error) {

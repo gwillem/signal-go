@@ -8,15 +8,15 @@ import (
 
 const storageIVLength = 12 // AES-GCM nonce length
 
-// DecryptStorageManifest decrypts an encrypted storage manifest.
+// decryptStorageManifest decrypts an encrypted storage manifest.
 // Format: 12-byte IV || ciphertext || 16-byte auth tag
-func DecryptStorageManifest(key StorageManifestKey, data []byte) ([]byte, error) {
+func decryptStorageManifest(key storageManifestKey, data []byte) ([]byte, error) {
 	return decryptStorageData(key[:], data)
 }
 
-// DecryptStorageItem decrypts an encrypted storage item.
+// decryptStorageItem decrypts an encrypted storage item.
 // Format: 12-byte IV || ciphertext || 16-byte auth tag
-func DecryptStorageItem(key StorageItemKey, data []byte) ([]byte, error) {
+func decryptStorageItem(key storageItemKey, data []byte) ([]byte, error) {
 	return decryptStorageData(key[:], data)
 }
 

@@ -135,11 +135,11 @@ func TestSendRetryReceipt(t *testing.T) {
 	}
 
 	// Track the HTTP request.
-	var receivedMsg *OutgoingMessageList
+	var receivedMsg *outgoingMessageList
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut && r.URL.Path == "/v1/messages/sender-aci" {
 			body, _ := io.ReadAll(r.Body)
-			receivedMsg = new(OutgoingMessageList)
+			receivedMsg = new(outgoingMessageList)
 			json.Unmarshal(body, receivedMsg)
 			w.WriteHeader(http.StatusOK)
 		} else {

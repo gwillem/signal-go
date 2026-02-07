@@ -104,7 +104,7 @@ func (s *Service) UploadPreKeys(ctx context.Context, identity string, keys *PreK
 
 // SendMessage sends an encrypted message to a destination.
 // Returns *StaleDevicesError for 410 and *MismatchedDevicesError for 409.
-func (s *Service) SendMessage(ctx context.Context, destination string, msg *OutgoingMessageList) error {
+func (s *Service) SendMessage(ctx context.Context, destination string, msg *outgoingMessageList) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)
@@ -127,9 +127,9 @@ func (s *Service) SendMessage(ctx context.Context, destination string, msg *Outg
 		if err := json.Unmarshal(respBody, &parsed); err != nil {
 			return fmt.Errorf("send message: status 410: %s", respBody)
 		}
-		return &StaleDevicesError{StaleDevices: parsed.StaleDevices}
+		return &staleDevicesError{StaleDevices: parsed.StaleDevices}
 	case http.StatusConflict: // 409
-		var parsed MismatchedDevicesError
+		var parsed mismatchedDevicesError
 		if err := json.Unmarshal(respBody, &parsed); err != nil {
 			return fmt.Errorf("send message: status 409: %s", respBody)
 		}
@@ -140,7 +140,7 @@ func (s *Service) SendMessage(ctx context.Context, destination string, msg *Outg
 }
 
 // SendSealedMessage sends a sealed sender message using unidentified access key.
-func (s *Service) SendSealedMessage(ctx context.Context, destination string, msg *OutgoingMessageList, accessKey []byte) error {
+func (s *Service) SendSealedMessage(ctx context.Context, destination string, msg *outgoingMessageList, accessKey []byte) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal sealed message: %w", err)
@@ -156,13 +156,13 @@ func (s *Service) SendSealedMessage(ctx context.Context, destination string, msg
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
 		return nil
 	case http.StatusConflict: // 409
-		var mismatch MismatchedDevicesError
+		var mismatch mismatchedDevicesError
 		if err := json.Unmarshal(respBody, &mismatch); err != nil {
 			return fmt.Errorf("unmarshal 409: %w", err)
 		}
 		return &mismatch
 	case http.StatusGone: // 410
-		var stale StaleDevicesError
+		var stale staleDevicesError
 		if err := json.Unmarshal(respBody, &stale); err != nil {
 			return fmt.Errorf("unmarshal 410: %w", err)
 		}
@@ -194,24 +194,24 @@ func (s *Service) SendMultiRecipientMessage(ctx context.Context, body []byte, gr
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
 		// Check for uuids404 in the response (recipients the server couldn't deliver to).
 		if len(respBody) > 0 {
-			var result SendGroupMessageResponse
+			var result sendGroupMessageResponse
 			if err := json.Unmarshal(respBody, &result); err == nil && len(result.UUIDs404) > 0 {
 				logf(s.logger, "multi_recipient: uuids404=%v", result.UUIDs404)
 			}
 		}
 		return nil
 	case http.StatusConflict: // 409
-		var entries []GroupMismatchedDevices
+		var entries []groupMismatchedDevices
 		if err := json.Unmarshal(respBody, &entries); err != nil {
 			return fmt.Errorf("send multi-recipient 409: %s", respBody)
 		}
-		return &GroupMismatchedDevicesError{Entries: entries}
+		return &groupMismatchedDevicesError{Entries: entries}
 	case http.StatusGone: // 410
-		var entries []GroupStaleDevices
+		var entries []groupStaleDevices
 		if err := json.Unmarshal(respBody, &entries); err != nil {
 			return fmt.Errorf("send multi-recipient 410: %s", respBody)
 		}
-		return &GroupStaleDevicesError{Entries: entries}
+		return &groupStaleDevicesError{Entries: entries}
 	default:
 		return fmt.Errorf("send multi-recipient message: status %d: %s", status, respBody)
 	}
@@ -229,7 +229,7 @@ func (s *Service) GetDevices(ctx context.Context) ([]DeviceInfo, error) {
 		return nil, fmt.Errorf("get devices: status %d: %s", status, body)
 	}
 
-	var result DeviceListResponse
+	var result deviceListResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal devices: %w", err)
 	}
@@ -263,7 +263,7 @@ func (s *Service) GetSenderCertificate(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("get sender certificate: status %d: %s", status, body)
 	}
 
-	var certResp SenderCertificateResponse
+	var certResp senderCertificateResponse
 	if err := json.Unmarshal(body, &certResp); err != nil {
 		return nil, fmt.Errorf("unmarshal sender certificate: %w", err)
 	}
@@ -305,7 +305,7 @@ func getProfileKeyCommitment(profileKey []byte, aci string) ([]byte, error) {
 }
 
 // GetProfile fetches a user's profile from the server.
-func (s *Service) GetProfile(ctx context.Context, aci string, profileKey []byte) (*ProfileResponse, error) {
+func (s *Service) GetProfile(ctx context.Context, aci string, profileKey []byte) (*profileResponse, error) {
 	version, err := getProfileKeyVersion(profileKey, aci)
 	if err != nil {
 		return nil, fmt.Errorf("get profile key version: %w", err)
@@ -322,7 +322,7 @@ func (s *Service) GetProfile(ctx context.Context, aci string, profileKey []byte)
 		return nil, fmt.Errorf("get profile: status %d: %s", status, body)
 	}
 
-	var profile ProfileResponse
+	var profile profileResponse
 	if err := json.Unmarshal(body, &profile); err != nil {
 		return nil, fmt.Errorf("unmarshal profile: %w", err)
 	}
@@ -340,12 +340,12 @@ func (s *Service) SetProfile(ctx context.Context, aci string, profileKey []byte,
 	if opts != nil && opts.Name != nil {
 		name = *opts.Name
 	}
-	encryptedName, err := cipher.EncryptString(name, GetTargetNameLength(name))
+	encryptedName, err := cipher.EncryptString(name, getTargetNameLength(name))
 	if err != nil {
 		return fmt.Errorf("encrypt name: %w", err)
 	}
 
-	encryptedAbout, err := cipher.EncryptString("", GetTargetAboutLength(""))
+	encryptedAbout, err := cipher.EncryptString("", getTargetAboutLength(""))
 	if err != nil {
 		return fmt.Errorf("encrypt about: %w", err)
 	}
@@ -374,7 +374,7 @@ func (s *Service) SetProfile(ctx context.Context, aci string, profileKey []byte,
 		return fmt.Errorf("get profile key commitment: %w", err)
 	}
 
-	profileWrite := &ProfileWrite{
+	profileWrite := &profileWrite{
 		Version:            version,
 		Name:               encryptedName,
 		About:              encryptedAbout,

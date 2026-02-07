@@ -539,7 +539,7 @@ func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, 
 // trySendGroupSealed attempts to send a sender key message to specific devices using v1 sealed sender.
 func (s *Service) trySendGroupSealed(ctx context.Context, recipient string, senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte, accessKey []byte, deviceIDs []int) error {
 	timestamp := uint64(time.Now().UnixMilli())
-	var messages []OutgoingMessage
+	var messages []outgoingMessage
 
 	for _, deviceID := range deviceIDs {
 		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
@@ -571,7 +571,7 @@ func (s *Service) trySendGroupSealed(ctx context.Context, recipient string, send
 			return fmt.Errorf("seal: %w", err)
 		}
 
-		messages = append(messages, OutgoingMessage{
+		messages = append(messages, outgoingMessage{
 			Type:                      proto.Envelope_UNIDENTIFIED_SENDER,
 			DestinationDeviceID:       deviceID,
 			DestinationRegistrationID: registrationID,
@@ -579,7 +579,7 @@ func (s *Service) trySendGroupSealed(ctx context.Context, recipient string, send
 		})
 	}
 
-	msgList := &OutgoingMessageList{
+	msgList := &outgoingMessageList{
 		Destination: recipient,
 		Timestamp:   timestamp,
 		Messages:    messages,
