@@ -635,7 +635,7 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 
 	// Derive unidentified access key from profile key.
 	if len(acct.ProfileKey) > 0 {
-		uak, err := signalservice.DeriveUnidentifiedAccessKey(acct.ProfileKey)
+		uak, err := signalservice.DeriveAccessKey(acct.ProfileKey)
 		if err != nil {
 			return fmt.Errorf("client: derive access key: %w", err)
 		}
@@ -695,7 +695,7 @@ func (c *Client) UpdateAccountSettings(ctx context.Context, settings *AccountSet
 
 		// Derive unidentified access key from profile key.
 		if len(acct.ProfileKey) > 0 {
-			uak, err := signalservice.DeriveUnidentifiedAccessKey(acct.ProfileKey)
+			uak, err := signalservice.DeriveAccessKey(acct.ProfileKey)
 			if err != nil {
 				return fmt.Errorf("client: derive access key: %w", err)
 			}

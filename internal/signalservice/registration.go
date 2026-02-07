@@ -2,8 +2,6 @@ package signalservice
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
@@ -110,7 +108,7 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 	// Derive unidentified access key from profile key (sealed sender).
 	var uakB64 string
 	if len(data.ProfileKey) > 0 {
-		uak, err := DeriveUnidentifiedAccessKey(data.ProfileKey)
+		uak, err := DeriveAccessKey(data.ProfileKey)
 		if err != nil {
 			return nil, fmt.Errorf("registration: derive access key: %w", err)
 		}
@@ -318,20 +316,3 @@ func GenerateProfileKey() []byte {
 	return buf
 }
 
-// DeriveUnidentifiedAccessKey derives the sealed-sender access key from a profile key.
-// It uses AES-256-GCM with a zero nonce on a 16-byte zero plaintext, returning the
-// first 16 bytes of ciphertext.
-func DeriveUnidentifiedAccessKey(profileKey []byte) ([]byte, error) {
-	block, err := aes.NewCipher(profileKey)
-	if err != nil {
-		return nil, fmt.Errorf("aes cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: %w", err)
-	}
-	nonce := make([]byte, aead.NonceSize()) // 12 zero bytes
-	plaintext := make([]byte, 16)           // 16 zero bytes
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
-	return ciphertext[:16], nil
-}

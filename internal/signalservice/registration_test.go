@@ -193,34 +193,3 @@ func TestRegisterLinkedDevice(t *testing.T) {
 	}
 }
 
-func TestDeriveUnidentifiedAccessKey(t *testing.T) {
-	// Profile key of 32 zero bytes should produce a deterministic 16-byte result.
-	profileKey := make([]byte, 32)
-	key, err := DeriveUnidentifiedAccessKey(profileKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(key) != 16 {
-		t.Fatalf("expected 16 bytes, got %d", len(key))
-	}
-
-	// Same input should produce same output (deterministic).
-	key2, err := DeriveUnidentifiedAccessKey(profileKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(key) != string(key2) {
-		t.Fatal("derivation is not deterministic")
-	}
-
-	// Different profile key should produce different output.
-	profileKey2 := make([]byte, 32)
-	profileKey2[0] = 1
-	key3, err := DeriveUnidentifiedAccessKey(profileKey2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(key) == string(key3) {
-		t.Fatal("different profile keys produced same access key")
-	}
-}
