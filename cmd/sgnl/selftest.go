@@ -9,6 +9,7 @@ import (
 	"time"
 
 	client "github.com/gwillem/signal-go"
+	"github.com/gwillem/signal-go/internal/store"
 )
 
 type selftestCommand struct {
@@ -24,7 +25,16 @@ func (cmd *selftestCommand) Execute(args []string) error {
 	defer c.Close()
 
 	// Get our own ACI from the store
-	acct, err := c.Store().LoadAccount()
+	dbPath, err := resolveDBPath()
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer st.Close()
+	acct, err := st.LoadAccount()
 	if err != nil {
 		return fmt.Errorf("load account: %w", err)
 	}

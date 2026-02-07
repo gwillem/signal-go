@@ -12,6 +12,7 @@ import (
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/signalservice"
+	"github.com/gwillem/signal-go/internal/store"
 )
 
 type checkPreKeysCommand struct{}
@@ -23,10 +24,15 @@ func (cmd *checkPreKeysCommand) Execute(args []string) error {
 	c := loadClient()
 	defer c.Close()
 
-	s := c.Store()
-	if s == nil {
-		return fmt.Errorf("store not available")
+	dbPath, err := resolveDBPath()
+	if err != nil {
+		return err
 	}
+	s, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer s.Close()
 
 	acct, err := s.LoadAccount()
 	if err != nil {

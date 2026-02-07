@@ -259,10 +259,10 @@ func TestClientLink(t *testing.T) {
 	}
 
 	// Verify credentials were persisted to the DB.
-	if client.Store() == nil {
+	if client.store == nil {
 		t.Fatal("store should be open after Link")
 	}
-	acct, err := client.Store().LoadAccount()
+	acct, err := client.store.LoadAccount()
 	if err != nil {
 		t.Fatal(err)
 	}

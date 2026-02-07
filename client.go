@@ -810,11 +810,6 @@ func (c *Client) storePreKeys(reg *signalservice.RegistrationResult) error {
 	return c.storeKyberPreKeyFromBytes(reg.PNIKyberPreKey, "PNI")
 }
 
-// Store returns the underlying store, or nil if not yet opened.
-func (c *Client) Store() *store.Store {
-	return c.store
-}
-
 func (c *Client) openStore() error {
 	dbPath := c.dbPath
 	if dbPath == "" {
