@@ -121,6 +121,13 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("store: set WAL mode: %w", err)
 	}
 
+	// Set busy timeout so concurrent writers retry instead of failing immediately.
+	// CGO callbacks from libsignal may fire concurrently during message decryption.
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: set busy timeout: %w", err)
+	}
+
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: create schema: %w", err)

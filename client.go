@@ -54,6 +54,7 @@ type Client struct {
 
 // initService creates the Service after credentials are known (called from Link/Load).
 func (c *Client) initService() {
+	libsignal.SetCallbackLogger(c.logger)
 	c.service = signalservice.NewService(signalservice.ServiceConfig{
 		APIURL:        c.apiURL,
 		WSURL:         c.wsURL,

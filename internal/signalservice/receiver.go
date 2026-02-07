@@ -394,8 +394,12 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 	// Log DataMessage details for debugging.
 	if dm := contentProto.GetDataMessage(); dm != nil {
-		logf(logger, "RECV DataMessage: timestamp=%d bodyLen=%d hasProfileKey=%v hasGroupContext=%v hasQuote=%v hasExpireTimer=%v",
-			dm.GetTimestamp(), len(dm.GetBody()), len(dm.ProfileKey) > 0,
+		bodyPreview := dm.GetBody()
+		if len(bodyPreview) > 30 {
+			bodyPreview = bodyPreview[:30] + "..."
+		}
+		logf(logger, "RECV DataMessage: timestamp=%d body=%q hasProfileKey=%v hasGroupContext=%v hasQuote=%v hasExpireTimer=%v",
+			dm.GetTimestamp(), bodyPreview, len(dm.ProfileKey) > 0,
 			dm.GetGroupV2() != nil, dm.GetQuote() != nil, dm.ExpireTimer != nil)
 	}
 

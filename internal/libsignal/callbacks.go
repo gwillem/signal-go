@@ -27,9 +27,24 @@ extern void bridge_noop_destroy(void *ctx);
 */
 import "C"
 import (
+	"log"
 	"runtime"
 	"unsafe"
 )
+
+// callbackLogger is an optional logger for CGO callback diagnostics.
+// Set via SetCallbackLogger. When nil, callback errors are silent
+// (the -1 return code still propagates to Rust/libsignal).
+var callbackLogger *log.Logger
+
+// SetCallbackLogger sets the logger for CGO callback error diagnostics.
+func SetCallbackLogger(l *log.Logger) { callbackLogger = l }
+
+func callbackErrf(format string, args ...any) {
+	if callbackLogger != nil {
+		callbackLogger.Printf(format, args...)
+	}
+}
 
 // --- Session Store callbacks ---
 
@@ -40,6 +55,7 @@ func goLoadSession(ctx unsafe.Pointer, recordp *C.SignalMutPointerSessionRecord,
 	rec, err := store.LoadSession(addr)
 	addr.ptr = nil // prevent Destroy of borrowed pointer
 	if err != nil {
+		callbackErrf("load_session: %v", err)
 		return -1
 	}
 	if rec != nil {
@@ -56,17 +72,20 @@ func goStoreSession(ctx unsafe.Pointer, address *C.SignalProtocolAddress, record
 	// Clone the session record since we're borrowing the C pointer
 	var clonedBuf C.SignalOwnedBuffer
 	if err := wrapError(C.signal_session_record_serialize(&clonedBuf, C.SignalConstPointerSessionRecord{raw: record})); err != nil {
+		callbackErrf("store_session: serialize: %v", err)
 		return -1
 	}
 	data := freeOwnedBuffer(clonedBuf)
 	rec, err := DeserializeSessionRecord(data)
 	if err != nil {
+		callbackErrf("store_session: deserialize: %v", err)
 		return -1
 	}
 
 	err = store.StoreSession(addr, rec)
 	addr.ptr = nil
 	if err != nil {
+		callbackErrf("store_session: store: %v", err)
 		return -1
 	}
 	return 0
@@ -79,6 +98,7 @@ func goGetIdentityKeyPair(ctx unsafe.Pointer, keyp *C.SignalMutPointerPrivateKey
 	store := restorePointer(ctx).(IdentityKeyStore)
 	key, err := store.GetIdentityKeyPair()
 	if err != nil {
+		callbackErrf("get_identity_key_pair: %v", err)
 		return -1
 	}
 	if key != nil {
@@ -92,6 +112,7 @@ func goGetLocalRegistrationId(ctx unsafe.Pointer, idp *C.uint32_t) C.int {
 	store := restorePointer(ctx).(IdentityKeyStore)
 	id, err := store.GetLocalRegistrationID()
 	if err != nil {
+		callbackErrf("get_local_registration_id: %v", err)
 		return -1
 	}
 	*idp = C.uint32_t(id)
@@ -106,17 +127,20 @@ func goSaveIdentityKey(ctx unsafe.Pointer, out *C.uint8_t, address *C.SignalProt
 	// Clone the public key since we're borrowing the C pointer
 	var buf C.SignalOwnedBuffer
 	if err := wrapError(C.signal_publickey_serialize(&buf, C.SignalConstPointerPublicKey{raw: key})); err != nil {
+		callbackErrf("save_identity_key: serialize public key: %v", err)
 		return -1
 	}
 	data := freeOwnedBuffer(buf)
 	pubKey, err := DeserializePublicKey(data)
 	if err != nil {
+		callbackErrf("save_identity_key: deserialize public key: %v", err)
 		return -1
 	}
 
 	replaced, err := store.SaveIdentityKey(addr, pubKey)
 	addr.ptr = nil
 	if err != nil {
+		callbackErrf("save_identity_key: store: %v", err)
 		return -1
 	}
 
@@ -136,6 +160,7 @@ func goGetIdentityKey(ctx unsafe.Pointer, keyp *C.SignalMutPointerPublicKey, add
 	key, err := store.GetIdentityKey(addr)
 	addr.ptr = nil
 	if err != nil {
+		callbackErrf("get_identity_key: %v", err)
 		return -1
 	}
 	if key != nil {
@@ -153,6 +178,7 @@ func goIsTrustedIdentity(ctx unsafe.Pointer, out *C.bool, address *C.SignalProto
 	addr.ptr = nil
 	pub.ptr = nil // prevent Destroy of borrowed pointer
 	if err != nil {
+		callbackErrf("is_trusted_identity: %v", err)
 		return -1
 	}
 	*out = C.bool(trusted)
@@ -166,6 +192,7 @@ func goLoadPreKey(ctx unsafe.Pointer, recordp *C.SignalMutPointerPreKeyRecord, i
 	store := restorePointer(ctx).(PreKeyStore)
 	rec, err := store.LoadPreKey(uint32(id))
 	if err != nil {
+		callbackErrf("load_pre_key(%d): %v", id, err)
 		return -1
 	}
 	if rec != nil {
@@ -315,6 +342,7 @@ func goLoadSenderKey(ctx unsafe.Pointer, recordp *C.SignalMutPointerSenderKeyRec
 	rec, err := store.LoadSenderKey(addr, distID)
 	addr.ptr = nil // prevent Destroy of borrowed pointer
 	if err != nil {
+		callbackErrf("load_sender_key: %v", err)
 		return -1
 	}
 	if rec != nil {
