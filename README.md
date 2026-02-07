@@ -50,31 +50,16 @@ func main() {
 }
 ```
 
-## Prerequisites
+## Quick start
 
-- Go 1.25+
-- Rust nightly (`rustup install nightly-2025-09-24`)
-- cbindgen (`cargo install cbindgen`)
-- Native target: `rustup target add aarch64-apple-darwin --toolchain nightly-2025-09-24`
-- Linux cross-compile target: `rustup target add x86_64-unknown-linux-musl --toolchain nightly-2025-09-24`
-
-## Build & test
+Requires Go 1.25+.
 
 ```bash
-make deps    # builds libsignal_ffi.a + generates headers (native platform)
-make test    # runs tests with correct CGO flags
+make deps-download   # downloads pre-compiled libsignal binaries (~200MB)
+make test            # runs tests with correct CGO flags
 ```
 
-## Cross-compile for Linux (static)
-
-Requires [musl-cross](https://github.com/FiloSottile/homebrew-musl-cross) on macOS:
-
-```bash
-brew install FiloSottile/musl-cross/musl-cross
-make deps-linux-amd64
-CGO_ENABLED=1 CC=x86_64-linux-musl-gcc GOOS=linux GOARCH=amd64 \
-  go build -ldflags '-extldflags "-static"' -o sgnl-linux ./cmd/sgnl
-```
+See [docs/building.md](docs/building.md) for building libsignal from source and cross-compilation.
 
 ## Architecture
 
