@@ -6,6 +6,7 @@ package libsignal
 */
 import "C"
 import (
+	"fmt"
 	"runtime"
 	"unsafe"
 )
@@ -54,7 +55,7 @@ func ReceiveEndorsements(
 	}
 	defer C.signal_free_bytestring_array(out)
 
-	return splitBytestringArray(out), nil
+	return splitBytestringArray(out)
 }
 
 // CombineEndorsements combines multiple per-member endorsements into a single
@@ -118,10 +119,14 @@ func EndorsementToFullToken(endorsement []byte, groupSecretParams GroupSecretPar
 }
 
 // splitBytestringArray converts a SignalBytestringArray into a Go [][]byte.
-func splitBytestringArray(arr C.SignalBytestringArray) [][]byte {
+func splitBytestringArray(arr C.SignalBytestringArray) ([][]byte, error) {
 	nItems := int(arr.lengths.length)
 	if nItems == 0 {
-		return nil
+		return nil, nil
+	}
+
+	if arr.lengths.base == nil {
+		return nil, fmt.Errorf("endorsement: nil lengths base")
 	}
 
 	// Read the lengths array
@@ -136,9 +141,12 @@ func splitBytestringArray(arr C.SignalBytestringArray) [][]byte {
 	offset := 0
 	for i := range nItems {
 		l := int(lengths[i])
+		if offset+l > len(allBytes) {
+			return nil, fmt.Errorf("endorsement: offset %d + length %d exceeds buffer %d", offset, l, len(allBytes))
+		}
 		result[i] = make([]byte, l)
 		copy(result[i], allBytes[offset:offset+l])
 		offset += l
 	}
-	return result
+	return result, nil
 }
