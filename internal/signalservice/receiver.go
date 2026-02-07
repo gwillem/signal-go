@@ -185,172 +185,21 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 	switch envType {
 	case proto.Envelope_UNIDENTIFIED_SENDER:
-		logf(logger, "decrypting sealed sender message (version byte=0x%02x, len=%d)", content[0], len(content))
-
-		// Log identity key fingerprint for debugging sealed sender decryption failures.
-		if identityKey, err := st.GetIdentityKeyPair(); err == nil {
-			if pub, err := identityKey.PublicKey(); err == nil {
-				if data, err := pub.Serialize(); err == nil && len(data) >= 8 {
-					logf(logger, "sealed sender: trying ACI identity key fingerprint=%x", data[:8])
-				}
-				pub.Destroy()
-			}
-			identityKey.Destroy()
-		}
-
-		// Step 1: Decrypt outer sealed sender layer → USMC (uses only identity key for ECDH).
-		// The identity is already selected based on envelope destination (lines 148-155).
-		usmc, err := libsignal.SealedSenderDecryptToUSMC(content, st)
+		pt, aci, dev, msg, err := decryptSealedSender(ctx, content, &env, st, logger, rc)
 		if err != nil {
-			return nil, fmt.Errorf("sealed sender decrypt outer: %w", err)
+			return nil, err
 		}
-		defer usmc.Destroy()
-
-		// Step 2: Validate sender certificate.
-		cert, err := usmc.GetSenderCert()
-		if err != nil {
-			return nil, fmt.Errorf("sealed sender get cert: %w", err)
+		if msg != nil {
+			return msg, nil // plaintext content handled inline
 		}
-		defer cert.Destroy()
-
-		trustRoots, err := loadTrustRoots()
-		if err != nil {
-			return nil, fmt.Errorf("load trust roots: %w", err)
-		}
-		for _, root := range trustRoots {
-			defer root.Destroy()
-		}
-
-		valid, err := cert.ValidateWithTrustRoots(trustRoots, env.GetServerTimestamp())
-		if err != nil {
-			return nil, fmt.Errorf("sealed sender validate cert: %w", err)
-		}
-		if !valid {
-			return nil, fmt.Errorf("sealed sender: invalid sender certificate")
-		}
-
-		// Extract sender info from certificate.
-		senderACI, err = cert.SenderUUID()
-		if err != nil {
-			return nil, fmt.Errorf("sealed sender sender UUID: %w", err)
-		}
-		senderDevice, err = cert.DeviceID()
-		if err != nil {
-			return nil, fmt.Errorf("sealed sender device ID: %w", err)
-		}
-		logf(logger, "sealed sender from=%s device=%d", senderACI, senderDevice)
-
-		// Step 3: Decrypt inner message (supports Kyber/PQXDH via full store).
-		msgType, err := usmc.MsgType()
-		if err != nil {
-			return nil, fmt.Errorf("sealed sender msg type: %w", err)
-		}
-		innerContent, err := usmc.Contents()
-		if err != nil {
-			return nil, fmt.Errorf("sealed sender contents: %w", err)
-		}
-
-		addr, err := libsignal.NewAddress(senderACI, senderDevice)
-		if err != nil {
-			return nil, fmt.Errorf("sealed sender address: %w", err)
-		}
-		defer addr.Destroy()
-
-		switch msgType {
-		case libsignal.CiphertextMessageTypePreKey:
-			logf(logger, "sealed sender: decrypting inner pre-key message")
-			preKeyMsg, err := libsignal.DeserializePreKeySignalMessage(innerContent)
-			if err != nil {
-				// Inner deserialize failed — sender is known, send retry receipt.
-				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
-				return nil, fmt.Errorf("sealed sender deserialize pre-key: %w", err)
-			}
-			defer preKeyMsg.Destroy()
-			plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
-			if err != nil {
-				// Inner decrypt failed — sender is known, send retry receipt.
-				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
-				return nil, fmt.Errorf("sealed sender decrypt pre-key: %w", err)
-			}
-
-		case libsignal.CiphertextMessageTypeWhisper:
-			logf(logger, "sealed sender: decrypting inner whisper message")
-			sigMsg, err := libsignal.DeserializeSignalMessage(innerContent)
-			if err != nil {
-				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
-				return nil, fmt.Errorf("sealed sender deserialize whisper: %w", err)
-			}
-			defer sigMsg.Destroy()
-			plaintext, err = libsignal.DecryptMessage(sigMsg, addr, st, st)
-			if err != nil {
-				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
-				return nil, fmt.Errorf("sealed sender decrypt whisper: %w", err)
-			}
-
-		case libsignal.CiphertextMessageTypeSenderKey:
-			logf(logger, "sealed sender: decrypting inner sender key message")
-			plaintext, err = libsignal.GroupDecryptMessage(innerContent, addr, st)
-			if err != nil {
-				sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
-				return nil, fmt.Errorf("sealed sender decrypt sender key: %w", err)
-			}
-
-		case libsignal.CiphertextMessageTypePlaintext:
-			// Plaintext messages (type 8) contain unencrypted content.
-			// Used for retry receipts where the content is a DecryptionErrorMessage.
-			// Route to handlePlaintextContent which properly extracts the DEM.
-			logf(logger, "sealed sender: processing plaintext message (retry receipt)")
-			return handlePlaintextContent(ctx, innerContent, senderACI, senderDevice, rc)
-
-		default:
-			return nil, fmt.Errorf("sealed sender: unsupported inner message type %d", msgType)
-		}
+		plaintext, senderACI, senderDevice = pt, aci, dev
 
 	case proto.Envelope_PREKEY_BUNDLE, proto.Envelope_CIPHERTEXT:
-		addr, err := libsignal.NewAddress(senderACI, senderDevice)
+		pt, err := decryptCiphertextOrPreKey(envType, content, senderACI, senderDevice, st, logger)
 		if err != nil {
-			return nil, fmt.Errorf("create address: %w", err)
+			return nil, err
 		}
-		defer addr.Destroy()
-
-		switch envType {
-		case proto.Envelope_PREKEY_BUNDLE:
-			logf(logger, "decrypting pre-key message")
-			preKeyMsg, err := libsignal.DeserializePreKeySignalMessage(content)
-			if err != nil {
-				return nil, fmt.Errorf("deserialize pre-key message: %w", err)
-			}
-			defer preKeyMsg.Destroy()
-
-			// Log pre-key message details for debugging
-			if signedPreKeyID, err := preKeyMsg.SignedPreKeyID(); err == nil {
-				logf(logger, "pre-key message signed_pre_key_id=%d", signedPreKeyID)
-			}
-			if preKeyID, err := preKeyMsg.PreKeyID(); err == nil {
-				logf(logger, "pre-key message pre_key_id=%d (0 means none)", preKeyID)
-			}
-			if version, err := preKeyMsg.Version(); err == nil {
-				logf(logger, "pre-key message version=%d", version)
-			}
-
-			plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
-			if err != nil {
-				return nil, fmt.Errorf("decrypt pre-key message: %w", err)
-			}
-
-		case proto.Envelope_CIPHERTEXT:
-			logf(logger, "decrypting ciphertext message")
-			sigMsg, err := libsignal.DeserializeSignalMessage(content)
-			if err != nil {
-				return nil, fmt.Errorf("deserialize signal message: %w", err)
-			}
-			defer sigMsg.Destroy()
-
-			plaintext, err = libsignal.DecryptMessage(sigMsg, addr, st, st)
-			if err != nil {
-				return nil, fmt.Errorf("decrypt message: %w", err)
-			}
-		}
+		plaintext = pt
 	}
 
 	// Strip Signal transport padding: content is followed by 0x80 then 0x00 bytes.
@@ -473,6 +322,174 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 	logf(logger, "skipping non-text content")
 	return nil, nil
+}
+
+// decryptSealedSender decrypts a sealed sender (UNIDENTIFIED_SENDER) envelope.
+// Returns decrypted plaintext, sender ACI, sender device, and optionally a Message
+// if the inner content was plaintext (retry receipt) handled inline.
+func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelope, st *store.Store, logger *log.Logger, rc *receiverContext) ([]byte, string, uint32, *Message, error) {
+	logf(logger, "decrypting sealed sender message (version byte=0x%02x, len=%d)", content[0], len(content))
+
+	// Log identity key fingerprint for debugging sealed sender decryption failures.
+	if identityKey, err := st.GetIdentityKeyPair(); err == nil {
+		if pub, err := identityKey.PublicKey(); err == nil {
+			if data, err := pub.Serialize(); err == nil && len(data) >= 8 {
+				logf(logger, "sealed sender: trying ACI identity key fingerprint=%x", data[:8])
+			}
+			pub.Destroy()
+		}
+		identityKey.Destroy()
+	}
+
+	// Step 1: Decrypt outer sealed sender layer → USMC (uses only identity key for ECDH).
+	usmc, err := libsignal.SealedSenderDecryptToUSMC(content, st)
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt outer: %w", err)
+	}
+	defer usmc.Destroy()
+
+	// Step 2: Validate sender certificate.
+	cert, err := usmc.GetSenderCert()
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender get cert: %w", err)
+	}
+	defer cert.Destroy()
+
+	trustRoots, err := loadTrustRoots()
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("load trust roots: %w", err)
+	}
+	for _, root := range trustRoots {
+		defer root.Destroy()
+	}
+
+	valid, err := cert.ValidateWithTrustRoots(trustRoots, env.GetServerTimestamp())
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender validate cert: %w", err)
+	}
+	if !valid {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender: invalid sender certificate")
+	}
+
+	// Extract sender info from certificate.
+	senderACI, err := cert.SenderUUID()
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender sender UUID: %w", err)
+	}
+	senderDevice, err := cert.DeviceID()
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender device ID: %w", err)
+	}
+	logf(logger, "sealed sender from=%s device=%d", senderACI, senderDevice)
+
+	// Step 3: Decrypt inner message (supports Kyber/PQXDH via full store).
+	msgType, err := usmc.MsgType()
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender msg type: %w", err)
+	}
+	innerContent, err := usmc.Contents()
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender contents: %w", err)
+	}
+
+	addr, err := libsignal.NewAddress(senderACI, senderDevice)
+	if err != nil {
+		return nil, "", 0, nil, fmt.Errorf("sealed sender address: %w", err)
+	}
+	defer addr.Destroy()
+
+	var plaintext []byte
+	switch msgType {
+	case libsignal.CiphertextMessageTypePreKey:
+		logf(logger, "sealed sender: decrypting inner pre-key message")
+		preKeyMsg, err := libsignal.DeserializePreKeySignalMessage(innerContent)
+		if err != nil {
+			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			return nil, "", 0, nil, fmt.Errorf("sealed sender deserialize pre-key: %w", err)
+		}
+		defer preKeyMsg.Destroy()
+		plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
+		if err != nil {
+			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt pre-key: %w", err)
+		}
+
+	case libsignal.CiphertextMessageTypeWhisper:
+		logf(logger, "sealed sender: decrypting inner whisper message")
+		sigMsg, err := libsignal.DeserializeSignalMessage(innerContent)
+		if err != nil {
+			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			return nil, "", 0, nil, fmt.Errorf("sealed sender deserialize whisper: %w", err)
+		}
+		defer sigMsg.Destroy()
+		plaintext, err = libsignal.DecryptMessage(sigMsg, addr, st, st)
+		if err != nil {
+			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt whisper: %w", err)
+		}
+
+	case libsignal.CiphertextMessageTypeSenderKey:
+		logf(logger, "sealed sender: decrypting inner sender key message")
+		plaintext, err = libsignal.GroupDecryptMessage(innerContent, addr, st)
+		if err != nil {
+			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt sender key: %w", err)
+		}
+
+	case libsignal.CiphertextMessageTypePlaintext:
+		logf(logger, "sealed sender: processing plaintext message (retry receipt)")
+		msg, err := handlePlaintextContent(ctx, innerContent, senderACI, senderDevice, rc)
+		return nil, "", 0, msg, err
+
+	default:
+		return nil, "", 0, nil, fmt.Errorf("sealed sender: unsupported inner message type %d", msgType)
+	}
+
+	return plaintext, senderACI, senderDevice, nil, nil
+}
+
+// decryptCiphertextOrPreKey decrypts a PREKEY_BUNDLE or CIPHERTEXT envelope.
+func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, senderACI string, senderDevice uint32, st *store.Store, logger *log.Logger) ([]byte, error) {
+	addr, err := libsignal.NewAddress(senderACI, senderDevice)
+	if err != nil {
+		return nil, fmt.Errorf("create address: %w", err)
+	}
+	defer addr.Destroy()
+
+	switch envType {
+	case proto.Envelope_PREKEY_BUNDLE:
+		logf(logger, "decrypting pre-key message")
+		preKeyMsg, err := libsignal.DeserializePreKeySignalMessage(content)
+		if err != nil {
+			return nil, fmt.Errorf("deserialize pre-key message: %w", err)
+		}
+		defer preKeyMsg.Destroy()
+
+		if signedPreKeyID, err := preKeyMsg.SignedPreKeyID(); err == nil {
+			logf(logger, "pre-key message signed_pre_key_id=%d", signedPreKeyID)
+		}
+		if preKeyID, err := preKeyMsg.PreKeyID(); err == nil {
+			logf(logger, "pre-key message pre_key_id=%d (0 means none)", preKeyID)
+		}
+		if version, err := preKeyMsg.Version(); err == nil {
+			logf(logger, "pre-key message version=%d", version)
+		}
+
+		return libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
+
+	case proto.Envelope_CIPHERTEXT:
+		logf(logger, "decrypting ciphertext message")
+		sigMsg, err := libsignal.DeserializeSignalMessage(content)
+		if err != nil {
+			return nil, fmt.Errorf("deserialize signal message: %w", err)
+		}
+		defer sigMsg.Destroy()
+
+		return libsignal.DecryptMessage(sigMsg, addr, st, st)
+
+	default:
+		return nil, fmt.Errorf("unexpected envelope type: %v", envType)
+	}
 }
 
 // handlePlaintextContent processes a PLAINTEXT_CONTENT envelope, which contains
