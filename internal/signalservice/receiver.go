@@ -516,23 +516,7 @@ func handlePlaintextContent(ctx context.Context, content []byte, senderACI strin
 	}
 	defer dem.Destroy()
 
-	ts, _ := dem.Timestamp()
-	devID, _ := dem.DeviceID()
-	logf(rc.service.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
-
-	// Ignore old retry receipts (older than 1 minute) to break retry loops.
-	ageMs := uint64(time.Now().UnixMilli()) - ts
-	if ageMs > 60*1000 {
-		logf(rc.service.logger, "ignoring old retry receipt (age=%dms)", ageMs)
-		return nil, nil
-	}
-
-	// Handle the retry receipt: archive session and send null message.
-	if err := rc.service.handleRetryReceipt(ctx, senderACI, senderDevice); err != nil {
-		logf(rc.service.logger, "handle retry receipt error: %v", err)
-	}
-
-	return nil, nil // Retry receipts are not user-visible.
+	return processRetryReceipt(ctx, dem, senderACI, senderDevice, rc)
 }
 
 // handleDecryptionErrorBytes processes a serialized DecryptionErrorMessage
@@ -544,6 +528,12 @@ func handleDecryptionErrorBytes(ctx context.Context, demBytes []byte, senderACI 
 	}
 	defer dem.Destroy()
 
+	return processRetryReceipt(ctx, dem, senderACI, senderDevice, rc)
+}
+
+// processRetryReceipt handles a DecryptionErrorMessage: logs it, checks age,
+// and archives session + sends null message if fresh enough.
+func processRetryReceipt(ctx context.Context, dem *libsignal.DecryptionErrorMessage, senderACI string, senderDevice uint32, rc *receiverContext) (*Message, error) {
 	ts, _ := dem.Timestamp()
 	devID, _ := dem.DeviceID()
 	logf(rc.service.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
