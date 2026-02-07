@@ -23,8 +23,8 @@ Replace the mutable toggle with an explicit `IdentityContext` parameter:
 5. Update all callers to pass the appropriate context
 6. Update CGO callback wrappers to thread identity context through
 
-## Review References
+## Background
 
-- REVIEW.md Important #1 (data race on Store.usePNI)
-- REVIEW.md Important #9 (sendInternal UsePNI toggle anti-pattern)
-- REVIEW.md Important #10 (createPniSignatureMessage does 3 things with UsePNI toggle)
+- `Store.usePNI` bool is mutated by `UsePNI()`/defer patterns and read by `GetIdentityKeyPair()`/`GetLocalRegistrationID()`, which is not safe under concurrent libsignal callbacks.
+- `sendInternal()` uses `UsePNI()` toggle with defer — comment acknowledges this is a workaround creating a mismatch. Fragile deferred state management.
+- `createPniSignatureMessage()` does 3 unrelated things (get ACI key, switch/get PNI key, sign) with UsePNI toggle in between.

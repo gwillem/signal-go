@@ -15,7 +15,7 @@ Similarly, `receiveMessages` depends on concrete `*signalws.PersistentConn`, mak
 3. Define a minimal `wsConn` interface (`ReadMessage`, `SendResponse`, `Close`) for the receiver
 4. Create mock implementations for testing
 
-## Review References
+## Background
 
-- REVIEW.md Important #14 (tight coupling Service -> concrete *store.Store)
-- REVIEW.md Important #15 (tight coupling receiver -> concrete *signalws.PersistentConn)
+- `Service` depends on concrete `*store.Store` — all tests require a real SQLite database, making them slow and brittle.
+- `receiveMessages` depends on concrete `*signalws.PersistentConn` — the receive loop is untestable without a real WebSocket connection.
