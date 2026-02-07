@@ -121,9 +121,6 @@ func (s *Service) prepareSendDevices(recipient string, providedDevices []int) (d
 				deviceIDs = append(deviceIDs, d)
 			}
 		}
-		if len(deviceIDs) == 0 {
-			deviceIDs = []int{1}
-		}
 		if sendingToSelf {
 			skipDevice = s.localDeviceID
 		}
@@ -131,8 +128,11 @@ func (s *Service) prepareSendDevices(recipient string, providedDevices []int) (d
 		deviceIDs, skipDevice = s.initialDevices(recipient, sendingToSelf)
 	}
 
-	if sendingToSelf && len(deviceIDs) == 0 {
-		return nil, 0, fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
+	if len(deviceIDs) == 0 {
+		if sendingToSelf {
+			return nil, 0, fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
+		}
+		deviceIDs = []int{1}
 	}
 	logf(s.logger, "send: recipient=%s devices=%v sendingToSelf=%v", recipient, deviceIDs, sendingToSelf)
 	return deviceIDs, skipDevice, nil
