@@ -83,6 +83,55 @@ func (s *Service) GetPreKeys(ctx context.Context, destination string, deviceID i
 	return &result, nil
 }
 
+// RefreshPreKeys loads stored pre-keys and re-uploads them to the server.
+func (s *Service) RefreshPreKeys(ctx context.Context) error {
+	// Upload ACI pre-keys (ID 1).
+	if err := s.uploadStoredPreKeys(ctx, "aci", 1); err != nil {
+		return fmt.Errorf("refresh ACI pre-keys: %w", err)
+	}
+	// Upload PNI pre-keys (ID 0x01000001).
+	if err := s.uploadStoredPreKeys(ctx, "pni", 0x01000001); err != nil {
+		return fmt.Errorf("refresh PNI pre-keys: %w", err)
+	}
+	return nil
+}
+
+// uploadStoredPreKeys loads a signed pre-key and Kyber pre-key from the store,
+// converts them to upload entities, and uploads them to the server.
+func (s *Service) uploadStoredPreKeys(ctx context.Context, identity string, keyID uint32) error {
+	spk, err := s.store.LoadSignedPreKey(keyID)
+	if err != nil {
+		return fmt.Errorf("load signed pre-key %d: %w", keyID, err)
+	}
+	if spk == nil {
+		return fmt.Errorf("signed pre-key %d not found", keyID)
+	}
+	defer spk.Destroy()
+
+	kpk, err := s.store.LoadKyberPreKey(keyID)
+	if err != nil {
+		return fmt.Errorf("load Kyber pre-key %d: %w", keyID, err)
+	}
+	if kpk == nil {
+		return fmt.Errorf("Kyber pre-key %d not found", keyID)
+	}
+	defer kpk.Destroy()
+
+	spkEntity, err := signedPreKeyToEntity(spk)
+	if err != nil {
+		return fmt.Errorf("convert signed pre-key: %w", err)
+	}
+	kpkEntity, err := kyberPreKeyToEntity(kpk)
+	if err != nil {
+		return fmt.Errorf("convert Kyber pre-key: %w", err)
+	}
+
+	return s.UploadPreKeys(ctx, identity, &PreKeyUpload{
+		SignedPreKey:    spkEntity,
+		PqLastResortKey: kpkEntity,
+	})
+}
+
 // UploadPreKeys uploads pre-keys to the server.
 func (s *Service) UploadPreKeys(ctx context.Context, identity string, keys *PreKeyUpload) error {
 	body, err := json.Marshal(keys)

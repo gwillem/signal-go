@@ -85,22 +85,22 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 	encodedName := base64.StdEncoding.EncodeToString(encryptedName)
 
 	// Build signed pre-key entities.
-	aciSPK, err := SignedPreKeyToEntity(aciKeys.SignedPreKey)
+	aciSPK, err := signedPreKeyToEntity(aciKeys.SignedPreKey)
 	if err != nil {
 		return nil, fmt.Errorf("registration: ACI signed pre-key entity: %w", err)
 	}
 
-	pniSPK, err := SignedPreKeyToEntity(pniKeys.SignedPreKey)
+	pniSPK, err := signedPreKeyToEntity(pniKeys.SignedPreKey)
 	if err != nil {
 		return nil, fmt.Errorf("registration: PNI signed pre-key entity: %w", err)
 	}
 
-	aciKPK, err := KyberPreKeyToEntity(aciKeys.KyberLastResort)
+	aciKPK, err := kyberPreKeyToEntity(aciKeys.KyberLastResort)
 	if err != nil {
 		return nil, fmt.Errorf("registration: ACI Kyber entity: %w", err)
 	}
 
-	pniKPK, err := KyberPreKeyToEntity(pniKeys.KyberLastResort)
+	pniKPK, err := kyberPreKeyToEntity(pniKeys.KyberLastResort)
 	if err != nil {
 		return nil, fmt.Errorf("registration: PNI Kyber entity: %w", err)
 	}
@@ -236,7 +236,7 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 }
 
 // SignedPreKeyEntity converts a SignedPreKeyRecord to a SignedPreKeyEntity for upload.
-func SignedPreKeyToEntity(rec *libsignal.SignedPreKeyRecord) (*SignedPreKeyEntity, error) {
+func signedPreKeyToEntity(rec *libsignal.SignedPreKeyRecord) (*SignedPreKeyEntity, error) {
 	id, err := rec.ID()
 	if err != nil {
 		return nil, err
@@ -265,8 +265,8 @@ func SignedPreKeyToEntity(rec *libsignal.SignedPreKeyRecord) (*SignedPreKeyEntit
 	}, nil
 }
 
-// KyberPreKeyToEntity converts a KyberPreKeyRecord to a KyberPreKeyEntity for upload.
-func KyberPreKeyToEntity(rec *libsignal.KyberPreKeyRecord) (*KyberPreKeyEntity, error) {
+// kyberPreKeyToEntity converts a KyberPreKeyRecord to a KyberPreKeyEntity for upload.
+func kyberPreKeyToEntity(rec *libsignal.KyberPreKeyRecord) (*KyberPreKeyEntity, error) {
 	id, err := rec.ID()
 	if err != nil {
 		return nil, err

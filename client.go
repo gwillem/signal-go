@@ -723,78 +723,7 @@ func (c *Client) RefreshPreKeys(ctx context.Context) error {
 	if c.store == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-
-	// Upload ACI pre-keys (ID 1)
-	aciSignedPreKey, err := c.store.LoadSignedPreKey(1)
-	if err != nil {
-		return fmt.Errorf("client: load ACI signed pre-key: %w", err)
-	}
-	if aciSignedPreKey == nil {
-		return fmt.Errorf("client: ACI signed pre-key not found (ID 1)")
-	}
-	defer aciSignedPreKey.Destroy()
-
-	aciKyberPreKey, err := c.store.LoadKyberPreKey(1)
-	if err != nil {
-		return fmt.Errorf("client: load ACI Kyber pre-key: %w", err)
-	}
-	if aciKyberPreKey == nil {
-		return fmt.Errorf("client: ACI Kyber pre-key not found (ID 1)")
-	}
-	defer aciKyberPreKey.Destroy()
-
-	aciSPK, err := signalservice.SignedPreKeyToEntity(aciSignedPreKey)
-	if err != nil {
-		return fmt.Errorf("client: convert ACI signed pre-key: %w", err)
-	}
-	aciKPK, err := signalservice.KyberPreKeyToEntity(aciKyberPreKey)
-	if err != nil {
-		return fmt.Errorf("client: convert ACI Kyber pre-key: %w", err)
-	}
-
-	if err := c.service.UploadPreKeys(ctx, "aci", &signalservice.PreKeyUpload{
-		SignedPreKey:    aciSPK,
-		PqLastResortKey: aciKPK,
-	}); err != nil {
-		return fmt.Errorf("client: upload ACI pre-keys: %w", err)
-	}
-
-	// Upload PNI pre-keys (ID 0x01000001)
-	pniSignedPreKey, err := c.store.LoadSignedPreKey(0x01000001)
-	if err != nil {
-		return fmt.Errorf("client: load PNI signed pre-key: %w", err)
-	}
-	if pniSignedPreKey == nil {
-		return fmt.Errorf("client: PNI signed pre-key not found (ID 0x01000001)")
-	}
-	defer pniSignedPreKey.Destroy()
-
-	pniKyberPreKey, err := c.store.LoadKyberPreKey(0x01000001)
-	if err != nil {
-		return fmt.Errorf("client: load PNI Kyber pre-key: %w", err)
-	}
-	if pniKyberPreKey == nil {
-		return fmt.Errorf("client: PNI Kyber pre-key not found (ID 0x01000001)")
-	}
-	defer pniKyberPreKey.Destroy()
-
-	pniSPK, err := signalservice.SignedPreKeyToEntity(pniSignedPreKey)
-	if err != nil {
-		return fmt.Errorf("client: convert PNI signed pre-key: %w", err)
-	}
-	pniKPK, err := signalservice.KyberPreKeyToEntity(pniKyberPreKey)
-	if err != nil {
-		return fmt.Errorf("client: convert PNI Kyber pre-key: %w", err)
-	}
-
-	if err := c.service.UploadPreKeys(ctx, "pni", &signalservice.PreKeyUpload{
-		SignedPreKey:    pniSPK,
-		PqLastResortKey: pniKPK,
-	}); err != nil {
-		return fmt.Errorf("client: upload PNI pre-keys: %w", err)
-	}
-
-	return nil
+	return c.service.RefreshPreKeys(ctx)
 }
 
 func (c *Client) storePreKeys(reg *signalservice.RegistrationResult) error {
