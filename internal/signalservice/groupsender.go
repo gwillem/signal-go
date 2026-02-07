@@ -653,10 +653,6 @@ func createSenderKeyUSMC(senderKeyBytes []byte, senderCert *libsignal.SenderCert
 }
 
 // GetGroupByIdentifier looks up a group by its hex-encoded GroupIdentifier.
-func (s *Service) GetGroupByIdentifier(groupID string) (*store.Group, error) {
-	return s.store.GetGroup(groupID)
-}
-
 // parseGroupID converts a hex-encoded group ID to bytes.
 func parseGroupID(groupID string) ([]byte, error) {
 	return hex.DecodeString(groupID)
