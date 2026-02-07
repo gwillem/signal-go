@@ -357,20 +357,6 @@ func SealedSenderMultiRecipientEncrypt(
 	return freeOwnedBuffer(out), nil
 }
 
-// SealedSenderMultiRecipientMessageForSingleRecipient extracts a single
-// recipient's message from a multi-recipient message blob.
-// This produces a v1-compatible sealed sender message for one recipient.
-func SealedSenderMultiRecipientMessageForSingleRecipient(encoded []byte) ([]byte, error) {
-	var out C.SignalOwnedBuffer
-	if err := wrapError(C.signal_sealed_sender_multi_recipient_message_for_single_recipient(
-		&out,
-		borrowedBuffer(encoded),
-	)); err != nil {
-		return nil, err
-	}
-	return freeOwnedBuffer(out), nil
-}
-
 // SealedSenderEncrypt encrypts a USMC using sealed sender (SSv1).
 // Uses the recipient's identity key for ECDH.
 func SealedSenderEncrypt(
