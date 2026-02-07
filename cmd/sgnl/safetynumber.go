@@ -80,7 +80,7 @@ func computeFingerprint(id string, key []byte) string {
 	hash.Write([]byte(id))
 	digest := hash.Sum(nil)
 
-	for i := 0; i < 5199; i++ {
+	for range 5199 {
 		hash.Reset()
 		hash.Write(digest)
 		hash.Write(key)
@@ -89,7 +89,7 @@ func computeFingerprint(id string, key []byte) string {
 
 	// Convert first 30 bytes to 30 digits (5 groups of 6 digits)
 	var result strings.Builder
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		// Take 5 bytes and convert to a number mod 100000
 		chunk := digest[i*5 : i*5+5]
 		// Pad to 8 bytes for uint64
