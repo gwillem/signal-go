@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/proto"
 	"github.com/gwillem/signal-go/internal/store"
@@ -220,21 +221,18 @@ func (s *Service) getAuthCredentialForToday(ctx context.Context) ([]byte, error)
 	defer serverParams.Close()
 
 	// Parse ACI and PNI UUIDs
-	var aci, pni [16]byte
-	aciBytes, err := parseUUID(acct.ACI)
+	aci, err := uuid.Parse(acct.ACI)
 	if err != nil {
 		return nil, fmt.Errorf("parse ACI: %w", err)
 	}
-	copy(aci[:], aciBytes)
 
-	pniBytes, err := parseUUID(acct.PNI)
+	pni, err := uuid.Parse(acct.PNI)
 	if err != nil {
 		return nil, fmt.Errorf("parse PNI: %w", err)
 	}
-	copy(pni[:], pniBytes)
 
 	credential, err := serverParams.ReceiveAuthCredentialWithPni(
-		aci, pni,
+		[16]byte(aci), [16]byte(pni),
 		uint64(todayCredential.RedemptionTime),
 		todayCredential.Credential,
 	)
@@ -291,19 +289,6 @@ func (s *Service) fetchGroup(ctx context.Context, username, password string) (*p
 }
 
 // parseUUID parses a UUID string into 16 bytes.
-func parseUUID(s string) ([]byte, error) {
-	// Remove dashes
-	clean := ""
-	for _, c := range s {
-		if c != '-' {
-			clean += string(c)
-		}
-	}
-	if len(clean) != 32 {
-		return nil, fmt.Errorf("invalid UUID length: %d", len(clean))
-	}
-	return hex.DecodeString(clean)
-}
 
 // FetchAllGroupDetails fetches details for all groups that don't have names yet.
 // Groups returning 403 (not a member) are removed from the local store.

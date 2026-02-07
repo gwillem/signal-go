@@ -3,12 +3,11 @@ package signalservice
 import (
 	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/proto"
 	"github.com/gwillem/signal-go/internal/store"
@@ -120,25 +119,17 @@ func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSign
 	}
 
 	// Parse PNI UUID to bytes (16 bytes).
-	pniBytes, err := uuidToBytes(acct.PNI)
+	pni, err := uuid.Parse(acct.PNI)
 	if err != nil {
 		return nil, fmt.Errorf("parse PNI UUID: %w", err)
 	}
 
 	return &proto.PniSignatureMessage{
-		Pni:       pniBytes,
+		Pni:       pni[:],
 		Signature: signature,
 	}, nil
 }
 
-// uuidToBytes converts a UUID string (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) to 16 bytes.
-func uuidToBytes(uuidStr string) ([]byte, error) {
-	hexStr := strings.ReplaceAll(uuidStr, "-", "")
-	if len(hexStr) != 32 {
-		return nil, fmt.Errorf("invalid UUID length: %d", len(hexStr))
-	}
-	return hex.DecodeString(hexStr)
-}
 
 // envelopeTypeForCiphertext maps libsignal CiphertextMessage types to Signal
 // server envelope types. These are different numbering schemes:

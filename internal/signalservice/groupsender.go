@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/proto"
 	"github.com/gwillem/signal-go/internal/store"
@@ -77,12 +78,11 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 		logf(s.logger, "group send: generated new distributionID=%s", group.DistributionID)
 	}
 
-	distIDBytes, err := parseUUID(group.DistributionID)
+	distID, err := uuid.Parse(group.DistributionID)
 	if err != nil {
 		return fmt.Errorf("parse distribution ID %q: %w", group.DistributionID, err)
 	}
-	var distributionID [16]byte
-	copy(distributionID[:], distIDBytes)
+	distributionID := [16]byte(distID)
 
 	logf(s.logger, "group send: distributionID=%s groupIdentifier=%x", group.DistributionID, groupIdentifier[:])
 
@@ -452,13 +452,13 @@ func (s *Service) computeGroupSendToken(
 // aciToServiceID converts an ACI UUID string to a 17-byte ServiceIdFixedWidthBinaryBytes.
 // Format: [0x00 (ACI type prefix)] [16 bytes UUID]
 func aciToServiceID(aci string) ([17]byte, error) {
-	uuidBytes, err := parseUUID(aci)
+	parsed, err := uuid.Parse(aci)
 	if err != nil {
 		return [17]byte{}, fmt.Errorf("parse UUID: %w", err)
 	}
 	var serviceID [17]byte
 	serviceID[0] = 0x00 // ACI type prefix
-	copy(serviceID[1:], uuidBytes)
+	copy(serviceID[1:], parsed[:])
 	return serviceID, nil
 }
 
