@@ -258,7 +258,7 @@ func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.
 // This hides the sender's identity from the server. Requires:
 // - Recipient has a profile key stored (for deriving unidentified access key)
 // - Recipient allows unidentified senders
-func (s *Service) sendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
+func (s *Service) SendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
 	timestamp := uint64(time.Now().UnixMilli())
 
 	contentBytes, err := s.buildDataMessageContent(text, timestamp)

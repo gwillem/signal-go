@@ -51,7 +51,7 @@ func parseContactStream(data []byte) ([]*proto.ContactDetails, error) {
 
 // requestContactSync sends a SyncMessage.Request{Type:CONTACTS} to our own
 // primary device (device 1) to trigger a contact sync response.
-func (s *Service) requestContactSync(ctx context.Context) error {
+func (s *Service) RequestContactSync(ctx context.Context) error {
 	reqType := proto.SyncMessage_Request_CONTACTS
 	content := &proto.Content{
 		SyncMessage: &proto.SyncMessage{

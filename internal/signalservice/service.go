@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"iter"
 	"log"
 	"net/http"
 	"sync/atomic"
@@ -474,17 +473,3 @@ func isGroupID(s string) bool {
 	return true
 }
 
-// SendSealedSenderMessage sends a sealed sender message to a recipient.
-func (s *Service) SendSealedSenderMessage(ctx context.Context, recipient, text string) error {
-	return s.sendSealedSenderMessage(ctx, recipient, text)
-}
-
-// RequestContactSync sends a contact sync request to the primary device.
-func (s *Service) RequestContactSync(ctx context.Context) error {
-	return s.requestContactSync(ctx)
-}
-
-// ReceiveMessages returns an iterator that yields incoming messages.
-func (s *Service) ReceiveMessages(ctx context.Context) iter.Seq2[Message, error] {
-	return s.receiveMessages(ctx)
-}

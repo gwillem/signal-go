@@ -44,7 +44,7 @@ type Message struct {
 // receiveMessages connects to the authenticated WebSocket and returns an iterator
 // that yields received text messages. The iterator stops when the context is
 // cancelled or when the caller breaks out of the range loop.
-func (s *Service) receiveMessages(ctx context.Context) iter.Seq2[Message, error] {
+func (s *Service) ReceiveMessages(ctx context.Context) iter.Seq2[Message, error] {
 	return func(yield func(Message, error) bool) {
 		if !s.receiving.CompareAndSwap(false, true) {
 			yield(Message{}, fmt.Errorf("receiver: already running"))
