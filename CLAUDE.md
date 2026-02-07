@@ -156,7 +156,7 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/store/prekey.go`               | PreKeyStore, SignedPreKeyStore, KyberPreKeyStore implementations                                   |
 | `internal/store/senderkey.go`            | SenderKeyStore implementation for group messaging                                                  |
 | `internal/store/contact.go`              | Contact CRUD: SaveContact, GetContactByACI, SaveContacts (bulk upsert)                             |
-| `internal/store/group.go`                | Group CRUD: SaveGroup, GetGroup, GetAllGroups, GetGroupByMasterKey                                 |
+| `internal/store/group.go`                | Group CRUD: SaveGroup, GetGroup, GetAllGroups                                                      |
 | `cmd/sgnl/groups.go`                     | CLI: list groups, sync from Storage Service, fetch details from Groups V2 API                      |
 | `internal/libsignal/authcredential.go`   | ServerPublicParams: zkgroup auth credential presentation for Groups V2 API                         |
 | `internal/signalservice/groupsv2.go`     | Groups V2 API client: fetch group details (name, members) using zkgroup auth                       |
