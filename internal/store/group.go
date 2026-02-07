@@ -54,27 +54,6 @@ func (s *Store) GetGroup(groupID string) (*Group, error) {
 	return &g, nil
 }
 
-// GetGroupByMasterKey retrieves a group by its master key.
-func (s *Store) GetGroupByMasterKey(masterKey []byte) (*Group, error) {
-	var g Group
-	var updatedAt, endorsementsExpiry int64
-	err := s.db.QueryRow(
-		"SELECT group_id, master_key, name, revision, updated_at, endorsements_response, endorsements_expiry, distribution_id FROM groups WHERE master_key = ?",
-		masterKey,
-	).Scan(&g.GroupID, &g.MasterKey, &g.Name, &g.Revision, &updatedAt, &g.EndorsementsResponse, &endorsementsExpiry, &g.DistributionID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	g.UpdatedAt = time.Unix(updatedAt, 0)
-	if endorsementsExpiry > 0 {
-		g.EndorsementsExpiry = time.UnixMilli(endorsementsExpiry)
-	}
-	return &g, nil
-}
-
 // GetAllGroups retrieves all stored groups.
 func (s *Store) GetAllGroups() ([]*Group, error) {
 	rows, err := s.db.Query(
