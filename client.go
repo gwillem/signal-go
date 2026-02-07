@@ -854,28 +854,31 @@ func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
 		return nil, fmt.Errorf("create profile cipher: %w", err)
 	}
 
+	name, _ := decryptProfileField(resp.Name, cipher)
+	about, _ := decryptProfileField(resp.About, cipher)
+	aboutEmoji, _ := decryptProfileField(resp.AboutEmoji, cipher)
+
 	profile := &ServerProfile{
 		Avatar:     resp.Avatar,
-		Name:       decryptProfileField(resp.Name, cipher),
-		About:      decryptProfileField(resp.About, cipher),
-		AboutEmoji: decryptProfileField(resp.AboutEmoji, cipher),
+		Name:       name,
+		About:      about,
+		AboutEmoji: aboutEmoji,
 	}
 
 	return profile, nil
 }
 
 // decryptProfileField decodes base64 and decrypts a profile field.
-// Returns empty string on any error (decode or decrypt).
-func decryptProfileField(encoded string, cipher *signalservice.ProfileCipher) string {
+// Returns ("", nil) for empty input, or an error if decode/decrypt fails.
+func decryptProfileField(encoded string, cipher *signalservice.ProfileCipher) (string, error) {
 	if encoded == "" {
-		return ""
+		return "", nil
 	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("decode profile field: %w", err)
 	}
-	decrypted, _ := cipher.DecryptString(data)
-	return decrypted
+	return cipher.DecryptString(data)
 }
 
 // SetProfileName sets the profile name on the Signal server.
@@ -921,7 +924,7 @@ func (c *Client) SetProfile(ctx context.Context, name string, numberSharing *boo
 		if err == nil && resp.Name != "" {
 			cipher, _ := signalservice.NewProfileCipher(acct.ProfileKey)
 			if cipher != nil {
-				currentName := decryptProfileField(resp.Name, cipher)
+				currentName, _ := decryptProfileField(resp.Name, cipher)
 				if currentName != "" {
 					profileName = &currentName
 				}
