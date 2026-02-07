@@ -19,7 +19,7 @@ func parseContactStream(data []byte) ([]*proto.ContactDetails, error) {
 		// Read varint length prefix.
 		msgLen, n := binary.Uvarint(data[offset:])
 		if n <= 0 {
-			return nil, fmt.Errorf("contactsync: invalid varint at offset %d", offset)
+			return nil, fmt.Errorf("contactsync: varint decode failed at offset %d (n=%d)", offset, n)
 		}
 		offset += n
 
