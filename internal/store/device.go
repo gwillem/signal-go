@@ -64,27 +64,3 @@ func (s *Store) SetDevices(aci string, deviceIDs []int) error {
 	return nil
 }
 
-// AddDevice adds a device to a recipient's list. Idempotent - no error if already exists.
-func (s *Store) AddDevice(aci string, deviceID int) error {
-	now := time.Now().Unix()
-	_, err := s.db.Exec(
-		"INSERT OR REPLACE INTO recipient_device (aci, device_id, last_seen) VALUES (?, ?, ?)",
-		aci, deviceID, now,
-	)
-	if err != nil {
-		return fmt.Errorf("store: add device: %w", err)
-	}
-	return nil
-}
-
-// RemoveDevice removes a device from a recipient's list. Idempotent - no error if not found.
-func (s *Store) RemoveDevice(aci string, deviceID int) error {
-	_, err := s.db.Exec(
-		"DELETE FROM recipient_device WHERE aci = ? AND device_id = ?",
-		aci, deviceID,
-	)
-	if err != nil {
-		return fmt.Errorf("store: remove device: %w", err)
-	}
-	return nil
-}
