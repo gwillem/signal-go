@@ -611,28 +611,10 @@ func (c *Client) UpdateAttributes(ctx context.Context) error {
 		return fmt.Errorf("client: no account found")
 	}
 
-	attrs := &signalservice.AccountAttributes{
-		RegistrationID:    acct.RegistrationID,
-		PNIRegistrationID: acct.PNIRegistrationID,
-		Voice:             true,
-		Video:             true,
-		FetchesMessages:   true,
-		Capabilities: signalservice.Capabilities{
-			Storage:                  true,
-			VersionedExpirationTimer: true,
-			AttachmentBackfill:       true,
-		},
+	attrs, err := buildAccountAttributes(acct)
+	if err != nil {
+		return err
 	}
-
-	// Derive unidentified access key from profile key.
-	if len(acct.ProfileKey) > 0 {
-		uak, err := signalservice.DeriveAccessKey(acct.ProfileKey)
-		if err != nil {
-			return fmt.Errorf("client: derive access key: %w", err)
-		}
-		attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
-	}
-
 	return c.service.SetAccountAttributes(ctx, attrs)
 }
 
@@ -671,26 +653,9 @@ func (c *Client) UpdateAccountSettings(ctx context.Context, settings *AccountSet
 
 	// Update account attributes if any attribute settings are provided.
 	if settings.DiscoverableByPhoneNumber != nil || settings.UnrestrictedUnidentifiedAccess != nil {
-		attrs := &signalservice.AccountAttributes{
-			RegistrationID:    acct.RegistrationID,
-			PNIRegistrationID: acct.PNIRegistrationID,
-			Voice:             true,
-			Video:             true,
-			FetchesMessages:   true,
-			Capabilities: signalservice.Capabilities{
-				Storage:                  true,
-				VersionedExpirationTimer: true,
-				AttachmentBackfill:       true,
-			},
-		}
-
-		// Derive unidentified access key from profile key.
-		if len(acct.ProfileKey) > 0 {
-			uak, err := signalservice.DeriveAccessKey(acct.ProfileKey)
-			if err != nil {
-				return fmt.Errorf("client: derive access key: %w", err)
-			}
-			attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
+		attrs, err := buildAccountAttributes(acct)
+		if err != nil {
+			return err
 		}
 
 		if settings.DiscoverableByPhoneNumber != nil {
@@ -706,6 +671,33 @@ func (c *Client) UpdateAccountSettings(ctx context.Context, settings *AccountSet
 	}
 
 	return nil
+}
+
+// buildAccountAttributes creates the base AccountAttributes from an account,
+// including the derived unidentified access key.
+func buildAccountAttributes(acct *store.Account) (*signalservice.AccountAttributes, error) {
+	attrs := &signalservice.AccountAttributes{
+		RegistrationID:    acct.RegistrationID,
+		PNIRegistrationID: acct.PNIRegistrationID,
+		Voice:             true,
+		Video:             true,
+		FetchesMessages:   true,
+		Capabilities: signalservice.Capabilities{
+			Storage:                  true,
+			VersionedExpirationTimer: true,
+			AttachmentBackfill:       true,
+		},
+	}
+
+	if len(acct.ProfileKey) > 0 {
+		uak, err := signalservice.DeriveAccessKey(acct.ProfileKey)
+		if err != nil {
+			return nil, fmt.Errorf("client: derive access key: %w", err)
+		}
+		attrs.UnidentifiedAccessKey = base64.StdEncoding.EncodeToString(uak)
+	}
+
+	return attrs, nil
 }
 
 // RefreshPreKeys re-uploads local pre-keys to the server.
