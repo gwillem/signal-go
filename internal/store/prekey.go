@@ -23,15 +23,11 @@ func (s *Store) LoadPreKey(id uint32) (*libsignal.PreKeyRecord, error) {
 	return libsignal.DeserializePreKeyRecord(record)
 }
 
-// StorePreKey stores a one-time pre-key record.
-func (s *Store) StorePreKey(id uint32, record *libsignal.PreKeyRecord) error {
-	data, err := record.Serialize()
-	if err != nil {
-		return fmt.Errorf("store: serialize pre-key: %w", err)
-	}
-	_, err = s.db.Exec(
+// StorePreKey stores a one-time pre-key record (serialized bytes).
+func (s *Store) StorePreKey(id uint32, record []byte) error {
+	_, err := s.db.Exec(
 		"INSERT OR REPLACE INTO pre_key (id, record) VALUES (?, ?)",
-		id, data,
+		id, record,
 	)
 	if err != nil {
 		return fmt.Errorf("store: store pre-key: %w", err)
@@ -63,15 +59,11 @@ func (s *Store) LoadSignedPreKey(id uint32) (*libsignal.SignedPreKeyRecord, erro
 	return libsignal.DeserializeSignedPreKeyRecord(record)
 }
 
-// StoreSignedPreKey stores a signed pre-key record.
-func (s *Store) StoreSignedPreKey(id uint32, record *libsignal.SignedPreKeyRecord) error {
-	data, err := record.Serialize()
-	if err != nil {
-		return fmt.Errorf("store: serialize signed pre-key: %w", err)
-	}
-	_, err = s.db.Exec(
+// StoreSignedPreKey stores a signed pre-key record (serialized bytes).
+func (s *Store) StoreSignedPreKey(id uint32, record []byte) error {
+	_, err := s.db.Exec(
 		"INSERT OR REPLACE INTO signed_pre_key (id, record) VALUES (?, ?)",
-		id, data,
+		id, record,
 	)
 	if err != nil {
 		return fmt.Errorf("store: store signed pre-key: %w", err)
@@ -94,15 +86,11 @@ func (s *Store) LoadKyberPreKey(id uint32) (*libsignal.KyberPreKeyRecord, error)
 	return libsignal.DeserializeKyberPreKeyRecord(record)
 }
 
-// StoreKyberPreKey stores a Kyber pre-key record.
-func (s *Store) StoreKyberPreKey(id uint32, record *libsignal.KyberPreKeyRecord) error {
-	data, err := record.Serialize()
-	if err != nil {
-		return fmt.Errorf("store: serialize kyber pre-key: %w", err)
-	}
-	_, err = s.db.Exec(
+// StoreKyberPreKey stores a Kyber pre-key record (serialized bytes).
+func (s *Store) StoreKyberPreKey(id uint32, record []byte) error {
+	_, err := s.db.Exec(
 		"INSERT OR REPLACE INTO kyber_pre_key (id, record) VALUES (?, ?)",
-		id, data,
+		id, record,
 	)
 	if err != nil {
 		return fmt.Errorf("store: store kyber pre-key: %w", err)
@@ -113,7 +101,7 @@ func (s *Store) StoreKyberPreKey(id uint32, record *libsignal.KyberPreKeyRecord)
 // MarkKyberPreKeyUsed marks a Kyber pre-key as used.
 // The ecPreKeyID and baseKey parameters are provided for optional reuse tracking
 // but are currently ignored (we just mark the key as used).
-func (s *Store) MarkKyberPreKeyUsed(id uint32, ecPreKeyID uint32, baseKey *libsignal.PublicKey) error {
+func (s *Store) MarkKyberPreKeyUsed(id uint32, ecPreKeyID uint32, baseKey []byte) error {
 	// Note: ecPreKeyID and baseKey could be stored for reuse attack detection,
 	// but for now we just mark the key as used.
 	_, err := s.db.Exec(

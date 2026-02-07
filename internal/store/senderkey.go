@@ -79,8 +79,8 @@ func (s *Store) ClearSenderKeySharedWith(address string) error {
 	return err
 }
 
-// StoreSenderKey stores a sender key record for the given sender and distribution ID.
-func (s *Store) StoreSenderKey(sender *libsignal.Address, distributionID [16]byte, record *libsignal.SenderKeyRecord) error {
+// StoreSenderKey stores a sender key record (serialized bytes) for the given sender and distribution ID.
+func (s *Store) StoreSenderKey(sender *libsignal.Address, distributionID [16]byte, record []byte) error {
 	senderACI, err := sender.Name()
 	if err != nil {
 		return err
@@ -90,15 +90,10 @@ func (s *Store) StoreSenderKey(sender *libsignal.Address, distributionID [16]byt
 		return err
 	}
 
-	data, err := record.Serialize()
-	if err != nil {
-		return err
-	}
-
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO sender_key (sender_aci, sender_device, distribution_id, record)
 		 VALUES (?, ?, ?, ?)`,
-		senderACI, senderDevice, distributionID[:], data,
+		senderACI, senderDevice, distributionID[:], record,
 	)
 	return err
 }

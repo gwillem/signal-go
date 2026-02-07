@@ -77,7 +77,7 @@ func (c *Client) auth() signalservice.BasicAuth {
 	}
 }
 
-// storeSignedPreKeyFromBytes deserializes and stores a signed pre-key.
+// storeSignedPreKeyFromBytes deserializes to extract the ID, then stores the raw bytes.
 func (c *Client) storeSignedPreKeyFromBytes(data []byte, label string) error {
 	if len(data) == 0 {
 		return nil
@@ -86,19 +86,18 @@ func (c *Client) storeSignedPreKeyFromBytes(data []byte, label string) error {
 	if err != nil {
 		return fmt.Errorf("deserialize %s signed pre-key: %w", label, err)
 	}
+	defer rec.Destroy()
 	id, err := rec.ID()
 	if err != nil {
-		rec.Destroy()
 		return fmt.Errorf("%s signed pre-key ID: %w", label, err)
 	}
-	if err := c.store.StoreSignedPreKey(id, rec); err != nil {
-		rec.Destroy()
+	if err := c.store.StoreSignedPreKey(id, data); err != nil {
 		return fmt.Errorf("store %s signed pre-key: %w", label, err)
 	}
 	return nil
 }
 
-// storeKyberPreKeyFromBytes deserializes and stores a Kyber pre-key.
+// storeKyberPreKeyFromBytes deserializes to extract the ID, then stores the raw bytes.
 func (c *Client) storeKyberPreKeyFromBytes(data []byte, label string) error {
 	if len(data) == 0 {
 		return nil
@@ -107,13 +106,12 @@ func (c *Client) storeKyberPreKeyFromBytes(data []byte, label string) error {
 	if err != nil {
 		return fmt.Errorf("deserialize %s Kyber pre-key: %w", label, err)
 	}
+	defer rec.Destroy()
 	id, err := rec.ID()
 	if err != nil {
-		rec.Destroy()
 		return fmt.Errorf("%s Kyber pre-key ID: %w", label, err)
 	}
-	if err := c.store.StoreKyberPreKey(id, rec); err != nil {
-		rec.Destroy()
+	if err := c.store.StoreKyberPreKey(id, data); err != nil {
 		return fmt.Errorf("store %s Kyber pre-key: %w", label, err)
 	}
 	return nil

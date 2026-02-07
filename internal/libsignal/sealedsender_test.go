@@ -127,7 +127,11 @@ func TestSealedSenderEncryptDecrypt(t *testing.T) {
 
 	// 6. Encrypt with sealed sender (uses bob's identity for ECDH).
 	// First we need bob's identity in alice's identity store.
-	_, err = alice.identityStore.SaveIdentityKey(bobAddr, bob.identityPub)
+	bobIdentityPubBytes, err := bob.identityPub.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize bob identity pub: %v", err)
+	}
+	_, err = alice.identityStore.SaveIdentityKey(bobAddr, bobIdentityPubBytes)
 	if err != nil {
 		t.Fatalf("SaveIdentityKey: %v", err)
 	}
@@ -267,7 +271,8 @@ func TestSealedSenderWrongIdentityKey(t *testing.T) {
 	defer usmc.Destroy()
 
 	// Save bob's CORRECT identity for sealed sender encryption.
-	_, _ = alice.identityStore.SaveIdentityKey(bobAddr, bob.identityPub)
+	bobIdentityPubBytes, _ := bob.identityPub.Serialize()
+	_, _ = alice.identityStore.SaveIdentityKey(bobAddr, bobIdentityPubBytes)
 
 	sealed, err := SealedSenderEncrypt(bobAddr, usmc, alice.identityStore)
 	if err != nil {

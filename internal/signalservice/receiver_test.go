@@ -114,19 +114,34 @@ func setupAliceAndBob(t *testing.T) (bobStore *store.Store, senderACI string, en
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobSt.StorePreKey(100, bobPreKeyRec)
+	bobPreKeyData, err := bobPreKeyRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobPreKeyRec.Destroy()
+	bobSt.StorePreKey(100, bobPreKeyData)
 
 	bobSPKRec, err := libsignal.NewSignedPreKeyRecord(1, 1000, bobSPKPub, bobSPKPriv, bobSPKSig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobSt.StoreSignedPreKey(1, bobSPKRec)
+	bobSPKData, err := bobSPKRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobSPKRec.Destroy()
+	bobSt.StoreSignedPreKey(1, bobSPKData)
 
 	bobKyberRec, err := libsignal.NewKyberPreKeyRecord(200, 1000, bobKyberKP, bobKyberSig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobSt.StoreKyberPreKey(200, bobKyberRec)
+	bobKyberData, err := bobKyberRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobKyberRec.Destroy()
+	bobSt.StoreKyberPreKey(200, bobKyberData)
 
 	// Alice's session store (in-memory) for encrypting to Bob.
 	aliceSessionStore := libsignal.NewMemorySessionStore()

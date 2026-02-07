@@ -230,19 +230,34 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobPreKeyStore.StorePreKey(100, bobPreKeyRec)
+	bobPreKeyData, err := bobPreKeyRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobPreKeyRec.Destroy()
+	bobPreKeyStore.StorePreKey(100, bobPreKeyData)
 
 	bobSPKRec, err := libsignal.NewSignedPreKeyRecord(1, 1000, bobSPKPub, bobSPKPriv, bobSPKSig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobSignedPreKeyStore.StoreSignedPreKey(1, bobSPKRec)
+	bobSPKData, err := bobSPKRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobSPKRec.Destroy()
+	bobSignedPreKeyStore.StoreSignedPreKey(1, bobSPKData)
 
 	bobKyberRec, err := libsignal.NewKyberPreKeyRecord(200, 1000, bobKyberKP, bobKyberSig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobKyberPreKeyStore.StoreKyberPreKey(200, bobKyberRec)
+	bobKyberData, err := bobKyberRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobKyberRec.Destroy()
+	bobKyberPreKeyStore.StoreKyberPreKey(200, bobKyberData)
 
 	// Decrypt the pre-key message.
 	aliceAddr, err := libsignal.NewAddress("alice-aci", 2)

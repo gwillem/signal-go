@@ -63,7 +63,12 @@ func TestEndToEndMessageRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobSignedPreKeyStore.StoreSignedPreKey(1, bobSPKRec)
+	bobSPKData, err := bobSPKRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobSPKRec.Destroy()
+	bobSignedPreKeyStore.StoreSignedPreKey(1, bobSPKData)
 
 	// Generate Bob's one-time pre-key.
 	bobPreKeyPriv, err := libsignal.GeneratePrivateKey()
@@ -82,7 +87,12 @@ func TestEndToEndMessageRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobPreKeyStore.StorePreKey(100, bobPreKeyRec)
+	bobPreKeyData, err := bobPreKeyRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobPreKeyRec.Destroy()
+	bobPreKeyStore.StorePreKey(100, bobPreKeyData)
 
 	// Generate Bob's Kyber pre-key.
 	bobKyberKP, err := libsignal.GenerateKyberKeyPair()
@@ -111,7 +121,12 @@ func TestEndToEndMessageRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobKyberPreKeyStore.StoreKyberPreKey(200, bobKyberRec)
+	bobKyberRecData, err := bobKyberRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobKyberRec.Destroy()
+	bobKyberPreKeyStore.StoreKyberPreKey(200, bobKyberRecData)
 
 	// Create Bob's pre-key bundle for Alice.
 	bobIdentityPub, err := bobIdentity.PublicKey()
@@ -247,14 +262,18 @@ func TestEndToEndWithoutPaddingFails(t *testing.T) {
 	bobSPKSig, _ := bobIdentity.Sign(bobSPKPubBytes)
 
 	bobSPKRec, _ := libsignal.NewSignedPreKeyRecord(1, uint64(time.Now().UnixMilli()), bobSPKPub, bobSPKPriv, bobSPKSig)
-	bobSignedPreKeyStore.StoreSignedPreKey(1, bobSPKRec)
+	bobSPKData, _ := bobSPKRec.Serialize()
+	bobSPKRec.Destroy()
+	bobSignedPreKeyStore.StoreSignedPreKey(1, bobSPKData)
 
 	bobPreKeyPriv, _ := libsignal.GeneratePrivateKey()
 	defer bobPreKeyPriv.Destroy()
 	bobPreKeyPub, _ := bobPreKeyPriv.PublicKey()
 	defer bobPreKeyPub.Destroy()
 	bobPreKeyRec, _ := libsignal.NewPreKeyRecord(100, bobPreKeyPub, bobPreKeyPriv)
-	bobPreKeyStore.StorePreKey(100, bobPreKeyRec)
+	bobPreKeyData, _ := bobPreKeyRec.Serialize()
+	bobPreKeyRec.Destroy()
+	bobPreKeyStore.StorePreKey(100, bobPreKeyData)
 
 	// Generate Bob's Kyber key (required in libsignal v0.87+).
 	bobKyberKP, _ := libsignal.GenerateKyberKeyPair()
@@ -266,7 +285,9 @@ func TestEndToEndWithoutPaddingFails(t *testing.T) {
 
 	// Store Kyber pre-key.
 	bobKyberRec, _ := libsignal.NewKyberPreKeyRecord(1, uint64(time.Now().UnixMilli()), bobKyberKP, bobKyberSig)
-	bobKyberPreKeyStore.StoreKyberPreKey(1, bobKyberRec)
+	bobKyberRecData, _ := bobKyberRec.Serialize()
+	bobKyberRec.Destroy()
+	bobKyberPreKeyStore.StoreKyberPreKey(1, bobKyberRecData)
 
 	bobIdentityPub, _ := bobIdentity.PublicKey()
 	defer bobIdentityPub.Destroy()

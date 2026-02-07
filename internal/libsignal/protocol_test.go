@@ -58,7 +58,12 @@ func (p *party) buildPreKeyBundle(t *testing.T) *PreKeyBundle {
 	if err != nil {
 		t.Fatalf("NewPreKeyRecord: %v", err)
 	}
-	if err := p.preKeyStore.StorePreKey(1, preKeyRec); err != nil {
+	preKeyData, err := preKeyRec.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize prekey: %v", err)
+	}
+	preKeyRec.Destroy()
+	if err := p.preKeyStore.StorePreKey(1, preKeyData); err != nil {
 		t.Fatalf("StorePreKey: %v", err)
 	}
 
@@ -83,7 +88,12 @@ func (p *party) buildPreKeyBundle(t *testing.T) *PreKeyBundle {
 	if err != nil {
 		t.Fatalf("NewSignedPreKeyRecord: %v", err)
 	}
-	if err := p.signedPreKeyStore.StoreSignedPreKey(2, signedPreKeyRec); err != nil {
+	signedPreKeyData, err := signedPreKeyRec.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize signed prekey: %v", err)
+	}
+	signedPreKeyRec.Destroy()
+	if err := p.signedPreKeyStore.StoreSignedPreKey(2, signedPreKeyData); err != nil {
 		t.Fatalf("StoreSignedPreKey: %v", err)
 	}
 
@@ -108,7 +118,12 @@ func (p *party) buildPreKeyBundle(t *testing.T) *PreKeyBundle {
 	if err != nil {
 		t.Fatalf("NewKyberPreKeyRecord: %v", err)
 	}
-	if err := p.kyberPreKeyStore.StoreKyberPreKey(3, kyberRec); err != nil {
+	kyberData, err := kyberRec.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize kyber prekey: %v", err)
+	}
+	kyberRec.Destroy()
+	if err := p.kyberPreKeyStore.StoreKyberPreKey(3, kyberData); err != nil {
 		t.Fatalf("StoreKyberPreKey: %v", err)
 	}
 

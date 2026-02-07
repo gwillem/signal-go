@@ -69,20 +69,15 @@ func goStoreSession(ctx unsafe.Pointer, address *C.SignalProtocolAddress, record
 	store := restorePointer(ctx).(SessionStore)
 	addr := &Address{ptr: address}
 
-	// Clone the session record since we're borrowing the C pointer
-	var clonedBuf C.SignalOwnedBuffer
-	if err := wrapError(C.signal_session_record_serialize(&clonedBuf, C.SignalConstPointerSessionRecord{raw: record})); err != nil {
+	// Serialize the borrowed C pointer to bytes — pass directly to store
+	var buf C.SignalOwnedBuffer
+	if err := wrapError(C.signal_session_record_serialize(&buf, C.SignalConstPointerSessionRecord{raw: record})); err != nil {
 		callbackErrf("store_session: serialize: %v", err)
 		return -1
 	}
-	data := freeOwnedBuffer(clonedBuf)
-	rec, err := DeserializeSessionRecord(data)
-	if err != nil {
-		callbackErrf("store_session: deserialize: %v", err)
-		return -1
-	}
+	data := freeOwnedBuffer(buf)
 
-	err = store.StoreSession(addr, rec)
+	err := store.StoreSession(addr, data)
 	addr.ptr = nil
 	if err != nil {
 		callbackErrf("store_session: store: %v", err)
@@ -124,20 +119,15 @@ func goSaveIdentityKey(ctx unsafe.Pointer, out *C.uint8_t, address *C.SignalProt
 	store := restorePointer(ctx).(IdentityKeyStore)
 	addr := &Address{ptr: address}
 
-	// Clone the public key since we're borrowing the C pointer
+	// Serialize the borrowed C pointer to bytes — pass directly to store
 	var buf C.SignalOwnedBuffer
 	if err := wrapError(C.signal_publickey_serialize(&buf, C.SignalConstPointerPublicKey{raw: key})); err != nil {
 		callbackErrf("save_identity_key: serialize public key: %v", err)
 		return -1
 	}
 	data := freeOwnedBuffer(buf)
-	pubKey, err := DeserializePublicKey(data)
-	if err != nil {
-		callbackErrf("save_identity_key: deserialize public key: %v", err)
-		return -1
-	}
 
-	replaced, err := store.SaveIdentityKey(addr, pubKey)
+	replaced, err := store.SaveIdentityKey(addr, data)
 	addr.ptr = nil
 	if err != nil {
 		callbackErrf("save_identity_key: store: %v", err)
@@ -205,18 +195,14 @@ func goLoadPreKey(ctx unsafe.Pointer, recordp *C.SignalMutPointerPreKeyRecord, i
 func goStorePreKey(ctx unsafe.Pointer, id C.uint32_t, record *C.SignalPreKeyRecord) C.int {
 	store := restorePointer(ctx).(PreKeyStore)
 
-	// Clone via serialize/deserialize
+	// Serialize the borrowed C pointer to bytes — pass directly to store
 	var buf C.SignalOwnedBuffer
 	if err := wrapError(C.signal_pre_key_record_serialize(&buf, C.SignalConstPointerPreKeyRecord{raw: record})); err != nil {
 		return -1
 	}
 	data := freeOwnedBuffer(buf)
-	rec, err := DeserializePreKeyRecord(data)
-	if err != nil {
-		return -1
-	}
 
-	if err := store.StorePreKey(uint32(id), rec); err != nil {
+	if err := store.StorePreKey(uint32(id), data); err != nil {
 		return -1
 	}
 	return 0
@@ -250,17 +236,14 @@ func goLoadSignedPreKey(ctx unsafe.Pointer, recordp *C.SignalMutPointerSignedPre
 func goStoreSignedPreKey(ctx unsafe.Pointer, id C.uint32_t, record *C.SignalSignedPreKeyRecord) C.int {
 	store := restorePointer(ctx).(SignedPreKeyStore)
 
+	// Serialize the borrowed C pointer to bytes — pass directly to store
 	var buf C.SignalOwnedBuffer
 	if err := wrapError(C.signal_signed_pre_key_record_serialize(&buf, C.SignalConstPointerSignedPreKeyRecord{raw: record})); err != nil {
 		return -1
 	}
 	data := freeOwnedBuffer(buf)
-	rec, err := DeserializeSignedPreKeyRecord(data)
-	if err != nil {
-		return -1
-	}
 
-	if err := store.StoreSignedPreKey(uint32(id), rec); err != nil {
+	if err := store.StoreSignedPreKey(uint32(id), data); err != nil {
 		return -1
 	}
 	return 0
@@ -285,17 +268,14 @@ func goLoadKyberPreKey(ctx unsafe.Pointer, recordp *C.SignalMutPointerKyberPreKe
 func goStoreKyberPreKey(ctx unsafe.Pointer, id C.uint32_t, record *C.SignalKyberPreKeyRecord) C.int {
 	store := restorePointer(ctx).(KyberPreKeyStore)
 
+	// Serialize the borrowed C pointer to bytes — pass directly to store
 	var buf C.SignalOwnedBuffer
 	if err := wrapError(C.signal_kyber_pre_key_record_serialize(&buf, C.SignalConstPointerKyberPreKeyRecord{raw: record})); err != nil {
 		return -1
 	}
 	data := freeOwnedBuffer(buf)
-	rec, err := DeserializeKyberPreKeyRecord(data)
-	if err != nil {
-		return -1
-	}
 
-	if err := store.StoreKyberPreKey(uint32(id), rec); err != nil {
+	if err := store.StoreKyberPreKey(uint32(id), data); err != nil {
 		return -1
 	}
 	return 0
@@ -305,22 +285,17 @@ func goStoreKyberPreKey(ctx unsafe.Pointer, id C.uint32_t, record *C.SignalKyber
 func goMarkKyberPreKeyUsed(ctx unsafe.Pointer, id C.uint32_t, ecPreKeyID C.uint32_t, baseKey *C.SignalPublicKey) C.int {
 	store := restorePointer(ctx).(KyberPreKeyStore)
 
-	// Clone the base key if provided (may be NULL)
-	var pubKey *PublicKey
+	// Serialize the base key if provided (may be NULL)
+	var keyData []byte
 	if baseKey != nil {
 		var buf C.SignalOwnedBuffer
 		if err := wrapError(C.signal_publickey_serialize(&buf, C.SignalConstPointerPublicKey{raw: baseKey})); err != nil {
 			return -1
 		}
-		data := freeOwnedBuffer(buf)
-		var err error
-		pubKey, err = DeserializePublicKey(data)
-		if err != nil {
-			return -1
-		}
+		keyData = freeOwnedBuffer(buf)
 	}
 
-	if err := store.MarkKyberPreKeyUsed(uint32(id), uint32(ecPreKeyID), pubKey); err != nil {
+	if err := store.MarkKyberPreKeyUsed(uint32(id), uint32(ecPreKeyID), keyData); err != nil {
 		return -1
 	}
 	return 0
@@ -362,18 +337,14 @@ func goStoreSenderKey(ctx unsafe.Pointer, sender *C.SignalProtocolAddress, distr
 		distID[i] = byte(distributionID.bytes[i])
 	}
 
-	// Clone the sender key record since we're borrowing the C pointer
-	var clonedBuf C.SignalOwnedBuffer
-	if err := wrapError(C.signal_sender_key_record_serialize(&clonedBuf, C.SignalConstPointerSenderKeyRecord{raw: record})); err != nil {
+	// Serialize the borrowed C pointer to bytes — pass directly to store
+	var buf C.SignalOwnedBuffer
+	if err := wrapError(C.signal_sender_key_record_serialize(&buf, C.SignalConstPointerSenderKeyRecord{raw: record})); err != nil {
 		return -1
 	}
-	data := freeOwnedBuffer(clonedBuf)
-	rec, err := DeserializeSenderKeyRecord(data)
-	if err != nil {
-		return -1
-	}
+	data := freeOwnedBuffer(buf)
 
-	err = store.StoreSenderKey(addr, distID, rec)
+	err := store.StoreSenderKey(addr, distID, data)
 	addr.ptr = nil
 	if err != nil {
 		return -1

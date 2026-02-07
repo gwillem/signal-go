@@ -35,8 +35,8 @@ func (s *Store) LoadSession(address *libsignal.Address) (*libsignal.SessionRecor
 	return libsignal.DeserializeSessionRecord(record)
 }
 
-// StoreSession stores a session record for the given address.
-func (s *Store) StoreSession(address *libsignal.Address, record *libsignal.SessionRecord) error {
+// StoreSession stores a session record (serialized bytes) for the given address.
+func (s *Store) StoreSession(address *libsignal.Address, record []byte) error {
 	name, err := address.Name()
 	if err != nil {
 		return fmt.Errorf("store: session address name: %w", err)
@@ -46,14 +46,9 @@ func (s *Store) StoreSession(address *libsignal.Address, record *libsignal.Sessi
 		return fmt.Errorf("store: session address device id: %w", err)
 	}
 
-	data, err := record.Serialize()
-	if err != nil {
-		return fmt.Errorf("store: serialize session: %w", err)
-	}
-
 	_, err = s.db.Exec(
 		"INSERT OR REPLACE INTO session (address, device_id, record) VALUES (?, ?, ?)",
-		name, devID, data,
+		name, devID, record,
 	)
 	if err != nil {
 		return fmt.Errorf("store: store session: %w", err)

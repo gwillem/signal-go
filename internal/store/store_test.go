@@ -231,8 +231,15 @@ func TestSessionStore(t *testing.T) {
 		t.Fatal("expected session after ProcessPreKeyBundle")
 	}
 
+	// Serialize session for storage.
+	sessionData, err := sessionRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionRec.Destroy()
+
 	// Store it in SQLite.
-	if err := s.StoreSession(addr, sessionRec); err != nil {
+	if err := s.StoreSession(addr, sessionData); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,20 +254,16 @@ func TestSessionStore(t *testing.T) {
 	defer loaded.Destroy()
 
 	// Verify by serializing both.
-	origData, err := sessionRec.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
 	loadedData, err := loaded.Serialize()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(origData) != len(loadedData) {
-		t.Fatalf("session data length mismatch: %d vs %d", len(origData), len(loadedData))
+	if len(sessionData) != len(loadedData) {
+		t.Fatalf("session data length mismatch: %d vs %d", len(sessionData), len(loadedData))
 	}
 
 	// Overwrite session.
-	if err := s.StoreSession(addr, sessionRec); err != nil {
+	if err := s.StoreSession(addr, sessionData); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -330,7 +333,11 @@ func TestIdentityKeyStore(t *testing.T) {
 	}
 
 	// Save identity.
-	if _, err := s.SaveIdentityKey(addr, bobPub); err != nil {
+	bobPubBytes, err := bobPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveIdentityKey(addr, bobPubBytes); err != nil {
 		t.Fatal(err)
 	}
 
@@ -401,8 +408,13 @@ func TestPreKeyStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recData, err := rec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Destroy()
 
-	if err := s.StorePreKey(1, rec); err != nil {
+	if err := s.StorePreKey(1, recData); err != nil {
 		t.Fatal(err)
 	}
 
@@ -468,8 +480,13 @@ func TestSignedPreKeyStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recData, err := rec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Destroy()
 
-	if err := s.StoreSignedPreKey(1, rec); err != nil {
+	if err := s.StoreSignedPreKey(1, recData); err != nil {
 		t.Fatal(err)
 	}
 
@@ -480,16 +497,12 @@ func TestSignedPreKeyStore(t *testing.T) {
 	defer loaded.Destroy()
 
 	// Verify round-trip.
-	origData, err := rec.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
 	loadedData, err := loaded.Serialize()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(origData) != len(loadedData) {
-		t.Fatalf("signed pre-key data length mismatch: %d vs %d", len(origData), len(loadedData))
+	if len(recData) != len(loadedData) {
+		t.Fatalf("signed pre-key data length mismatch: %d vs %d", len(recData), len(loadedData))
 	}
 }
 
@@ -599,9 +612,14 @@ func TestArchiveSession(t *testing.T) {
 	if sessionRec == nil {
 		t.Fatal("expected session")
 	}
+	sessionData, err := sessionRec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionRec.Destroy()
 
 	// Store in SQLite.
-	if err := s.StoreSession(addr, sessionRec); err != nil {
+	if err := s.StoreSession(addr, sessionData); err != nil {
 		t.Fatal(err)
 	}
 
@@ -679,8 +697,13 @@ func TestKyberPreKeyStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recData, err := rec.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Destroy()
 
-	if err := s.StoreKyberPreKey(1, rec); err != nil {
+	if err := s.StoreKyberPreKey(1, recData); err != nil {
 		t.Fatal(err)
 	}
 
