@@ -1,5 +1,7 @@
-LIBSIGNAL_SRC := build/libsignal
-LIB_DIR       := internal/libsignal/lib
+LIBSIGNAL_SRC     := build/libsignal
+LIBSIGNAL_VERSION := v0.87.0
+LIBSIGNAL_BIN_URL := https://github.com/gwillem/libsignal-bin/releases/download/$(LIBSIGNAL_VERSION)
+LIB_DIR           := internal/libsignal/lib
 HEADER        := $(LIB_DIR)/libsignal-ffi.h
 NIGHTLY_BIN   := $(dir $(shell rustup which --toolchain nightly cargo 2>/dev/null))
 CBINDGEN      := $(shell PATH="$(HOME)/.cargo/bin:$$PATH" which cbindgen 2>/dev/null)
@@ -22,10 +24,16 @@ ifeq ($(UNAME_S),Linux)
   endif
 endif
 
-.PHONY: deps deps-all deps-darwin-arm64 deps-linux-amd64 test clean proto
+.PHONY: deps deps-all deps-download deps-darwin-arm64 deps-linux-amd64 test clean proto
 
 deps: $(LIBSIGNAL_SRC)/rust/bridge/ffi/Cargo.toml
 	$(MAKE) deps-$(NATIVE_PLATFORM)
+
+deps-download:
+	mkdir -p $(LIB_DIR)/darwin-arm64 $(LIB_DIR)/linux-amd64
+	curl -fSL $(LIBSIGNAL_BIN_URL)/libsignal_ffi-darwin-arm64.a -o $(LIB_DIR)/darwin-arm64/libsignal_ffi.a
+	curl -fSL $(LIBSIGNAL_BIN_URL)/libsignal_ffi-linux-amd64.a -o $(LIB_DIR)/linux-amd64/libsignal_ffi.a
+	curl -fSL $(LIBSIGNAL_BIN_URL)/libsignal-ffi.h -o $(LIB_DIR)/libsignal-ffi.h
 
 deps-all: deps-darwin-arm64 deps-linux-amd64
 
