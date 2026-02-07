@@ -64,17 +64,6 @@ func (s *Service) handleRetryReceipt(ctx context.Context,
 	return s.sendNullMessageWithDevices(ctx, requesterACI, initialDevices)
 }
 
-// sendNullMessage sends a NullMessage (with random padding) to the recipient.
-// This forces pre-key bundle fetch and new session establishment if no session
-// exists (e.g. after archival).
-func (s *Service) sendNullMessage(ctx context.Context, recipient string) error {
-	contentBytes, err := makeNullMessageContent()
-	if err != nil {
-		return err
-	}
-	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
-}
-
 // sendNullMessageWithDevices sends a NullMessage starting with the given device list.
 // Used for retry receipt handling where we know some devices upfront.
 func (s *Service) sendNullMessageWithDevices(ctx context.Context, recipient string, initialDevices []int) error {
