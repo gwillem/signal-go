@@ -80,15 +80,6 @@ func (s *Store) GetAllGroups() ([]*Group, error) {
 	return groups, rows.Err()
 }
 
-// UpdateGroupName updates just the name of a group.
-func (s *Store) UpdateGroupName(groupID, name string) error {
-	_, err := s.db.Exec(
-		"UPDATE groups SET name = ?, updated_at = ? WHERE group_id = ?",
-		name, time.Now().Unix(), groupID,
-	)
-	return err
-}
-
 // DeleteGroup removes a group from the store.
 func (s *Store) DeleteGroup(groupID string) error {
 	_, err := s.db.Exec("DELETE FROM groups WHERE group_id = ?", groupID)
