@@ -58,10 +58,6 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 }
 
-// Transport returns the underlying transport (for operations that need direct access).
-func (s *Service) Transport() *Transport {
-	return s.transport
-}
 
 // --- Keys API ---
 
