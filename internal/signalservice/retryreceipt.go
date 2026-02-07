@@ -108,6 +108,36 @@ func makeNullMessageContent() ([]byte, error) {
 	return contentBytes, nil
 }
 
+// prepareSendDevices resolves the device list for a recipient, filtering out
+// the local device when sending to self. If providedDevices is non-nil, it
+// uses that list (filtered); otherwise it loads from the store.
+func (s *Service) prepareSendDevices(recipient string, providedDevices []int) (deviceIDs []int, skipDevice int, err error) {
+	sendingToSelf := recipient == s.localACI
+
+	if providedDevices != nil {
+		deviceIDs = make([]int, 0, len(providedDevices))
+		for _, d := range providedDevices {
+			if !sendingToSelf || d != s.localDeviceID {
+				deviceIDs = append(deviceIDs, d)
+			}
+		}
+		if len(deviceIDs) == 0 {
+			deviceIDs = []int{1}
+		}
+		if sendingToSelf {
+			skipDevice = s.localDeviceID
+		}
+	} else {
+		deviceIDs, skipDevice = s.initialDevices(recipient, sendingToSelf)
+	}
+
+	if sendingToSelf && len(deviceIDs) == 0 {
+		return nil, 0, fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
+	}
+	logf(s.logger, "send: recipient=%s devices=%v sendingToSelf=%v", recipient, deviceIDs, sendingToSelf)
+	return deviceIDs, skipDevice, nil
+}
+
 // sendEncryptedMessage encrypts and sends arbitrary Content bytes to a recipient.
 // It handles session establishment (fetching pre-keys if needed) and retries on:
 //   - 410 (stale devices): deletes stale sessions and retries
@@ -115,14 +145,10 @@ func makeNullMessageContent() ([]byte, error) {
 //
 // The local device ID is excluded from the device list when sending to self (sync messages).
 func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, contentBytes []byte) error {
-	sendingToSelf := recipient == s.localACI
-	logf(s.logger, "send: localDeviceID=%d recipient=%s sendingToSelf=%v", s.localDeviceID, recipient, sendingToSelf)
-
-	deviceIDs, skipDevice := s.initialDevices(recipient, sendingToSelf)
-	if sendingToSelf && len(deviceIDs) == 0 {
-		return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
+	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, nil)
+	if err != nil {
+		return err
 	}
-
 	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
 		return s.encryptAndSend(ctx, recipient, contentBytes, devices)
 	})
@@ -131,14 +157,10 @@ func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, co
 // sendEncryptedMessageWithTimestamp is like sendEncryptedMessage but uses an explicit timestamp.
 // This is needed for sync messages where the envelope timestamp must match the DataMessage timestamp.
 func (s *Service) sendEncryptedMessageWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
-	sendingToSelf := recipient == s.localACI
-	logf(s.logger, "send: localDeviceID=%d recipient=%s sendingToSelf=%v timestamp=%d", s.localDeviceID, recipient, sendingToSelf, timestamp)
-
-	deviceIDs, skipDevice := s.initialDevices(recipient, sendingToSelf)
-	if sendingToSelf && len(deviceIDs) == 0 {
-		return fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
+	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, nil)
+	if err != nil {
+		return err
 	}
-
 	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
 		return s.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, devices, timestamp)
 	})
@@ -147,27 +169,11 @@ func (s *Service) sendEncryptedMessageWithTimestamp(ctx context.Context, recipie
 // sendEncryptedMessageWithDevices encrypts and sends Content bytes starting with the
 // given initial device list. Like sendEncryptedMessage, it handles the 409/410 retry
 // loop, but starts with a known device list to reduce round trips.
-func (s *Service) sendEncryptedMessageWithDevices(ctx context.Context, recipient string, initialDevices []int, contentBytes []byte) error {
-	sendingToSelf := recipient == s.localACI
-
-	// Filter out own device if sending to self.
-	deviceIDs := make([]int, 0, len(initialDevices))
-	for _, d := range initialDevices {
-		if !sendingToSelf || d != s.localDeviceID {
-			deviceIDs = append(deviceIDs, d)
-		}
+func (s *Service) sendEncryptedMessageWithDevices(ctx context.Context, recipient string, initDevices []int, contentBytes []byte) error {
+	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, initDevices)
+	if err != nil {
+		return err
 	}
-	if len(deviceIDs) == 0 {
-		deviceIDs = []int{1}
-	}
-
-	skipDevice := 0
-	if sendingToSelf {
-		skipDevice = s.localDeviceID
-	}
-
-	logf(s.logger, "send: recipient=%s devices=%v", recipient, deviceIDs)
-
 	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
 		return s.encryptAndSend(ctx, recipient, contentBytes, devices)
 	})
