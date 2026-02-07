@@ -22,4 +22,4 @@ new `internal/signalcrypto` sub-package:
 
 ## Related
 
-- Task 18 (`docs/task18-service-store-interface.md`): Decouple Service from concrete `*store.Store`
+- Task 18 (`docs/todo/task18-service-store-interface.md`): Decouple Service from concrete `*store.Store`
