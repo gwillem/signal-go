@@ -4,6 +4,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
+
+	"github.com/gwillem/signal-go/internal/store"
 )
 
 const accessKeyLen = 16
@@ -36,4 +38,17 @@ func DeriveAccessKey(profileKey []byte) ([]byte, error) {
 
 	// Seal returns ciphertext || tag. We only want the first 16 bytes (ciphertext).
 	return ciphertext[:accessKeyLen], nil
+}
+
+// deriveAccessKeyForRecipient looks up a recipient's profile key and derives
+// their unidentified access key. Returns an error if no profile key is available.
+func deriveAccessKeyForRecipient(st *store.Store, recipient string) ([]byte, error) {
+	contact, err := st.GetContactByACI(recipient)
+	if err != nil {
+		return nil, fmt.Errorf("get contact: %w", err)
+	}
+	if contact == nil || len(contact.ProfileKey) == 0 {
+		return nil, fmt.Errorf("no profile key for %s (run sync-contacts or receive a message from them first)", recipient)
+	}
+	return DeriveAccessKey(contact.ProfileKey)
 }

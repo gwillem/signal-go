@@ -509,39 +509,20 @@ func (s *Service) sendSenderKeyDistribution(ctx context.Context, recipient strin
 		return fmt.Errorf("marshal content: %w", err)
 	}
 
-	// Get recipient's profile key for access key
-	contact, err := s.store.GetContactByACI(recipient)
+	// If we have a profile key, use sealed sender; otherwise fall back to regular.
+	accessKey, err := deriveAccessKeyForRecipient(s.store, recipient)
 	if err != nil {
-		return fmt.Errorf("get contact: %w", err)
+		return s.sendEncryptedMessage(ctx, recipient, contentBytes)
 	}
-
-	// If we have a profile key, use sealed sender; otherwise fall back to regular
-	if contact != nil && len(contact.ProfileKey) > 0 {
-		accessKey, err := DeriveAccessKey(contact.ProfileKey)
-		if err != nil {
-			return fmt.Errorf("derive access key: %w", err)
-		}
-		return s.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
-	}
-
-	// Fall back to regular encrypted message
-	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
+	return s.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
 }
 
 // sendGroupSealedMessage wraps a sender key ciphertext in sealed sender v1 and sends it.
 // Used as fallback when endorsements are not available.
 func (s *Service) sendGroupSealedMessage(ctx context.Context, recipient string, senderKeyBytes []byte, senderCert *libsignal.SenderCertificate, groupID []byte) error {
-	contact, err := s.store.GetContactByACI(recipient)
+	accessKey, err := deriveAccessKeyForRecipient(s.store, recipient)
 	if err != nil {
-		return fmt.Errorf("get contact: %w", err)
-	}
-	if contact == nil || len(contact.ProfileKey) == 0 {
-		return fmt.Errorf("no profile key (run sync-contacts or receive a message from them first)")
-	}
-
-	accessKey, err := DeriveAccessKey(contact.ProfileKey)
-	if err != nil {
-		return fmt.Errorf("derive access key: %w", err)
+		return err
 	}
 
 	deviceIDs, _ := s.initialDevices(recipient, false)

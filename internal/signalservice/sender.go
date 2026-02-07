@@ -290,19 +290,10 @@ func (s *Service) sendSealedSenderMessage(ctx context.Context, recipient string,
 	logf(s.logger, "sealed sender: got sender certificate")
 
 	// Step 2: Get recipient's profile key to derive the access key
-	// Profile keys are learned from received messages (sender includes their profile key).
-	contact, err := s.store.GetContactByACI(recipient)
+	// Step 3: Derive unidentified access key from recipient's profile key.
+	accessKey, err := deriveAccessKeyForRecipient(s.store, recipient)
 	if err != nil {
-		return fmt.Errorf("sealed sender: get contact: %w", err)
-	}
-	if contact == nil || len(contact.ProfileKey) == 0 {
-		return fmt.Errorf("sealed sender: no profile key for recipient %s (need to receive a message from them first, or use regular send)", recipient)
-	}
-
-	// Step 3: Derive unidentified access key from recipient's profile key
-	accessKey, err := DeriveAccessKey(contact.ProfileKey)
-	if err != nil {
-		return fmt.Errorf("sealed sender: derive access key: %w", err)
+		return fmt.Errorf("sealed sender: %w", err)
 	}
 
 	logf(s.logger, "sealed sender: derived access key from profile key")
