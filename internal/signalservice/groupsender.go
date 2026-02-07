@@ -257,6 +257,43 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 	return nil
 }
 
+// ensureSession loads or establishes a session for the given address.
+// Returns the session and a cleanup function. The caller must call cleanup when done.
+func (s *Service) ensureSession(ctx context.Context, addr *libsignal.Address, recipient string, deviceID int) (*libsignal.SessionRecord, error) {
+	session, err := s.store.LoadSession(addr)
+	if err != nil {
+		return nil, fmt.Errorf("load session for %s.%d: %w", recipient, deviceID, err)
+	}
+	if session != nil {
+		return session, nil
+	}
+
+	// Fetch pre-keys and establish session.
+	preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("get prekeys for %s.%d: %w", recipient, deviceID, err)
+	}
+	if len(preKeyResp.Devices) == 0 {
+		return nil, fmt.Errorf("no devices in prekey response for %s.%d", recipient, deviceID)
+	}
+	bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, preKeyResp.Devices[0])
+	if err != nil {
+		return nil, fmt.Errorf("build prekey bundle for %s.%d: %w", recipient, deviceID, err)
+	}
+	if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, s.store, time.Now()); err != nil {
+		bundle.Destroy()
+		return nil, fmt.Errorf("process prekey bundle for %s.%d: %w", recipient, deviceID, err)
+	}
+	bundle.Destroy()
+
+	// Reload session after establishing.
+	session, err = s.store.LoadSession(addr)
+	if err != nil || session == nil {
+		return nil, fmt.Errorf("session not established for %s.%d", recipient, deviceID)
+	}
+	return session, nil
+}
+
 // trySendMultiRecipient builds the multi-recipient message and sends it.
 func (s *Service) trySendMultiRecipient(
 	ctx context.Context,
@@ -267,7 +304,7 @@ func (s *Service) trySendMultiRecipient(
 	groupSendToken []byte,
 	timestamp uint64,
 ) error {
-	// Build list of all recipient addresses + sessions
+	// Build list of all recipient addresses + sessions.
 	var allAddrs []*libsignal.Address
 	var allSessions []*libsignal.SessionRecord
 	var cleanups []func()
@@ -291,35 +328,9 @@ func (s *Service) trySendMultiRecipient(
 			}
 			cleanups = append(cleanups, addr.Destroy)
 
-			// Load or establish session
-			session, err := s.store.LoadSession(addr)
+			session, err := s.ensureSession(ctx, addr, recipient, deviceID)
 			if err != nil {
-				return fmt.Errorf("load session for %s.%d: %w", recipient, deviceID, err)
-			}
-			if session == nil {
-				// Fetch pre-keys and establish session
-				preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
-				if err != nil {
-					return fmt.Errorf("get prekeys for %s.%d: %w", recipient, deviceID, err)
-				}
-				if len(preKeyResp.Devices) == 0 {
-					return fmt.Errorf("no devices in prekey response for %s.%d", recipient, deviceID)
-				}
-				bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, preKeyResp.Devices[0])
-				if err != nil {
-					return fmt.Errorf("build prekey bundle for %s.%d: %w", recipient, deviceID, err)
-				}
-				if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, s.store, time.Now()); err != nil {
-					bundle.Destroy()
-					return fmt.Errorf("process prekey bundle for %s.%d: %w", recipient, deviceID, err)
-				}
-				bundle.Destroy()
-
-				// Reload session after establishing
-				session, err = s.store.LoadSession(addr)
-				if err != nil || session == nil {
-					return fmt.Errorf("session not established for %s.%d", recipient, deviceID)
-				}
+				return err
 			}
 
 			allAddrs = append(allAddrs, addr)
@@ -328,14 +339,14 @@ func (s *Service) trySendMultiRecipient(
 		}
 	}
 
-	// Create USMC with ContentHint = IMPLICIT (Signal-Android parity)
+	// Create USMC with ContentHint = IMPLICIT (Signal-Android parity).
 	usmc, err := createSenderKeyUSMC(senderKeyBytes, senderCert, groupID)
 	if err != nil {
 		return fmt.Errorf("create sender key USMC: %w", err)
 	}
 	defer usmc.Destroy()
 
-	// Multi-recipient encrypt
+	// Multi-recipient encrypt.
 	mrmBlob, err := libsignal.SealedSenderMultiRecipientEncrypt(allAddrs, allSessions, usmc, s.store)
 	if err != nil {
 		return fmt.Errorf("multi-recipient encrypt: %w", err)
@@ -343,7 +354,7 @@ func (s *Service) trySendMultiRecipient(
 
 	logf(s.logger, "group send: MRM blob size=%d for %d addresses", len(mrmBlob), len(allAddrs))
 
-	// Send via multi_recipient endpoint
+	// Send via multi_recipient endpoint.
 	return s.SendMultiRecipientMessage(ctx, mrmBlob, groupSendToken, timestamp)
 }
 
