@@ -85,9 +85,13 @@ func (s *Service) sendNullMessageWithDevices(ctx context.Context, recipient stri
 	return s.sendEncryptedMessageWithDevices(ctx, recipient, initialDevices, contentBytes)
 }
 
+// nullMessagePaddingSize matches Signal-Android's NullMessage padding length
+// (PushServiceSocket.java / NullMessage).
+const nullMessagePaddingSize = 140
+
 // makeNullMessageContent creates a serialized NullMessage with random padding.
 func makeNullMessageContent() ([]byte, error) {
-	padding := make([]byte, 140)
+	padding := make([]byte, nullMessagePaddingSize)
 	if _, err := rand.Read(padding); err != nil {
 		return nil, fmt.Errorf("null message: random padding: %w", err)
 	}
