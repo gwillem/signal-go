@@ -19,16 +19,14 @@ import (
 // establishment (fetching pre-keys if needed), encryption, and HTTP delivery.
 // Automatically retries on 410 (stale devices).
 // If debugDir is non-empty, the Content protobuf is dumped before encryption.
-func (s *Service) sendTextMessage(ctx context.Context, recipient string, text string) error {
-	timestamp := uint64(time.Now().UnixMilli())
-
-	// Load account to get profile key and PNI for the message.
+// buildDataMessageContent builds a Content protobuf containing a DataMessage with the given
+// text, timestamp, profile key, and optionally a PNI signature. Returns the marshalled bytes.
+func (s *Service) buildDataMessageContent(text string, timestamp uint64) ([]byte, error) {
 	acct, err := s.store.LoadAccount()
 	if err != nil {
-		return fmt.Errorf("sender: load account: %w", err)
+		return nil, fmt.Errorf("sender: load account: %w", err)
 	}
 
-	// Include fields that iOS requires for proper message display.
 	expireTimer := uint32(0)
 	requiredProtocolVersion := uint32(0)
 	expireTimerVersion := uint32(1)
@@ -41,7 +39,6 @@ func (s *Service) sendTextMessage(ctx context.Context, recipient string, text st
 		ExpireTimerVersion:      &expireTimerVersion,
 	}
 
-	// Include profile key if available (required for iOS compatibility).
 	if acct != nil && len(acct.ProfileKey) > 0 {
 		dm.ProfileKey = acct.ProfileKey
 	}
@@ -51,7 +48,6 @@ func (s *Service) sendTextMessage(ctx context.Context, recipient string, text st
 	}
 
 	// Include PNI signature to help recipients link our ACI and PNI identities.
-	// This is required when the recipient discovered us via phone number (PNI).
 	pniSig, err := s.createPniSignatureMessage(acct)
 	if err != nil {
 		logf(s.logger, "sender: failed to create PNI signature (continuing without): %v", err)
@@ -60,12 +56,17 @@ func (s *Service) sendTextMessage(ctx context.Context, recipient string, text st
 		logf(s.logger, "sender: including PNI signature in message")
 	}
 
-	contentBytes, err := pb.Marshal(content)
+	return pb.Marshal(content)
+}
+
+func (s *Service) sendTextMessage(ctx context.Context, recipient string, text string) error {
+	timestamp := uint64(time.Now().UnixMilli())
+
+	contentBytes, err := s.buildDataMessageContent(text, timestamp)
 	if err != nil {
-		return fmt.Errorf("sender: marshal content: %w", err)
+		return err
 	}
 
-	// Dump Content for debugging comparison with received messages.
 	dumpContent(s.debugDir, "send", recipient, timestamp, contentBytes, s.logger)
 
 	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
@@ -269,35 +270,9 @@ func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.
 func (s *Service) sendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
 	timestamp := uint64(time.Now().UnixMilli())
 
-	// Build Content protobuf
-	acct, err := s.store.LoadAccount()
+	contentBytes, err := s.buildDataMessageContent(text, timestamp)
 	if err != nil {
-		return fmt.Errorf("sealed sender: load account: %w", err)
-	}
-
-	expireTimer := uint32(0)
-	requiredProtocolVersion := uint32(0)
-	expireTimerVersion := uint32(1)
-
-	dm := &proto.DataMessage{
-		Body:                    &text,
-		Timestamp:               &timestamp,
-		ExpireTimer:             &expireTimer,
-		RequiredProtocolVersion: &requiredProtocolVersion,
-		ExpireTimerVersion:      &expireTimerVersion,
-	}
-
-	if acct != nil && len(acct.ProfileKey) > 0 {
-		dm.ProfileKey = acct.ProfileKey
-	}
-
-	content := &proto.Content{
-		DataMessage: dm,
-	}
-
-	contentBytes, err := pb.Marshal(content)
-	if err != nil {
-		return fmt.Errorf("sealed sender: marshal content: %w", err)
+		return err
 	}
 
 	// Step 1: Get sender certificate from server
