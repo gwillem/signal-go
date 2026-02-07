@@ -173,7 +173,7 @@ func NewClient(opts ...Option) *Client {
 // Open opens an existing account by phone number (e.g. "+31647272794").
 // It finds the database in the default data directory, opens it, and loads credentials.
 func Open(number string, opts ...Option) (*Client, error) {
-	dbPath, err := DiscoverDBByNumber(number)
+	dbPath, err := discoverDBByNumber(number)
 	if err != nil {
 		return nil, err
 	}
@@ -1040,9 +1040,9 @@ func discoverDB() (string, error) {
 	return dbFiles[0], nil
 }
 
-// DiscoverDBByNumber finds a database file by phone number.
+// discoverDBByNumber finds a database file by phone number.
 // Returns empty string if not found.
-func DiscoverDBByNumber(number string) (string, error) {
+func discoverDBByNumber(number string) (string, error) {
 	// Normalize number (ensure + prefix)
 	if !strings.HasPrefix(number, "+") {
 		number = "+" + number
