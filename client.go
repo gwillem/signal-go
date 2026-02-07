@@ -292,16 +292,7 @@ func (c *Client) Register(
 }
 
 func (c *Client) storePrimaryPreKeys(reg *signalservice.PrimaryRegistrationResult) error {
-	if err := c.storeSignedPreKeyFromBytes(reg.ACISignedPreKey, "ACI"); err != nil {
-		return err
-	}
-	if err := c.storeKyberPreKeyFromBytes(reg.ACIKyberPreKey, "ACI"); err != nil {
-		return err
-	}
-	if err := c.storeSignedPreKeyFromBytes(reg.PNISignedPreKey, "PNI"); err != nil {
-		return err
-	}
-	return c.storeKyberPreKeyFromBytes(reg.PNIKyberPreKey, "PNI")
+	return c.storePreKeysForIdentities(reg.ACISignedPreKey, reg.ACIKyberPreKey, reg.PNISignedPreKey, reg.PNIKyberPreKey)
 }
 
 // Load opens an existing database and loads credentials without re-linking.
@@ -727,16 +718,20 @@ func (c *Client) RefreshPreKeys(ctx context.Context) error {
 }
 
 func (c *Client) storePreKeys(reg *signalservice.RegistrationResult) error {
-	if err := c.storeSignedPreKeyFromBytes(reg.ACISignedPreKey, "ACI"); err != nil {
+	return c.storePreKeysForIdentities(reg.ACISignedPreKey, reg.ACIKyberPreKey, reg.PNISignedPreKey, reg.PNIKyberPreKey)
+}
+
+func (c *Client) storePreKeysForIdentities(aciSPK, aciKPK, pniSPK, pniKPK []byte) error {
+	if err := c.storeSignedPreKeyFromBytes(aciSPK, "ACI"); err != nil {
 		return err
 	}
-	if err := c.storeKyberPreKeyFromBytes(reg.ACIKyberPreKey, "ACI"); err != nil {
+	if err := c.storeKyberPreKeyFromBytes(aciKPK, "ACI"); err != nil {
 		return err
 	}
-	if err := c.storeSignedPreKeyFromBytes(reg.PNISignedPreKey, "PNI"); err != nil {
+	if err := c.storeSignedPreKeyFromBytes(pniSPK, "PNI"); err != nil {
 		return err
 	}
-	return c.storeKyberPreKeyFromBytes(reg.PNIKyberPreKey, "PNI")
+	return c.storeKyberPreKeyFromBytes(pniKPK, "PNI")
 }
 
 func (c *Client) openStore() error {
