@@ -38,7 +38,7 @@ deps-download:
 deps-all: deps-darwin-arm64 deps-linux-amd64
 
 deps-darwin-arm64: $(LIBSIGNAL_SRC)/rust/bridge/ffi/Cargo.toml
-	$(NIGHTLY_PATH) cargo build --release \
+	MACOSX_DEPLOYMENT_TARGET=14.0 $(NIGHTLY_PATH) cargo build --release \
 		--target aarch64-apple-darwin \
 		--manifest-path $(LIBSIGNAL_SRC)/rust/bridge/ffi/Cargo.toml
 	mkdir -p $(LIB_DIR)/darwin-arm64
