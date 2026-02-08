@@ -1,5 +1,7 @@
 # signal-go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/gwillem/signal-go.svg)](https://pkg.go.dev/github.com/gwillem/signal-go)
+
 Go library for [Signal](https://signal.org) messenger with CGO bindings for the official [libsignal](https://github.com/signalapp/libsignal).
 
 | Feature                                         | Status             |
