@@ -2,21 +2,20 @@
 
 Go library for [Signal](https://signal.org) messenger with CGO bindings for the official [libsignal](https://github.com/signalapp/libsignal).
 
-| Feature | Status |
-|---|---|
-| Device linking (secondary device via QR) | :white_check_mark: |
-| Device registration (primary via SMS/voice) | :white_check_mark: |
-| Sending & receiving 1:1 messages | :white_check_mark: |
+| Feature                                         | Status             |
+| ----------------------------------------------- | ------------------ |
+| Device linking (secondary device via QR)        | :white_check_mark: |
+| Device registration (primary via SMS/voice)     | :white_check_mark: |
+| Sending & receiving 1:1 messages                | :white_check_mark: |
 | Group messaging (sender keys, sealed sender v2) | :white_check_mark: |
-| Sealed sender | :white_check_mark: |
-| Contact & group sync | :white_check_mark: |
-| Profile management | :white_check_mark: |
-| Attachment downloading | :white_check_mark: |
-| Attachment sending | :construction: |
-| Typing indicators & read receipts | :construction: |
-| Message editing & deletion | :construction: |
-| Voice/video calls | :construction: |
-| Stories | :construction: |
+| Sealed sender                                   | :white_check_mark: |
+| Contact & group sync                            | :white_check_mark: |
+| Profile management                              | :white_check_mark: |
+| Attachments                                     |                    |
+| Typing indicators & read receipts               |                    |
+| Message editing & deletion                      |                    |
+| Voice/video calls                               |                    |
+| Stories                                         |                    |
 
 ## Example
 
