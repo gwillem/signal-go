@@ -42,7 +42,10 @@ func setupAliceAndBob(t *testing.T) (bobStore *store.Store, senderACI string, en
 	if err != nil {
 		t.Fatal(err)
 	}
-	bobSt.SetIdentity(bobIdentityPriv, 42)
+	defer bobIdentityPriv.Destroy()
+	if err := bobSt.SetIdentity(bobIdentityPriv, 42); err != nil {
+		t.Fatal(err)
+	}
 
 	bobIdentityPub, err := bobIdentityPriv.PublicKey()
 	if err != nil {

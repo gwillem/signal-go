@@ -150,13 +150,13 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	logf(logger, "envelope type=%v sender=%s device=%d timestamp=%d contentLen=%d destination=%s",
 		envType, env.GetSourceServiceId(), env.GetSourceDevice(), env.GetTimestamp(), len(env.GetContent()), env.GetDestinationServiceId())
 
-	// Switch to PNI identity if message is addressed to our PNI.
+	// Use PNI identity if message is addressed to our PNI.
 	// iPhone sends messages to PNI when the contact was discovered via phone number lookup (CDSI).
+	var identityStore libsignal.IdentityKeyStore = st
 	destServiceID := env.GetDestinationServiceId()
 	if strings.HasPrefix(destServiceID, "PNI:") {
-		logf(logger, "message addressed to PNI, switching to PNI identity for decryption")
-		st.UsePNI(true)
-		defer st.UsePNI(false)
+		logf(logger, "message addressed to PNI, using PNI identity for decryption")
+		identityStore = st.PNI()
 	}
 
 	// Only handle known envelope types.
@@ -185,7 +185,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 	switch envType {
 	case proto.Envelope_UNIDENTIFIED_SENDER:
-		pt, aci, dev, msg, err := decryptSealedSender(ctx, content, &env, st, logger, rc)
+		pt, aci, dev, msg, err := decryptSealedSender(ctx, content, &env, st, identityStore, logger, rc)
 		if err != nil {
 			return nil, err
 		}
@@ -195,7 +195,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		plaintext, senderACI, senderDevice = pt, aci, dev
 
 	case proto.Envelope_PREKEY_BUNDLE, proto.Envelope_CIPHERTEXT:
-		pt, err := decryptCiphertextOrPreKey(envType, content, senderACI, senderDevice, st, logger)
+		pt, err := decryptCiphertextOrPreKey(envType, content, senderACI, senderDevice, st, identityStore, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -327,14 +327,14 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 // decryptSealedSender decrypts a sealed sender (UNIDENTIFIED_SENDER) envelope.
 // Returns decrypted plaintext, sender ACI, sender device, and optionally a Message
 // if the inner content was plaintext (retry receipt) handled inline.
-func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelope, st *store.Store, logger *log.Logger, rc *receiverContext) ([]byte, string, uint32, *Message, error) {
+func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelope, st *store.Store, identityStore libsignal.IdentityKeyStore, logger *log.Logger, rc *receiverContext) ([]byte, string, uint32, *Message, error) {
 	logf(logger, "decrypting sealed sender message (version byte=0x%02x, len=%d)", content[0], len(content))
 
 	// Log identity key fingerprint for debugging sealed sender decryption failures.
-	if identityKey, err := st.GetIdentityKeyPair(); err == nil {
+	if identityKey, err := identityStore.GetIdentityKeyPair(); err == nil {
 		if pub, err := identityKey.PublicKey(); err == nil {
 			if data, err := pub.Serialize(); err == nil && len(data) >= 8 {
-				logf(logger, "sealed sender: trying ACI identity key fingerprint=%x", data[:8])
+				logf(logger, "sealed sender: trying identity key fingerprint=%x", data[:8])
 			}
 			pub.Destroy()
 		}
@@ -342,7 +342,7 @@ func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelop
 	}
 
 	// Step 1: Decrypt outer sealed sender layer → USMC (uses only identity key for ECDH).
-	usmc, err := libsignal.SealedSenderDecryptToUSMC(content, st)
+	usmc, err := libsignal.SealedSenderDecryptToUSMC(content, identityStore)
 	if err != nil {
 		return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt outer: %w", err)
 	}
@@ -408,7 +408,7 @@ func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelop
 			return nil, "", 0, nil, fmt.Errorf("sealed sender deserialize pre-key: %w", err)
 		}
 		defer preKeyMsg.Destroy()
-		plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
+		plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, identityStore, st, st, st)
 		if err != nil {
 			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt pre-key: %w", err)
@@ -422,7 +422,7 @@ func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelop
 			return nil, "", 0, nil, fmt.Errorf("sealed sender deserialize whisper: %w", err)
 		}
 		defer sigMsg.Destroy()
-		plaintext, err = libsignal.DecryptMessage(sigMsg, addr, st, st)
+		plaintext, err = libsignal.DecryptMessage(sigMsg, addr, st, identityStore)
 		if err != nil {
 			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt whisper: %w", err)
@@ -449,7 +449,7 @@ func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelop
 }
 
 // decryptCiphertextOrPreKey decrypts a PREKEY_BUNDLE or CIPHERTEXT envelope.
-func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, senderACI string, senderDevice uint32, st *store.Store, logger *log.Logger) ([]byte, error) {
+func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, senderACI string, senderDevice uint32, st *store.Store, identityStore libsignal.IdentityKeyStore, logger *log.Logger) ([]byte, error) {
 	addr, err := libsignal.NewAddress(senderACI, senderDevice)
 	if err != nil {
 		return nil, fmt.Errorf("create address: %w", err)
@@ -475,7 +475,7 @@ func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, send
 			logf(logger, "pre-key message version=%d", version)
 		}
 
-		return libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, st, st, st, st)
+		return libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, identityStore, st, st, st)
 
 	case proto.Envelope_CIPHERTEXT:
 		logf(logger, "decrypting ciphertext message")
@@ -485,7 +485,7 @@ func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, send
 		}
 		defer sigMsg.Destroy()
 
-		return libsignal.DecryptMessage(sigMsg, addr, st, st)
+		return libsignal.DecryptMessage(sigMsg, addr, st, identityStore)
 
 	default:
 		return nil, fmt.Errorf("unexpected envelope type: %v", envType)

@@ -29,7 +29,10 @@ func TestSendRetryReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(priv, 1)
+	defer priv.Destroy()
+	if err := st.SetIdentity(priv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a real ciphertext for the DecryptionErrorMessage.
 	// Use st as the session store so sendEncryptedMessage can find the session.
@@ -195,7 +198,10 @@ func TestHandleRetryReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(myPriv, 1)
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a session with the requester.
 	requesterPriv, err := libsignal.GeneratePrivateKey()

@@ -79,7 +79,7 @@ make deps-all            # build for all platforms
 
 ## Testing
 
-Always use `make test` to run tests — it sets the required `CGO_LDFLAGS_ALLOW` and `CGO_LDFLAGS` flags. Never run `go build` — always use `make test` to verify compilation.
+Always use `make test` to run tests — it sets the required `CGO_LDFLAGS_ALLOW` and `CGO_LDFLAGS` flags. Never run `go build` or `go test ./...` directly — always use `make test` to verify compilation and run tests.
 
 ## CGO callback pattern
 
@@ -89,6 +89,43 @@ Store interfaces (SessionStore, IdentityKeyStore, etc.) use CGO callbacks:
 2. C bridge functions in `bridge.c` unwrap by-value wrapper structs to raw pointers
 3. `pointer.go` provides a handle map for passing Go interfaces through C `void*`
 4. `memstore.go` has in-memory implementations for testing
+
+## FFI pointer lifecycle — preventing leaks
+
+Every libsignal FFI type (types with a `ptr *C.Signal...` field) holds a Rust-allocated pointer that **must** be explicitly freed via `Destroy()`. Go's GC does not free these — a missed Destroy is a silent memory leak.
+
+### Rules for working with FFI types
+
+1. **Prefer `[]byte` over FFI types in interfaces.** Store methods already accept `[]byte` for writes (StoreSession, StorePreKey, etc). When a function only needs serialized data, pass `[]byte` instead of an FFI wrapper. This eliminates the leak risk entirely.
+
+2. **Every FFI allocation must have a matching Destroy.** Any function that calls `Deserialize*`, `New*`, `Generate*`, or an accessor that returns a new FFI object (e.g. `PrivateKey.PublicKey()`, `KyberKeyPair.PublicKey()`, `USMC.GetSenderCert()`) creates a Rust allocation. The caller owns it.
+
+3. **Use `defer X.Destroy()` immediately after creation** when the object's lifetime matches the function scope. This is the safest pattern:
+   ```go
+   key, err := libsignal.DeserializePublicKey(data)
+   if err != nil { return err }
+   defer key.Destroy()
+   ```
+
+4. **For loop-scoped FFI objects, destroy before next iteration or use a cleanups slice:**
+   ```go
+   var cleanups []func()
+   defer func() { for _, fn := range cleanups { fn() } }()
+   for _, item := range items {
+       addr, _ := libsignal.NewAddress(item, 1)
+       cleanups = append(cleanups, addr.Destroy)
+   }
+   ```
+
+5. **When returning FFI types from a function, document that the caller must Destroy.** If possible, return `[]byte` (serialized) instead to avoid leak risk.
+
+6. **Never create new FFI wrapper types.** If you need new functionality, prefer functions that accept/return `[]byte`. Only add FFI wrapper types if the Rust FFI requires holding a pointer across multiple C calls.
+
+7. **CGO callback path is different.** In `callbacks.go`, Load callbacks (goLoadSession, etc.) create FFI objects and pass ownership to Rust via `recordp.raw = rec.ptr`. Rust destroys these — do NOT call Destroy on the Go side.
+
+### FFI leak detection
+
+The `ffitrack` build tag enables runtime leak detection. When enabled, every FFI allocation is tracked, and `runtime.SetFinalizer` logs a warning if an object is garbage-collected without `Destroy()` being called. See `internal/libsignal/ffitrack.go`.
 
 ## Logging convention
 
@@ -149,7 +186,8 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/signalservice/trustroot.go`    | Signal sealed sender trust root public keys                                                        |
 | `internal/libsignal/decryptionerror.go`  | DecryptionErrorMessage: CGO bindings for retry receipts                                            |
 | `internal/libsignal/plaintextcontent.go` | PlaintextContent: CGO bindings for unencrypted retry receipt delivery                              |
-| `internal/store/store.go`                | SQLite store: Open, Close, migrations, SetIdentity                                                 |
+| `internal/store/store.go`                | SQLite store: Open, Close, migrations, SetIdentity, SetPNIIdentity                                 |
+| `internal/store/pni.go`                  | PNIIdentityStore wrapper: returns PNI identity for GetIdentityKeyPair/GetLocalRegistrationID        |
 | `internal/store/account.go`              | Account CRUD (credentials persistence)                                                             |
 | `internal/store/session.go`              | SessionStore + ArchiveSession implementation                                                       |
 | `internal/store/identity.go`             | IdentityKeyStore implementation (TOFU)                                                             |

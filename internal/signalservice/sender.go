@@ -90,12 +90,8 @@ func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSign
 	}
 	defer aciPub.Destroy()
 
-	// Switch to PNI identity.
-	s.store.UsePNI(true)
-	defer s.store.UsePNI(false)
-
 	// Get PNI identity key pair.
-	pniPriv, err := s.store.GetIdentityKeyPair()
+	pniPriv, err := s.store.GetPNIIdentityKeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("get PNI identity: %w", err)
 	}

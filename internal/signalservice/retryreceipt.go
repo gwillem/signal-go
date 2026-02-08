@@ -170,12 +170,17 @@ func (s *Service) sendEncryptedMessageWithDevices(ctx context.Context, recipient
 
 // encryptAndSend performs a single encrypt-and-send attempt for the given device IDs.
 func (s *Service) encryptAndSend(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int) error {
-	return s.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, deviceIDs, uint64(time.Now().UnixMilli()))
+	return s.encryptAndSendWithIdentity(ctx, recipient, contentBytes, deviceIDs, uint64(time.Now().UnixMilli()), s.store)
 }
 
 // encryptAndSendWithTimestamp performs a single encrypt-and-send attempt with an explicit timestamp.
 // This is used for sync messages where the envelope timestamp must match the DataMessage timestamp.
 func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int, timestamp uint64) error {
+	return s.encryptAndSendWithIdentity(ctx, recipient, contentBytes, deviceIDs, timestamp, s.store)
+}
+
+// encryptAndSendWithIdentity performs a single encrypt-and-send attempt using the given identity store.
+func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int, timestamp uint64, identityStore libsignal.IdentityKeyStore) error {
 	now := time.Now()
 
 	// Add Signal transport padding before encryption.
@@ -228,7 +233,7 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 				return fmt.Errorf("send: build pre-key bundle for device %d: %w", deviceID, err)
 			}
 
-			if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, s.store, now); err != nil {
+			if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, identityStore, now); err != nil {
 				bundle.Destroy()
 				addr.Destroy()
 				return fmt.Errorf("send: process pre-key bundle for device %d: %w", deviceID, err)
@@ -245,7 +250,7 @@ func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient str
 			registrationID = int(regID)
 		}
 
-		ciphertext, err := libsignal.Encrypt(paddedContent, addr, s.store, s.store, now)
+		ciphertext, err := libsignal.Encrypt(paddedContent, addr, s.store, identityStore, now)
 		addr.Destroy()
 		if err != nil {
 			return fmt.Errorf("send: encrypt for device %d: %w", deviceID, err)

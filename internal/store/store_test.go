@@ -275,9 +275,11 @@ func TestIdentityKeyStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Don't defer Destroy — SetIdentity takes ownership.
+	defer priv.Destroy()
 
-	s.SetIdentity(priv, 42)
+	if err := s.SetIdentity(priv, 42); err != nil {
+		t.Fatal(err)
+	}
 
 	// GetIdentityKeyPair.
 	got, err := s.GetIdentityKeyPair()
@@ -514,7 +516,10 @@ func TestArchiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.SetIdentity(identityPriv, 1)
+	defer identityPriv.Destroy()
+	if err := s.SetIdentity(identityPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	bobPriv, err := libsignal.GeneratePrivateKey()
 	if err != nil {

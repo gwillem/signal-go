@@ -179,8 +179,10 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// SetIdentity takes ownership.
-	st.SetIdentity(alicePriv, 1)
+	defer alicePriv.Destroy()
+	if err := st.SetIdentity(alicePriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
 
@@ -319,8 +321,10 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	}
 	defer st.Close()
 
-	// SetIdentity takes ownership.
-	st.SetIdentity(alicePriv, 1)
+	defer alicePriv.Destroy()
+	if err := st.SetIdentity(alicePriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Establish session via pre-key bundle.
 	bobSPKPriv, err := libsignal.GeneratePrivateKey()
@@ -529,7 +533,10 @@ func TestSendSessionReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(myPriv, 1)
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
 	svc := newSenderTestService(t, st, srv.URL, auth)
@@ -723,7 +730,10 @@ func TestSendToSelf409ThenRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(myPriv, 1)
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
 	svc := newSenderTestService(t, st, srv.URL, auth)
@@ -832,7 +842,10 @@ func TestSend410ThenRetrySucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(myPriv, 1)
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
 	svc := newSenderTestService(t, st, srv.URL, auth)
@@ -985,7 +998,10 @@ func TestSend410OnlyArchivesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(myPriv, 1)
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Device 4 = our device (like the production user).
 	auth := BasicAuth{Username: "self-aci.4", Password: "pass"}
@@ -1089,7 +1105,10 @@ func TestSend409PersistsDefaultDevice1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(myPriv, 1)
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify no devices cached initially.
 	devices, _ := st.GetDevices("recip-aci")
@@ -1240,7 +1259,10 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.SetIdentity(myPriv, 1)
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	// Pre-populate device cache with devices 1 and 2.
 	_ = st.SetDevices("recip-aci", []int{1, 2})

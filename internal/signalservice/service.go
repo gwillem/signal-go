@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/store"
@@ -458,6 +459,27 @@ func (s *Service) SendTextMessage(ctx context.Context, recipient, text string) e
 		return s.SendGroupMessage(ctx, recipient, text)
 	}
 	return s.sendTextMessage(ctx, recipient, text)
+}
+
+// SendTextMessageWithIdentity sends a text message using the given identity store
+// for encryption. Use this when a non-default identity (e.g. PNI) is needed.
+func (s *Service) SendTextMessageWithIdentity(ctx context.Context, recipient, text string, identityStore libsignal.IdentityKeyStore) error {
+	timestamp := uint64(time.Now().UnixMilli())
+
+	contentBytes, err := s.buildDataMessageContent(text, timestamp)
+	if err != nil {
+		return err
+	}
+
+	dumpContent(s.debugDir, "send", recipient, timestamp, contentBytes, s.logger)
+
+	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, nil)
+	if err != nil {
+		return err
+	}
+	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return s.encryptAndSendWithIdentity(ctx, recipient, contentBytes, devices, timestamp, identityStore)
+	})
 }
 
 // isGroupID returns true if s looks like a group ID (64 hex characters = 32 bytes).

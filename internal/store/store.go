@@ -15,18 +15,18 @@ import (
 // Store wraps a SQLite database and implements all libsignal store interfaces
 // plus account credential management.
 type Store struct {
-	db              *sql.DB
-	identityKeyPair *libsignal.PrivateKey // cached ACI identity from account table
-	registrationID  uint32                // cached ACI registration ID from account table
-	pniKeyPair      *libsignal.PrivateKey // cached PNI identity from account table
-	pniRegID        uint32                // cached PNI registration ID from account table
-	usePNI          bool                  // if true, use PNI identity for operations
+	db               *sql.DB
+	identityKeyBytes []byte // cached serialized ACI identity key from account table
+	registrationID   uint32 // cached ACI registration ID from account table
+	pniKeyBytes      []byte // cached serialized PNI identity key from account table
+	pniRegID         uint32 // cached PNI registration ID from account table
 }
 
 // Compile-time interface checks.
 var (
 	_ libsignal.SessionStore      = (*Store)(nil)
 	_ libsignal.IdentityKeyStore  = (*Store)(nil)
+	_ libsignal.IdentityKeyStore  = (*PNIIdentityStore)(nil)
 	_ libsignal.PreKeyStore       = (*Store)(nil)
 	_ libsignal.SignedPreKeyStore = (*Store)(nil)
 	_ libsignal.KyberPreKeyStore  = (*Store)(nil)
@@ -196,27 +196,29 @@ func isColumnExistsError(err error) bool {
 
 // Close closes the database connection.
 func (s *Store) Close() error {
-	if s.identityKeyPair != nil {
-		s.identityKeyPair.Destroy()
-		s.identityKeyPair = nil
-	}
 	return s.db.Close()
 }
 
 // SetIdentity sets the local ACI identity key pair and registration ID.
-// These are cached in memory and used by IdentityKeyStore methods.
-func (s *Store) SetIdentity(keyPair *libsignal.PrivateKey, registrationID uint32) {
-	s.identityKeyPair = keyPair
+// The key is serialized to bytes for storage; the caller retains ownership of keyPair.
+func (s *Store) SetIdentity(keyPair *libsignal.PrivateKey, registrationID uint32) error {
+	data, err := keyPair.Serialize()
+	if err != nil {
+		return fmt.Errorf("store: serialize ACI identity key: %w", err)
+	}
+	s.identityKeyBytes = data
 	s.registrationID = registrationID
+	return nil
 }
 
 // SetPNIIdentity sets the local PNI identity key pair and registration ID.
-func (s *Store) SetPNIIdentity(keyPair *libsignal.PrivateKey, registrationID uint32) {
-	s.pniKeyPair = keyPair
+// The key is serialized to bytes for storage; the caller retains ownership of keyPair.
+func (s *Store) SetPNIIdentity(keyPair *libsignal.PrivateKey, registrationID uint32) error {
+	data, err := keyPair.Serialize()
+	if err != nil {
+		return fmt.Errorf("store: serialize PNI identity key: %w", err)
+	}
+	s.pniKeyBytes = data
 	s.pniRegID = registrationID
-}
-
-// UsePNI switches the store to use PNI identity for subsequent operations.
-func (s *Store) UsePNI(use bool) {
-	s.usePNI = use
+	return nil
 }

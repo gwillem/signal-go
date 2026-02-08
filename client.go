@@ -222,7 +222,10 @@ func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 	if err != nil {
 		return fmt.Errorf("client: deserialize identity key: %w", err)
 	}
-	c.store.SetIdentity(aciPriv, uint32(reg.RegistrationID))
+	defer aciPriv.Destroy()
+	if err := c.store.SetIdentity(aciPriv, uint32(reg.RegistrationID)); err != nil {
+		return fmt.Errorf("client: set identity: %w", err)
+	}
 
 	return c.saveAccount()
 }
@@ -265,7 +268,10 @@ func (c *Client) Register(
 	if err != nil {
 		return fmt.Errorf("client: deserialize identity key: %w", err)
 	}
-	c.store.SetIdentity(aciPriv, uint32(reg.RegistrationID))
+	defer aciPriv.Destroy()
+	if err := c.store.SetIdentity(aciPriv, uint32(reg.RegistrationID)); err != nil {
+		return fmt.Errorf("client: set identity: %w", err)
+	}
 
 	// Save account with locally generated identity keys and profile key.
 	acct := &store.Account{
@@ -330,16 +336,6 @@ func (c *Client) Load() error {
 	if err != nil {
 		return fmt.Errorf("client: deserialize identity key: %w", err)
 	}
-	c.store.SetIdentity(identityPriv, uint32(acct.RegistrationID))
-
-	// Set up PNI identity key for the store (if available).
-	if len(acct.PNIIdentityKeyPrivate) > 0 {
-		pniPriv, err := libsignal.DeserializePrivateKey(acct.PNIIdentityKeyPrivate)
-		if err != nil {
-			return fmt.Errorf("client: deserialize PNI identity key: %w", err)
-		}
-		c.store.SetPNIIdentity(pniPriv, uint32(acct.PNIRegistrationID))
-	}
 
 	// Log identity key fingerprint for debugging.
 	if c.logger != nil {
@@ -349,6 +345,25 @@ func (c *Client) Load() error {
 			}
 			pub.Destroy()
 		}
+	}
+
+	if err := c.store.SetIdentity(identityPriv, uint32(acct.RegistrationID)); err != nil {
+		identityPriv.Destroy()
+		return fmt.Errorf("client: set identity: %w", err)
+	}
+	identityPriv.Destroy()
+
+	// Set up PNI identity key for the store (if available).
+	if len(acct.PNIIdentityKeyPrivate) > 0 {
+		pniPriv, err := libsignal.DeserializePrivateKey(acct.PNIIdentityKeyPrivate)
+		if err != nil {
+			return fmt.Errorf("client: deserialize PNI identity key: %w", err)
+		}
+		if err := c.store.SetPNIIdentity(pniPriv, uint32(acct.PNIRegistrationID)); err != nil {
+			pniPriv.Destroy()
+			return fmt.Errorf("client: set PNI identity: %w", err)
+		}
+		pniPriv.Destroy()
 	}
 
 	c.initService()
@@ -518,13 +533,8 @@ func (c *Client) sendInternal(ctx context.Context, recipient string, text string
 	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-	// Note: Server only accepts ACI for authentication, not PNI.
-	// When usePNI=true, we use PNI identity for encryption but ACI for auth.
-	// This creates a mismatch that recipients may not handle correctly.
-	// The proper solution is sealed sender (not yet implemented).
 	if usePNI {
-		c.store.UsePNI(true)
-		defer c.store.UsePNI(false)
+		return c.service.SendTextMessageWithIdentity(ctx, recipient, text, c.store.PNI())
 	}
 	return c.service.SendTextMessage(ctx, recipient, text)
 }
