@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"math"
 	"time"
 
@@ -14,14 +15,27 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-// sendTextMessage sends a text message to a recipient. It handles session
-// establishment (fetching pre-keys if needed), encryption, and HTTP delivery.
-// Automatically retries on 410 (stale devices).
-// If debugDir is non-empty, the Content protobuf is dumped before encryption.
+// Sender handles encrypting and delivering Signal messages. It operates
+// against store interfaces and uses callbacks for HTTP operations.
+type Sender struct {
+	dataStore     senderDataStore
+	cryptoStore   senderCryptoStore
+	logger        *log.Logger
+	debugDir      string
+	localACI      string
+	localDeviceID int
+
+	// Callbacks for HTTP operations (provided by Service).
+	getPreKeys           func(ctx context.Context, recipient string, deviceID int) (*PreKeyResponse, error)
+	sendHTTPMessage      func(ctx context.Context, destination string, msg *outgoingMessageList) error
+	sendSealedHTTPMsg    func(ctx context.Context, destination string, msg *outgoingMessageList, accessKey []byte) error
+	getSenderCertificate func(ctx context.Context) ([]byte, error)
+}
+
 // buildDataMessageContent builds a Content protobuf containing a DataMessage with the given
 // text, timestamp, profile key, and optionally a PNI signature. Returns the marshalled bytes.
-func (s *Service) buildDataMessageContent(text string, timestamp uint64) ([]byte, error) {
-	acct, err := s.store.LoadAccount()
+func (snd *Sender) buildDataMessageContent(text string, timestamp uint64) ([]byte, error) {
+	acct, err := snd.dataStore.LoadAccount()
 	if err != nil {
 		return nil, fmt.Errorf("sender: load account: %w", err)
 	}
@@ -47,39 +61,60 @@ func (s *Service) buildDataMessageContent(text string, timestamp uint64) ([]byte
 	}
 
 	// Include PNI signature to help recipients link our ACI and PNI identities.
-	pniSig, err := s.createPniSignatureMessage(acct)
+	pniSig, err := snd.createPniSignatureMessage(acct)
 	if err != nil {
-		logf(s.logger, "sender: failed to create PNI signature (continuing without): %v", err)
+		logf(snd.logger, "sender: failed to create PNI signature (continuing without): %v", err)
 	} else if pniSig != nil {
 		content.PniSignatureMessage = pniSig
-		logf(s.logger, "sender: including PNI signature in message")
+		logf(snd.logger, "sender: including PNI signature in message")
 	}
 
 	return pb.Marshal(content)
 }
 
-func (s *Service) sendTextMessage(ctx context.Context, recipient string, text string) error {
+func (snd *Sender) sendTextMessage(ctx context.Context, recipient string, text string) error {
 	timestamp := uint64(time.Now().UnixMilli())
 
-	contentBytes, err := s.buildDataMessageContent(text, timestamp)
+	contentBytes, err := snd.buildDataMessageContent(text, timestamp)
 	if err != nil {
 		return err
 	}
 
-	dumpContent(s.debugDir, "send", recipient, timestamp, contentBytes, s.logger)
+	dumpContent(snd.debugDir, "send", recipient, timestamp, contentBytes, snd.logger)
 
-	return s.sendEncryptedMessage(ctx, recipient, contentBytes)
+	return snd.sendEncryptedMessage(ctx, recipient, contentBytes)
+}
+
+// sendTextMessageWithIdentity sends a text message using the given identity store
+// for encryption. Use this when a non-default identity (e.g. PNI) is needed.
+func (snd *Sender) sendTextMessageWithIdentity(ctx context.Context, recipient, text string, identityStore libsignal.IdentityKeyStore) error {
+	timestamp := uint64(time.Now().UnixMilli())
+
+	contentBytes, err := snd.buildDataMessageContent(text, timestamp)
+	if err != nil {
+		return err
+	}
+
+	dumpContent(snd.debugDir, "send", recipient, timestamp, contentBytes, snd.logger)
+
+	deviceIDs, skipDevice, err := snd.prepareSendDevices(recipient, nil)
+	if err != nil {
+		return err
+	}
+	return snd.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return snd.encryptAndSendWithIdentity(ctx, recipient, contentBytes, devices, timestamp, identityStore)
+	})
 }
 
 // createPniSignatureMessage creates a PniSignatureMessage that proves our ACI and PNI
 // identities belong to the same account. The PNI identity key signs the ACI public key.
-func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSignatureMessage, error) {
+func (snd *Sender) createPniSignatureMessage(acct *store.Account) (*proto.PniSignatureMessage, error) {
 	if acct == nil || acct.PNI == "" {
 		return nil, nil // No PNI available
 	}
 
 	// Get ACI identity public key.
-	aciPriv, err := s.store.GetIdentityKeyPair()
+	aciPriv, err := snd.cryptoStore.GetIdentityKeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("get ACI identity: %w", err)
 	}
@@ -91,7 +126,7 @@ func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSign
 	defer aciPub.Destroy()
 
 	// Get PNI identity key pair.
-	pniPriv, err := s.store.GetPNIIdentityKeyPair()
+	pniPriv, err := snd.dataStore.GetPNIIdentityKeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("get PNI identity: %w", err)
 	}
@@ -126,6 +161,174 @@ func (s *Service) createPniSignatureMessage(acct *store.Account) (*proto.PniSign
 	}, nil
 }
 
+// sendSealedSenderMessage sends a text message using sealed sender (UNIDENTIFIED_SENDER).
+// This hides the sender's identity from the server. Requires:
+// - Recipient has a profile key stored (for deriving unidentified access key)
+// - Recipient allows unidentified senders
+func (snd *Sender) sendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
+	timestamp := uint64(time.Now().UnixMilli())
+
+	contentBytes, err := snd.buildDataMessageContent(text, timestamp)
+	if err != nil {
+		return err
+	}
+
+	// Step 1: Get sender certificate from server
+	senderCertBytes, err := snd.getSenderCertificate(ctx)
+	if err != nil {
+		return fmt.Errorf("sealed sender: get sender certificate: %w", err)
+	}
+
+	senderCert, err := libsignal.DeserializeSenderCertificate(senderCertBytes)
+	if err != nil {
+		return fmt.Errorf("sealed sender: deserialize sender certificate: %w", err)
+	}
+	defer senderCert.Destroy()
+
+	logf(snd.logger, "sealed sender: got sender certificate")
+
+	// Step 2: Get recipient's profile key to derive the access key
+	// Step 3: Derive unidentified access key from recipient's profile key.
+	accessKey, err := deriveAccessKeyForRecipient(snd.dataStore, recipient)
+	if err != nil {
+		return fmt.Errorf("sealed sender: %w", err)
+	}
+
+	logf(snd.logger, "sealed sender: derived access key from profile key")
+
+	// Step 4: Encrypt and send using sealed sender
+	return snd.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
+}
+
+// sendSealedEncrypted encrypts content with sealed sender and sends it.
+// Handles 409 (device mismatch) and 410 (stale sessions) with retry.
+func (snd *Sender) sendSealedEncrypted(ctx context.Context, recipient string,
+	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
+) error {
+	paddedContent := padMessage(contentBytes)
+
+	deviceIDs, _ := snd.initialDevices(recipient, false)
+
+	return snd.withDeviceRetry(recipient, deviceIDs, 0, func(devices []int) error {
+		return snd.trySendSealed(ctx, recipient, paddedContent, senderCert, accessKey, devices)
+	})
+}
+
+// trySendSealed encrypts and sends sealed sender messages to the given devices.
+func (snd *Sender) trySendSealed(ctx context.Context, recipient string,
+	paddedContent []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
+	deviceIDs []int,
+) error {
+	now := time.Now()
+	timestamp := uint64(now.UnixMilli())
+
+	var messages []outgoingMessage
+
+	for _, deviceID := range deviceIDs {
+		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
+		if err != nil {
+			return fmt.Errorf("sealed sender: create address: %w", err)
+		}
+
+		// Establish session if needed
+		session, err := snd.cryptoStore.LoadSession(addr)
+		if err != nil {
+			addr.Destroy()
+			return fmt.Errorf("sealed sender: load session: %w", err)
+		}
+
+		var registrationID int
+
+		if session == nil {
+			// Fetch pre-keys and establish session
+			preKeyResp, err := snd.getPreKeys(ctx, recipient, deviceID)
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: get pre-keys: %w", err)
+			}
+			if len(preKeyResp.Devices) == 0 {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: no devices in pre-key response")
+			}
+
+			dev := preKeyResp.Devices[0]
+			registrationID = dev.RegistrationID
+
+			bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, dev)
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: build pre-key bundle: %w", err)
+			}
+
+			if err := libsignal.ProcessPreKeyBundle(bundle, addr, snd.cryptoStore, snd.cryptoStore, now); err != nil {
+				bundle.Destroy()
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: process pre-key bundle: %w", err)
+			}
+			bundle.Destroy()
+		} else {
+			regID, err := session.RemoteRegistrationID()
+			session.Destroy()
+			if err != nil {
+				addr.Destroy()
+				return fmt.Errorf("sealed sender: get registration id: %w", err)
+			}
+			registrationID = int(regID)
+		}
+
+		// Encrypt the inner message
+		ciphertext, err := libsignal.Encrypt(paddedContent, addr, snd.cryptoStore, snd.cryptoStore, now)
+		if err != nil {
+			addr.Destroy()
+			return fmt.Errorf("sealed sender: encrypt: %w", err)
+		}
+
+		// Capture ciphertext type before destroying (for diagnostics)
+		innerType, _ := ciphertext.Type()
+
+		// Create USMC wrapping the encrypted message with sender certificate
+		usmc, err := libsignal.NewUnidentifiedSenderMessageContent(
+			ciphertext,
+			senderCert,
+			libsignal.ContentHintResendable,
+			nil, // no group ID for 1:1 messages
+		)
+		ciphertext.Destroy()
+		if err != nil {
+			addr.Destroy()
+			return fmt.Errorf("sealed sender: create USMC: %w", err)
+		}
+
+		// Seal the message (encrypt outer layer with recipient's identity key)
+		sealed, err := libsignal.SealedSenderEncrypt(addr, usmc, snd.cryptoStore)
+		usmc.Destroy()
+		addr.Destroy()
+		if err != nil {
+			return fmt.Errorf("sealed sender: seal: %w", err)
+		}
+
+		messages = append(messages, outgoingMessage{
+			Type:                      proto.Envelope_UNIDENTIFIED_SENDER,
+			DestinationDeviceID:       deviceID,
+			DestinationRegistrationID: registrationID,
+			Content:                   base64.StdEncoding.EncodeToString(sealed),
+		})
+
+		logf(snd.logger, "sealed sender: prepared message for device %d (inner type=%d, PreKey=%v)", deviceID, innerType, innerType == libsignal.CiphertextMessageTypePreKey)
+	}
+
+	// Send via sealed sender endpoint
+	msgList := &outgoingMessageList{
+		Destination: recipient,
+		Timestamp:   timestamp,
+		Messages:    messages,
+		Urgent:      true,
+	}
+
+	logf(snd.logger, "sealed sender: sending to %s (%d devices)", recipient, len(messages))
+
+	return snd.sendSealedHTTPMsg(ctx, recipient, msgList, accessKey)
+}
 
 // envelopeTypeForCiphertext maps libsignal CiphertextMessage types to Signal
 // server envelope types. These are different numbering schemes:
@@ -248,173 +451,4 @@ func buildPreKeyBundle(identityKeyB64 string, dev PreKeyDeviceInfo) (*libsignal.
 		identityKey,
 		kyberPreKeyID, kyberPub, kyberSig,
 	)
-}
-
-// sendSealedSenderMessage sends a text message using sealed sender (UNIDENTIFIED_SENDER).
-// This hides the sender's identity from the server. Requires:
-// - Recipient has a profile key stored (for deriving unidentified access key)
-// - Recipient allows unidentified senders
-func (s *Service) SendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
-	timestamp := uint64(time.Now().UnixMilli())
-
-	contentBytes, err := s.buildDataMessageContent(text, timestamp)
-	if err != nil {
-		return err
-	}
-
-	// Step 1: Get sender certificate from server
-	senderCertBytes, err := s.GetSenderCertificate(ctx)
-	if err != nil {
-		return fmt.Errorf("sealed sender: get sender certificate: %w", err)
-	}
-
-	senderCert, err := libsignal.DeserializeSenderCertificate(senderCertBytes)
-	if err != nil {
-		return fmt.Errorf("sealed sender: deserialize sender certificate: %w", err)
-	}
-	defer senderCert.Destroy()
-
-	logf(s.logger, "sealed sender: got sender certificate")
-
-	// Step 2: Get recipient's profile key to derive the access key
-	// Step 3: Derive unidentified access key from recipient's profile key.
-	accessKey, err := deriveAccessKeyForRecipient(s.store, recipient)
-	if err != nil {
-		return fmt.Errorf("sealed sender: %w", err)
-	}
-
-	logf(s.logger, "sealed sender: derived access key from profile key")
-
-	// Step 4: Encrypt and send using sealed sender
-	return s.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
-}
-
-// sendSealedEncrypted encrypts content with sealed sender and sends it.
-// Handles 409 (device mismatch) and 410 (stale sessions) with retry.
-func (s *Service) sendSealedEncrypted(ctx context.Context, recipient string,
-	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
-) error {
-	paddedContent := padMessage(contentBytes)
-
-	deviceIDs, _ := s.initialDevices(recipient, false)
-
-	return s.withDeviceRetry(recipient, deviceIDs, 0, func(devices []int) error {
-		return s.trySendSealed(ctx, recipient, paddedContent, senderCert, accessKey, devices)
-	})
-}
-
-// trySendSealed encrypts and sends sealed sender messages to the given devices.
-func (s *Service) trySendSealed(ctx context.Context, recipient string,
-	paddedContent []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
-	deviceIDs []int,
-) error {
-	now := time.Now()
-	timestamp := uint64(now.UnixMilli())
-
-	var messages []outgoingMessage
-
-	for _, deviceID := range deviceIDs {
-		addr, err := libsignal.NewAddress(recipient, uint32(deviceID))
-		if err != nil {
-			return fmt.Errorf("sealed sender: create address: %w", err)
-		}
-
-		// Establish session if needed
-		session, err := s.store.LoadSession(addr)
-		if err != nil {
-			addr.Destroy()
-			return fmt.Errorf("sealed sender: load session: %w", err)
-		}
-
-		var registrationID int
-
-		if session == nil {
-			// Fetch pre-keys and establish session
-			preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
-			if err != nil {
-				addr.Destroy()
-				return fmt.Errorf("sealed sender: get pre-keys: %w", err)
-			}
-			if len(preKeyResp.Devices) == 0 {
-				addr.Destroy()
-				return fmt.Errorf("sealed sender: no devices in pre-key response")
-			}
-
-			dev := preKeyResp.Devices[0]
-			registrationID = dev.RegistrationID
-
-			bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, dev)
-			if err != nil {
-				addr.Destroy()
-				return fmt.Errorf("sealed sender: build pre-key bundle: %w", err)
-			}
-
-			if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, s.store, now); err != nil {
-				bundle.Destroy()
-				addr.Destroy()
-				return fmt.Errorf("sealed sender: process pre-key bundle: %w", err)
-			}
-			bundle.Destroy()
-		} else {
-			regID, err := session.RemoteRegistrationID()
-			session.Destroy()
-			if err != nil {
-				addr.Destroy()
-				return fmt.Errorf("sealed sender: get registration id: %w", err)
-			}
-			registrationID = int(regID)
-		}
-
-		// Encrypt the inner message
-		ciphertext, err := libsignal.Encrypt(paddedContent, addr, s.store, s.store, now)
-		if err != nil {
-			addr.Destroy()
-			return fmt.Errorf("sealed sender: encrypt: %w", err)
-		}
-
-		// Capture ciphertext type before destroying (for diagnostics)
-		innerType, _ := ciphertext.Type()
-
-		// Create USMC wrapping the encrypted message with sender certificate
-		usmc, err := libsignal.NewUnidentifiedSenderMessageContent(
-			ciphertext,
-			senderCert,
-			libsignal.ContentHintResendable,
-			nil, // no group ID for 1:1 messages
-		)
-		ciphertext.Destroy()
-		if err != nil {
-			addr.Destroy()
-			return fmt.Errorf("sealed sender: create USMC: %w", err)
-		}
-
-		// Seal the message (encrypt outer layer with recipient's identity key)
-		sealed, err := libsignal.SealedSenderEncrypt(addr, usmc, s.store)
-		usmc.Destroy()
-		addr.Destroy()
-		if err != nil {
-			return fmt.Errorf("sealed sender: seal: %w", err)
-		}
-
-		messages = append(messages, outgoingMessage{
-			Type:                      proto.Envelope_UNIDENTIFIED_SENDER,
-			DestinationDeviceID:       deviceID,
-			DestinationRegistrationID: registrationID,
-			Content:                   base64.StdEncoding.EncodeToString(sealed),
-		})
-
-		logf(s.logger, "sealed sender: prepared message for device %d (inner type=%d, PreKey=%v)", deviceID, innerType, innerType == libsignal.CiphertextMessageTypePreKey)
-	}
-
-	// Send via sealed sender endpoint
-	msgList := &outgoingMessageList{
-		Destination: recipient,
-		Timestamp:   timestamp,
-		Messages:    messages,
-		Urgent:      true,
-	}
-
-	logf(s.logger, "sealed sender: sending to %s (%d devices)", recipient, len(messages))
-
-	return s.SendSealedMessage(ctx, recipient, msgList, accessKey)
 }

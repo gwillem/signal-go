@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"sync/atomic"
-	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/signalcrypto"
@@ -21,6 +20,7 @@ import (
 type Service struct {
 	transport     *Transport
 	store         *store.Store
+	sender        *Sender
 	auth          BasicAuth
 	localACI      string
 	localDeviceID int
@@ -46,7 +46,7 @@ type ServiceConfig struct {
 
 // NewService creates a new Signal API service.
 func NewService(cfg ServiceConfig) *Service {
-	return &Service{
+	s := &Service{
 		transport:     NewTransport(cfg.APIURL, cfg.TLSConfig, cfg.Logger),
 		store:         cfg.Store,
 		auth:          cfg.Auth,
@@ -57,6 +57,20 @@ func NewService(cfg ServiceConfig) *Service {
 		logger:        cfg.Logger,
 		debugDir:      cfg.DebugDir,
 	}
+	s.sender = &Sender{
+		dataStore:     cfg.Store,
+		cryptoStore:   cfg.Store,
+		logger:        cfg.Logger,
+		debugDir:      cfg.DebugDir,
+		localACI:      cfg.LocalACI,
+		localDeviceID: cfg.LocalDeviceID,
+	}
+	// Wire HTTP callbacks after both Service and Sender are constructed.
+	s.sender.getPreKeys = s.GetPreKeys
+	s.sender.sendHTTPMessage = s.SendMessage
+	s.sender.sendSealedHTTPMsg = s.SendSealedMessage
+	s.sender.getSenderCertificate = s.GetSenderCertificate
+	return s
 }
 
 
@@ -459,28 +473,52 @@ func (s *Service) SendTextMessage(ctx context.Context, recipient, text string) e
 	if isGroupID(recipient) {
 		return s.SendGroupMessage(ctx, recipient, text)
 	}
-	return s.sendTextMessage(ctx, recipient, text)
+	return s.sender.sendTextMessage(ctx, recipient, text)
+}
+
+// SendSealedSenderMessage sends a text message using sealed sender.
+func (s *Service) SendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
+	return s.sender.sendSealedSenderMessage(ctx, recipient, text)
 }
 
 // SendTextMessageWithIdentity sends a text message using the given identity store
 // for encryption. Use this when a non-default identity (e.g. PNI) is needed.
 func (s *Service) SendTextMessageWithIdentity(ctx context.Context, recipient, text string, identityStore libsignal.IdentityKeyStore) error {
-	timestamp := uint64(time.Now().UnixMilli())
+	return s.sender.sendTextMessageWithIdentity(ctx, recipient, text, identityStore)
+}
 
-	contentBytes, err := s.buildDataMessageContent(text, timestamp)
-	if err != nil {
-		return err
-	}
+// --- Sender proxy methods for code that still lives on Service (groupsender, contactsync) ---
 
-	dumpContent(s.debugDir, "send", recipient, timestamp, contentBytes, s.logger)
+func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, contentBytes []byte) error {
+	return s.sender.sendEncryptedMessage(ctx, recipient, contentBytes)
+}
 
-	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, nil)
-	if err != nil {
-		return err
-	}
-	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
-		return s.encryptAndSendWithIdentity(ctx, recipient, contentBytes, devices, timestamp, identityStore)
-	})
+func (s *Service) sendEncryptedMessageWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
+	return s.sender.sendEncryptedMessageWithTimestamp(ctx, recipient, contentBytes, timestamp)
+}
+
+func (s *Service) sendSealedEncrypted(ctx context.Context, recipient string,
+	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
+) error {
+	return s.sender.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
+}
+
+func (s *Service) initialDevices(recipient string, sendingToSelf bool) ([]int, int) {
+	return s.sender.initialDevices(recipient, sendingToSelf)
+}
+
+func (s *Service) withDeviceRetry(recipient string, deviceIDs []int, skipDevice int, tryFn func([]int) error) error {
+	return s.sender.withDeviceRetry(recipient, deviceIDs, skipDevice, tryFn)
+}
+
+// sendRetryReceipt delegates to sender (used as callback for Receiver).
+func (s *Service) sendRetryReceipt(ctx context.Context, senderACI string, senderDevice uint32, content []byte, msgType uint8, timestamp uint64) error {
+	return s.sender.sendRetryReceipt(ctx, senderACI, senderDevice, content, msgType, timestamp)
+}
+
+// handleRetryReceipt delegates to sender (used as callback for Receiver).
+func (s *Service) handleRetryReceipt(ctx context.Context, requesterACI string, requesterDevice uint32) error {
+	return s.sender.handleRetryReceipt(ctx, requesterACI, requesterDevice)
 }
 
 // isGroupID returns true if s looks like a group ID (64 hex characters = 32 bytes).

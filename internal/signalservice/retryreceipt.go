@@ -18,7 +18,7 @@ import (
 // message we could not decrypt. The DEM is placed in Content.decryptionErrorMessage
 // and sent as a regular encrypted message. This lets sendEncryptedMessage handle
 // session establishment, device discovery, and registration IDs automatically.
-func (s *Service) sendRetryReceipt(ctx context.Context,
+func (snd *Sender) sendRetryReceipt(ctx context.Context,
 	senderACI string, senderDevice uint32,
 	originalContent []byte, originalType uint8, originalTimestamp uint64,
 ) error {
@@ -41,17 +41,17 @@ func (s *Service) sendRetryReceipt(ctx context.Context,
 		return fmt.Errorf("retry receipt: marshal content: %w", err)
 	}
 
-	return s.sendEncryptedMessage(ctx, senderACI, contentBytes)
+	return snd.sendEncryptedMessage(ctx, senderACI, contentBytes)
 }
 
 // handleRetryReceipt processes an incoming retry receipt (DecryptionErrorMessage)
 // from a peer who couldn't decrypt our message. It archives the broken session
 // and sends a null message to establish a fresh session.
-func (s *Service) handleRetryReceipt(ctx context.Context,
+func (snd *Sender) handleRetryReceipt(ctx context.Context,
 	requesterACI string, requesterDevice uint32,
 ) error {
 	// Archive the broken session.
-	if err := s.store.ArchiveSession(requesterACI, requesterDevice); err != nil {
+	if err := snd.dataStore.ArchiveSession(requesterACI, requesterDevice); err != nil {
 		return fmt.Errorf("handle retry: archive session: %w", err)
 	}
 
@@ -61,17 +61,17 @@ func (s *Service) handleRetryReceipt(ctx context.Context,
 	if requesterDevice != 1 {
 		initialDevices = append(initialDevices, int(requesterDevice))
 	}
-	return s.sendNullMessageWithDevices(ctx, requesterACI, initialDevices)
+	return snd.sendNullMessageWithDevices(ctx, requesterACI, initialDevices)
 }
 
 // sendNullMessageWithDevices sends a NullMessage starting with the given device list.
 // Used for retry receipt handling where we know some devices upfront.
-func (s *Service) sendNullMessageWithDevices(ctx context.Context, recipient string, initialDevices []int) error {
+func (snd *Sender) sendNullMessageWithDevices(ctx context.Context, recipient string, initialDevices []int) error {
 	contentBytes, err := makeNullMessageContent()
 	if err != nil {
 		return err
 	}
-	return s.sendEncryptedMessageWithDevices(ctx, recipient, initialDevices, contentBytes)
+	return snd.sendEncryptedMessageWithDevices(ctx, recipient, initialDevices, contentBytes)
 }
 
 // nullMessagePaddingSize matches Signal-Android's NullMessage padding length
@@ -100,30 +100,30 @@ func makeNullMessageContent() ([]byte, error) {
 // prepareSendDevices resolves the device list for a recipient, filtering out
 // the local device when sending to self. If providedDevices is non-nil, it
 // uses that list (filtered); otherwise it loads from the store.
-func (s *Service) prepareSendDevices(recipient string, providedDevices []int) (deviceIDs []int, skipDevice int, err error) {
-	sendingToSelf := recipient == s.localACI
+func (snd *Sender) prepareSendDevices(recipient string, providedDevices []int) (deviceIDs []int, skipDevice int, err error) {
+	sendingToSelf := recipient == snd.localACI
 
 	if providedDevices != nil {
 		deviceIDs = make([]int, 0, len(providedDevices))
 		for _, d := range providedDevices {
-			if !sendingToSelf || d != s.localDeviceID {
+			if !sendingToSelf || d != snd.localDeviceID {
 				deviceIDs = append(deviceIDs, d)
 			}
 		}
 		if sendingToSelf {
-			skipDevice = s.localDeviceID
+			skipDevice = snd.localDeviceID
 		}
 	} else {
-		deviceIDs, skipDevice = s.initialDevices(recipient, sendingToSelf)
+		deviceIDs, skipDevice = snd.initialDevices(recipient, sendingToSelf)
 	}
 
 	if len(deviceIDs) == 0 {
 		if sendingToSelf {
-			return nil, 0, fmt.Errorf("send: no other devices to send to (you only have device %d)", s.localDeviceID)
+			return nil, 0, fmt.Errorf("send: no other devices to send to (you only have device %d)", snd.localDeviceID)
 		}
 		deviceIDs = []int{1}
 	}
-	logf(s.logger, "send: recipient=%s devices=%v sendingToSelf=%v", recipient, deviceIDs, sendingToSelf)
+	logf(snd.logger, "send: recipient=%s devices=%v sendingToSelf=%v", recipient, deviceIDs, sendingToSelf)
 	return deviceIDs, skipDevice, nil
 }
 
@@ -133,54 +133,54 @@ func (s *Service) prepareSendDevices(recipient string, providedDevices []int) (d
 //   - 409 (mismatched devices): adds missing devices and retries
 //
 // The local device ID is excluded from the device list when sending to self (sync messages).
-func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, contentBytes []byte) error {
-	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, nil)
+func (snd *Sender) sendEncryptedMessage(ctx context.Context, recipient string, contentBytes []byte) error {
+	deviceIDs, skipDevice, err := snd.prepareSendDevices(recipient, nil)
 	if err != nil {
 		return err
 	}
-	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
-		return s.encryptAndSend(ctx, recipient, contentBytes, devices)
+	return snd.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return snd.encryptAndSend(ctx, recipient, contentBytes, devices)
 	})
 }
 
 // sendEncryptedMessageWithTimestamp is like sendEncryptedMessage but uses an explicit timestamp.
 // This is needed for sync messages where the envelope timestamp must match the DataMessage timestamp.
-func (s *Service) sendEncryptedMessageWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
-	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, nil)
+func (snd *Sender) sendEncryptedMessageWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
+	deviceIDs, skipDevice, err := snd.prepareSendDevices(recipient, nil)
 	if err != nil {
 		return err
 	}
-	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
-		return s.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, devices, timestamp)
+	return snd.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return snd.encryptAndSendWithTimestamp(ctx, recipient, contentBytes, devices, timestamp)
 	})
 }
 
 // sendEncryptedMessageWithDevices encrypts and sends Content bytes starting with the
 // given initial device list. Like sendEncryptedMessage, it handles the 409/410 retry
 // loop, but starts with a known device list to reduce round trips.
-func (s *Service) sendEncryptedMessageWithDevices(ctx context.Context, recipient string, initDevices []int, contentBytes []byte) error {
-	deviceIDs, skipDevice, err := s.prepareSendDevices(recipient, initDevices)
+func (snd *Sender) sendEncryptedMessageWithDevices(ctx context.Context, recipient string, initDevices []int, contentBytes []byte) error {
+	deviceIDs, skipDevice, err := snd.prepareSendDevices(recipient, initDevices)
 	if err != nil {
 		return err
 	}
-	return s.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
-		return s.encryptAndSend(ctx, recipient, contentBytes, devices)
+	return snd.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
+		return snd.encryptAndSend(ctx, recipient, contentBytes, devices)
 	})
 }
 
 // encryptAndSend performs a single encrypt-and-send attempt for the given device IDs.
-func (s *Service) encryptAndSend(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int) error {
-	return s.encryptAndSendWithIdentity(ctx, recipient, contentBytes, deviceIDs, uint64(time.Now().UnixMilli()), s.store)
+func (snd *Sender) encryptAndSend(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int) error {
+	return snd.encryptAndSendWithIdentity(ctx, recipient, contentBytes, deviceIDs, uint64(time.Now().UnixMilli()), snd.cryptoStore)
 }
 
 // encryptAndSendWithTimestamp performs a single encrypt-and-send attempt with an explicit timestamp.
 // This is used for sync messages where the envelope timestamp must match the DataMessage timestamp.
-func (s *Service) encryptAndSendWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int, timestamp uint64) error {
-	return s.encryptAndSendWithIdentity(ctx, recipient, contentBytes, deviceIDs, timestamp, s.store)
+func (snd *Sender) encryptAndSendWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int, timestamp uint64) error {
+	return snd.encryptAndSendWithIdentity(ctx, recipient, contentBytes, deviceIDs, timestamp, snd.cryptoStore)
 }
 
 // encryptAndSendWithIdentity performs a single encrypt-and-send attempt using the given identity store.
-func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int, timestamp uint64, identityStore libsignal.IdentityKeyStore) error {
+func (snd *Sender) encryptAndSendWithIdentity(ctx context.Context, recipient string, contentBytes []byte, deviceIDs []int, timestamp uint64, identityStore libsignal.IdentityKeyStore) error {
 	now := time.Now()
 
 	// Add Signal transport padding before encryption.
@@ -197,7 +197,7 @@ func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient stri
 			return fmt.Errorf("send: create address for device %d: %w", deviceID, err)
 		}
 
-		session, err := s.store.LoadSession(addr)
+		session, err := snd.cryptoStore.LoadSession(addr)
 		if err != nil {
 			addr.Destroy()
 			return fmt.Errorf("send: load session for device %d: %w", deviceID, err)
@@ -207,13 +207,13 @@ func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient stri
 
 		if session == nil {
 			// No session exists, fetch pre-keys and establish one.
-			preKeyResp, err := s.GetPreKeys(ctx, recipient, deviceID)
+			preKeyResp, err := snd.getPreKeys(ctx, recipient, deviceID)
 			if err != nil {
 				addr.Destroy()
 				// 404 means the device no longer exists — skip it and clean up.
 				if strings.Contains(err.Error(), "status 404") {
-					logf(s.logger, "send: device %d not found (404), removing", deviceID)
-					_ = s.store.ArchiveSession(recipient, uint32(deviceID))
+					logf(snd.logger, "send: device %d not found (404), removing", deviceID)
+					_ = snd.dataStore.ArchiveSession(recipient, uint32(deviceID))
 					skippedDevices = append(skippedDevices, deviceID)
 					continue
 				}
@@ -233,7 +233,7 @@ func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient stri
 				return fmt.Errorf("send: build pre-key bundle for device %d: %w", deviceID, err)
 			}
 
-			if err := libsignal.ProcessPreKeyBundle(bundle, addr, s.store, identityStore, now); err != nil {
+			if err := libsignal.ProcessPreKeyBundle(bundle, addr, snd.cryptoStore, identityStore, now); err != nil {
 				bundle.Destroy()
 				addr.Destroy()
 				return fmt.Errorf("send: process pre-key bundle for device %d: %w", deviceID, err)
@@ -250,7 +250,7 @@ func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient stri
 			registrationID = int(regID)
 		}
 
-		ciphertext, err := libsignal.Encrypt(paddedContent, addr, s.store, identityStore, now)
+		ciphertext, err := libsignal.Encrypt(paddedContent, addr, snd.cryptoStore, identityStore, now)
 		addr.Destroy()
 		if err != nil {
 			return fmt.Errorf("send: encrypt for device %d: %w", deviceID, err)
@@ -278,11 +278,11 @@ func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient stri
 
 	// Remove any skipped (gone) devices from the stored device list.
 	if len(skippedDevices) > 0 {
-		remaining, _ := s.store.GetDevices(recipient)
+		remaining, _ := snd.dataStore.GetDevices(recipient)
 		for _, skip := range skippedDevices {
 			remaining = slices.DeleteFunc(remaining, func(id int) bool { return id == skip })
 		}
-		_ = s.store.SetDevices(recipient, remaining)
+		_ = snd.dataStore.SetDevices(recipient, remaining)
 	}
 
 	if len(messages) == 0 {
@@ -298,9 +298,9 @@ func (s *Service) encryptAndSendWithIdentity(ctx context.Context, recipient stri
 
 	// Log outgoing message details for debugging.
 	for _, m := range messages {
-		logf(s.logger, "outgoing: device=%d type=%v regID=%d contentLen=%d paddedLen=%d",
+		logf(snd.logger, "outgoing: device=%d type=%v regID=%d contentLen=%d paddedLen=%d",
 			m.DestinationDeviceID, m.Type, m.DestinationRegistrationID, len(contentBytes), len(paddedContent))
 	}
 
-	return s.SendMessage(ctx, recipient, msgList)
+	return snd.sendHTTPMessage(ctx, recipient, msgList)
 }

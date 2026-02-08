@@ -36,3 +36,24 @@ type receiverDataStore interface {
 	SaveGroup(*store.Group) error
 	PNI() libsignal.IdentityKeyStore
 }
+
+// senderDataStore is the data store interface needed by Sender.
+type senderDataStore interface {
+	LoadAccount() (*store.Account, error)
+	ArchiveSession(string, uint32) error
+	GetDevices(string) ([]int, error)
+	SetDevices(string, []int) error
+	GetContactByACI(string) (*store.Contact, error)
+	GetPNIIdentityKeyPair() (*libsignal.PrivateKey, error)
+}
+
+// senderCryptoStore combines session and identity stores needed by Sender.
+type senderCryptoStore interface {
+	libsignal.SessionStore
+	libsignal.IdentityKeyStore
+}
+
+// contactLookup provides contact lookup by ACI.
+type contactLookup interface {
+	GetContactByACI(string) (*store.Contact, error)
+}

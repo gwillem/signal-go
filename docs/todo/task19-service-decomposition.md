@@ -1,6 +1,6 @@
 # Task 19: Decompose Service God Object
 
-## Status: IN PROGRESS (Phases 1-3.5 complete, Phase 4 next)
+## Status: IN PROGRESS (Phases 1-4 complete, Phase 5 next)
 
 ## Completed
 
@@ -8,18 +8,13 @@
 - **Phase 2**: Changed `Store.PNI()` return type to `libsignal.IdentityKeyStore`
 - **Phase 3**: Extracted `Receiver` struct with `receiverDataStore`, `cryptoStore`, `wsConn` interfaces and callback functions. Interfaces in `interfaces.go`. Tests updated.
 - **Phase 3.5**: Simplified receiver tests with mocks. `mockDataStore` (in-memory maps) replaces SQLite for data store. Profile tests use callback stubs instead of `httptest.Server` + `NewService`. Envelope tests use mock data store + real crypto store. WebSocket integration tests kept as-is.
+- **Phase 4**: Extracted `Sender` struct with `senderDataStore`, `senderCryptoStore` interfaces and HTTP callback functions. Moved `sendTextMessage`, `buildDataMessageContent`, `createPniSignatureMessage`, `sendSealedSenderMessage`, `sendSealedEncrypted`, `trySendSealed` from Service to Sender. Moved `sendRetryReceipt`, `handleRetryReceipt`, `sendNullMessageWithDevices`, `prepareSendDevices`, `sendEncryptedMessage`, `sendEncryptedMessageWithTimestamp`, `sendEncryptedMessageWithDevices`, `encryptAndSend`, `encryptAndSendWithTimestamp`, `encryptAndSendWithIdentity` from Service to Sender. Moved `initialDevices`, `withDeviceRetry` from Service to Sender. Added `sendTextMessageWithIdentity` on Sender. Changed `deriveAccessKeyForRecipient` to use `contactLookup` interface. Service delegates to Sender via proxy methods for backward compatibility with groupsender/contactsync code.
 
 ## Key Design Insight: Separate Crypto Passthrough from Business Data
 
-Crypto operations need all 6 libsignal store interfaces simultaneously, but Go business logic only calls a few data methods. Solution: hold `cryptoStore` as an opaque passthrough for FFI calls, and `receiverDataStore` (7 methods) for business logic. `*store.Store` satisfies both, but tests can mock each independently.
+Crypto operations need all 6 libsignal store interfaces simultaneously, but Go business logic only calls a few data methods. Solution: hold `cryptoStore` as an opaque passthrough for FFI calls, and `receiverDataStore` (7 methods) / `senderDataStore` (6 methods) for business logic. `*store.Store` satisfies all, but tests can mock each independently.
 
 ## Remaining Phases
-
-### Phase 4: Extract Sender type
-
-New `Sender` struct with:
-- `dataStore senderDataStore` — LoadAccount, ArchiveSession, GetDevices, SetDevices, GetContactByACI, GetPNIIdentityKeyPair
-- `cryptoStore` — SessionStore + IdentityKeyStore passthrough
 
 ### Phase 5: Extract GroupSender (extends Sender)
 
