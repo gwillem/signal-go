@@ -14,9 +14,57 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/proto"
+	"github.com/gwillem/signal-go/internal/signalcrypto"
 	"github.com/gwillem/signal-go/internal/store"
 	pb "google.golang.org/protobuf/proto"
 )
+
+// mockDataStore is an in-memory implementation of receiverDataStore for testing.
+type mockDataStore struct {
+	contacts map[string]*store.Contact
+	groups   map[string]*store.Group
+	account  *store.Account
+}
+
+func newMockDataStore() *mockDataStore {
+	return &mockDataStore{
+		contacts: make(map[string]*store.Contact),
+		groups:   make(map[string]*store.Group),
+	}
+}
+
+func (m *mockDataStore) GetContactByACI(aci string) (*store.Contact, error) {
+	return m.contacts[aci], nil
+}
+
+func (m *mockDataStore) SaveContact(c *store.Contact) error {
+	m.contacts[c.ACI] = c
+	return nil
+}
+
+func (m *mockDataStore) SaveContacts(contacts []*store.Contact) error {
+	for _, c := range contacts {
+		m.contacts[c.ACI] = c
+	}
+	return nil
+}
+
+func (m *mockDataStore) LoadAccount() (*store.Account, error) {
+	return m.account, nil
+}
+
+func (m *mockDataStore) GetGroup(groupID string) (*store.Group, error) {
+	return m.groups[groupID], nil
+}
+
+func (m *mockDataStore) SaveGroup(g *store.Group) error {
+	m.groups[g.GroupID] = g
+	return nil
+}
+
+func (m *mockDataStore) PNI() libsignal.IdentityKeyStore {
+	return nil
+}
 
 // setupAliceAndBob creates two parties where Alice can encrypt messages to Bob.
 // Bob's SQLite store is returned with pre-keys loaded for decryption.
@@ -290,14 +338,20 @@ func newTestService(t *testing.T, st *store.Store, apiURL, wsURL string, debugDi
 	})
 }
 
-// newReceiverContext creates a receiverContext for testing.
-func newReceiverContext(t *testing.T, st *store.Store, debugDir string) *receiverContext {
+// newTestReceiver creates a Receiver for testing with mock data store and real crypto store.
+// The data store is a lightweight in-memory mock; the crypto store holds real sessions/keys.
+func newTestReceiver(t *testing.T, data receiverDataStore, crypto cryptoStore, debugDir string) *Receiver {
 	t.Helper()
-	svc := newTestService(t, st, "", "", debugDir)
-	return &receiverContext{
-		service:     svc,
-		localUUID:   "bob-aci",
-		localDevice: 2,
+	return &Receiver{
+		dataStore:   data,
+		cryptoStore: crypto,
+		debugDir:    debugDir,
+		localACI:    "bob-aci",
+		// No-op callbacks for tests that don't exercise retry receipts.
+		sendRetryReceipt:   func(ctx context.Context, senderACI string, senderDevice uint32, content []byte, msgType uint8, timestamp uint64) error { return nil },
+		handleRetryReceipt: func(ctx context.Context, requesterACI string, requesterDevice uint32) error { return nil },
+		getProfile:         func(ctx context.Context, aci string, profileKey []byte) (*profileResponse, error) { return nil, nil },
+		fetchGroupDetails:  func(ctx context.Context, group *store.Group) error { return nil },
 	}
 }
 
@@ -319,7 +373,8 @@ func TestHandleEnvelopeDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, ""))
+	r := newTestReceiver(t, newMockDataStore(), bobStore, "")
+	msg, err := r.handleEnvelope(context.Background(), envBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +405,8 @@ func TestHandleEnvelopeSkipsDeliveryReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, ""))
+	r := newTestReceiver(t, newMockDataStore(), bobStore, "")
+	msg, err := r.handleEnvelope(context.Background(), envBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +435,8 @@ func TestDumpEnvelope(t *testing.T) {
 
 	debugDir := t.TempDir()
 
-	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, debugDir))
+	r := newTestReceiver(t, newMockDataStore(), bobStore, debugDir)
+	msg, err := r.handleEnvelope(context.Background(), envBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +505,8 @@ func TestDumpEnvelopeNoOpWhenEmpty(t *testing.T) {
 	}
 
 	// Pass empty debugDir — should not create any files.
-	msg, err := handleEnvelope(context.Background(), envBytes, newReceiverContext(t, bobStore, ""))
+	r := newTestReceiver(t, newMockDataStore(), bobStore, "")
+	msg, err := r.handleEnvelope(context.Background(), envBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,175 +760,111 @@ func TestPopulateContactInfoFetchesProfile(t *testing.T) {
 		profileKey[i] = byte(i)
 	}
 
-	cipher, err := NewProfileCipher(profileKey)
+	cipher, err := signalcrypto.NewProfileCipher(profileKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	encryptedName, err := cipher.EncryptString("Alice Smith", getTargetNameLength("Alice Smith"))
+	encryptedName, err := cipher.EncryptString("Alice Smith", signalcrypto.GetTargetNameLength("Alice Smith"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	encryptedNameB64 := base64.StdEncoding.EncodeToString(encryptedName)
 
-	// Mock HTTP server that returns the profile.
-	profileFetched := false
-	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/profile/") {
-			profileFetched = true
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			// Return encrypted profile.
-			resp := `{"name":"` + encryptedNameB64 + `","about":"","aboutEmoji":"","avatar":""}`
-			w.Write([]byte(resp))
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer apiSrv.Close()
-
-	// Create store with a contact that has profile key but no name.
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	// Use a valid UUID format for ACI (libsignal requires valid UUID for profile key version).
 	senderACI := "d7931635-28d9-49f3-b3d6-246245652744"
-	st.SaveContact(&store.Contact{
+
+	// Mock data store with a contact that has profile key but no name.
+	mock := newMockDataStore()
+	mock.contacts[senderACI] = &store.Contact{
 		ACI:        senderACI,
 		ProfileKey: profileKey,
-		// Name is empty - should trigger profile fetch.
-	})
-
-	// Create service with mock API server.
-	svc := NewService(ServiceConfig{
-		APIURL:        apiSrv.URL,
-		Store:         st,
-		Auth:          BasicAuth{Username: "test.1", Password: "pass"},
-		LocalACI:      "local-aci",
-		LocalDeviceID: 1,
-	})
-
-	// Call populateContactInfo.
-	msg := &Message{Sender: senderACI}
-	populateContactInfo(context.Background(), msg, st, svc)
-
-	// Verify profile was fetched.
-	if !profileFetched {
-		t.Error("expected profile to be fetched from server")
 	}
 
-	// Verify name was populated.
+	// Build receiver with a getProfile stub that returns the encrypted name.
+	profileFetched := false
+	r := &Receiver{
+		dataStore: mock,
+		localACI:  "local-aci",
+		getProfile: func(ctx context.Context, aci string, pk []byte) (*profileResponse, error) {
+			profileFetched = true
+			return &profileResponse{Name: encryptedNameB64}, nil
+		},
+		fetchGroupDetails: func(ctx context.Context, group *store.Group) error { return nil },
+	}
+
+	msg := &Message{Sender: senderACI}
+	r.populateContactInfo(context.Background(), msg)
+
+	if !profileFetched {
+		t.Error("expected profile to be fetched")
+	}
 	if msg.SenderName != "Alice Smith" {
 		t.Errorf("SenderName: got %q, want %q", msg.SenderName, "Alice Smith")
 	}
-
-	// Verify name was cached in store.
-	contact, err := st.GetContactByACI(senderACI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contact.Name != "Alice Smith" {
-		t.Errorf("cached name: got %q, want %q", contact.Name, "Alice Smith")
+	// Verify name was cached in mock store.
+	if mock.contacts[senderACI].Name != "Alice Smith" {
+		t.Errorf("cached name: got %q, want %q", mock.contacts[senderACI].Name, "Alice Smith")
 	}
 }
 
 func TestPopulateContactInfoSkipsWhenNameExists(t *testing.T) {
-	// Create store with a contact that already has a name.
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	profileKey := make([]byte, 32)
-	// Use a valid UUID format for ACI.
 	senderACI := "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
-	st.SaveContact(&store.Contact{
+
+	mock := newMockDataStore()
+	mock.contacts[senderACI] = &store.Contact{
 		ACI:        senderACI,
 		Name:       "Existing Name",
-		ProfileKey: profileKey,
-	})
+		ProfileKey: make([]byte, 32),
+	}
 
-	// Mock server that should NOT be called.
 	profileFetched := false
-	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/profile/") {
+	r := &Receiver{
+		dataStore: mock,
+		localACI:  "local-aci",
+		getProfile: func(ctx context.Context, aci string, pk []byte) (*profileResponse, error) {
 			profileFetched = true
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer apiSrv.Close()
-
-	svc := NewService(ServiceConfig{
-		APIURL:        apiSrv.URL,
-		Store:         st,
-		Auth:          BasicAuth{Username: "test.1", Password: "pass"},
-		LocalACI:      "local-aci",
-		LocalDeviceID: 1,
-	})
+			return nil, nil
+		},
+		fetchGroupDetails: func(ctx context.Context, group *store.Group) error { return nil },
+	}
 
 	msg := &Message{Sender: senderACI}
-	populateContactInfo(context.Background(), msg, st, svc)
+	r.populateContactInfo(context.Background(), msg)
 
-	// Verify profile was NOT fetched (we already have a name).
 	if profileFetched {
 		t.Error("profile should not be fetched when name already exists")
 	}
-
-	// Verify existing name is used.
 	if msg.SenderName != "Existing Name" {
 		t.Errorf("SenderName: got %q, want %q", msg.SenderName, "Existing Name")
 	}
 }
 
 func TestPopulateContactInfoNoProfileKeyNoFetch(t *testing.T) {
-	// Create store with a contact that has no profile key.
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	// Use a valid UUID format for ACI.
 	senderACI := "11111111-2222-3333-4444-555555555555"
-	st.SaveContact(&store.Contact{
+
+	mock := newMockDataStore()
+	mock.contacts[senderACI] = &store.Contact{
 		ACI: senderACI,
 		// No ProfileKey, no Name.
-	})
+	}
 
-	// Mock server that should NOT be called.
 	profileFetched := false
-	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/profile/") {
+	r := &Receiver{
+		dataStore: mock,
+		localACI:  "local-aci",
+		getProfile: func(ctx context.Context, aci string, pk []byte) (*profileResponse, error) {
 			profileFetched = true
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer apiSrv.Close()
-
-	svc := NewService(ServiceConfig{
-		APIURL:        apiSrv.URL,
-		Store:         st,
-		Auth:          BasicAuth{Username: "test.1", Password: "pass"},
-		LocalACI:      "local-aci",
-		LocalDeviceID: 1,
-	})
+			return nil, nil
+		},
+		fetchGroupDetails: func(ctx context.Context, group *store.Group) error { return nil },
+	}
 
 	msg := &Message{Sender: senderACI}
-	populateContactInfo(context.Background(), msg, st, svc)
+	r.populateContactInfo(context.Background(), msg)
 
-	// Verify profile was NOT fetched (no profile key available).
 	if profileFetched {
 		t.Error("profile should not be fetched when no profile key available")
 	}
-
-	// SenderName should remain empty.
 	if msg.SenderName != "" {
 		t.Errorf("SenderName: got %q, want empty", msg.SenderName)
 	}
