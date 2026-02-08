@@ -40,12 +40,12 @@ If no profile key exists, start at attempt 2.
 
 ### Key changes
 
-| File | Change |
-|------|--------|
-| `internal/signalservice/sender.go` | Merge `SendTextMessage` and `SendSealedSenderMessage` into single path with fallback loop |
-| `internal/signalservice/service.go` | Single `SendTextMessage` that tries sealed first |
-| `client.go` | Remove `SendSealed()`, `Send()` uses unified path |
-| `cmd/sgnl/send.go` | Remove `--sealed` flag |
+| File                                | Change                                                                                    |
+| ----------------------------------- | ----------------------------------------------------------------------------------------- |
+| `internal/signalservice/sender.go`  | Merge `SendTextMessage` and `SendSealedSenderMessage` into single path with fallback loop |
+| `internal/signalservice/service.go` | Single `SendTextMessage` that tries sealed first                                          |
+| `client.go`                         | Remove `SendSealed()`, `Send()` uses unified path                                         |
+| `cmd/sgnl/send.go`                  | Remove `--sealed` flag                                                                    |
 
 ### Access key resolution order
 

@@ -9,7 +9,7 @@ type PNIIdentityStore struct{ *Store }
 
 // PNI returns a PNIIdentityStore that overrides identity methods
 // to return the PNI key pair and registration ID.
-func (s *Store) PNI() *PNIIdentityStore { return &PNIIdentityStore{s} }
+func (s *Store) PNI() libsignal.IdentityKeyStore { return &PNIIdentityStore{s} }
 
 // GetIdentityKeyPair returns the PNI identity key pair.
 func (p *PNIIdentityStore) GetIdentityKeyPair() (*libsignal.PrivateKey, error) {

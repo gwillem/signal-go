@@ -12,6 +12,7 @@ Go library for Signal messenger, replacing the Java signal-cli dependency. Licen
 - `internal/libsignal/` — CGO bindings to libsignal's Rust C FFI (Phase 1, complete)
 - `internal/proto/` — Protobuf definitions and generated Go code (Provisioning, WebSocket, DeviceName, SignalService)
 - `internal/provisioncrypto/` — Provisioning envelope encrypt/decrypt (HKDF, AES-CBC, HMAC, PKCS7), device name encryption
+- `internal/signalcrypto/` — Stateless crypto utilities: profile encryption, storage service crypto, access key derivation, attachment decryption
 - `internal/signalws/` — Protobuf-framed WebSocket layer with keep-alive and reconnection
 - `internal/signalservice/` — Provisioning orchestration, device registration, HTTP client, pre-key generation, message sending/receiving, retry receipts, contact sync, attachment download
 - `internal/store/` — SQLite persistent storage (sessions, identity keys, pre-keys, account credentials, contacts)
@@ -178,11 +179,15 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/signalservice/retryreceipt.go` | SendRetryReceipt, HandleRetryReceipt: DecryptionErrorMessage retry flow                            |
 | `internal/signalservice/dump.go`         | dumpEnvelope: raw envelope debug dump to file, LoadDump for test replay                            |
 | `internal/signalservice/receiver.go`     | ReceiveMessages: WebSocket receive loop + decryption + retry receipts + contact sync + iterator    |
-| `internal/signalservice/attachment.go`   | DownloadAttachment, DecryptAttachment: CDN download + AES-CBC decryption                           |
+| `internal/signalcrypto/profilecipher.go` | ProfileCipher: AES-GCM profile field encryption/decryption, padding helpers                        |
+| `internal/signalcrypto/storagecrypto.go` | DecryptStorageManifest, DecryptStorageItem: AES-256-GCM Storage Service decryption                  |
+| `internal/signalcrypto/storagekeys.go`   | StorageKey, StorageManifestKey, StorageItemKey, RecordIkm: Storage Service key derivation           |
+| `internal/signalcrypto/accesskey.go`     | DeriveAccessKey: sealed sender access key derivation from profile key (AES-GCM)                    |
+| `internal/signalcrypto/attachment.go`    | DecryptAttachment, AttachmentURL: attachment AES-CBC decryption + CDN URL construction              |
+| `internal/signalservice/attachment.go`   | downloadAttachment: CDN download + decryption orchestration                                        |
 | `internal/signalservice/contactsync.go`  | ParseContactStream, RequestContactSync: contact sync request + response parsing                    |
 | `internal/signalservice/storage.go`      | SyncGroupsFromStorage: Storage Service client for group discovery                                  |
-| `internal/signalservice/storagekeys.go`  | StorageKey, ManifestKey, ItemKey, RecordIkm: key derivation for Storage Service encryption         |
-| `internal/signalservice/storagecrypto.go`| AES-256-GCM decryption for Storage Service records                                                 |
+| `internal/signalservice/accesskey.go`    | deriveAccessKeyForRecipient: recipient profile key lookup + access key derivation                   |
 | `internal/signalservice/trustroot.go`    | Signal sealed sender trust root public keys                                                        |
 | `internal/libsignal/decryptionerror.go`  | DecryptionErrorMessage: CGO bindings for retry receipts                                            |
 | `internal/libsignal/plaintextcontent.go` | PlaintextContent: CGO bindings for unencrypted retry receipt delivery                              |

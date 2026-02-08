@@ -1,4 +1,4 @@
-package signalservice
+package signalcrypto
 
 import (
 	"crypto/aes"
@@ -9,8 +9,8 @@ import (
 
 const (
 	profileEncryptionOverhead = 28 // 12-byte nonce + 16-byte GCM tag
-	namePaddedLength1         = 53
-	namePaddedLength2         = 257
+	NamePaddedLength1         = 53
+	NamePaddedLength2         = 257
 	aboutPaddedLength1        = 128
 	aboutPaddedLength2        = 254
 	aboutPaddedLength3        = 512
@@ -76,17 +76,17 @@ func (pc *ProfileCipher) EncryptBoolean(value bool) ([]byte, error) {
 	return pc.Encrypt(data, 1)
 }
 
-// getTargetNameLength returns the appropriate padded length for a name.
-func getTargetNameLength(name string) int {
+// GetTargetNameLength returns the appropriate padded length for a name.
+func GetTargetNameLength(name string) int {
 	nameLen := len([]byte(name))
-	if nameLen <= namePaddedLength1 {
-		return namePaddedLength1
+	if nameLen <= NamePaddedLength1 {
+		return NamePaddedLength1
 	}
-	return namePaddedLength2
+	return NamePaddedLength2
 }
 
-// getTargetAboutLength returns the appropriate padded length for about text.
-func getTargetAboutLength(about string) int {
+// GetTargetAboutLength returns the appropriate padded length for about text.
+func GetTargetAboutLength(about string) int {
 	aboutLen := len([]byte(about))
 	if aboutLen <= aboutPaddedLength1 {
 		return aboutPaddedLength1

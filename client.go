@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/provisioncrypto"
+	"github.com/gwillem/signal-go/internal/signalcrypto"
 	"github.com/gwillem/signal-go/internal/signalservice"
 	"github.com/gwillem/signal-go/internal/store"
 )
@@ -809,7 +810,7 @@ func buildAccountAttributes(acct *store.Account) (*signalservice.AccountAttribut
 	}
 
 	if len(acct.ProfileKey) > 0 {
-		uak, err := signalservice.DeriveAccessKey(acct.ProfileKey)
+		uak, err := signalcrypto.DeriveAccessKey(acct.ProfileKey)
 		if err != nil {
 			return nil, fmt.Errorf("client: derive access key: %w", err)
 		}
@@ -960,7 +961,7 @@ func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
 	}
 
 	// Decrypt profile fields
-	cipher, err := signalservice.NewProfileCipher(acct.ProfileKey)
+	cipher, err := signalcrypto.NewProfileCipher(acct.ProfileKey)
 	if err != nil {
 		return nil, fmt.Errorf("create profile cipher: %w", err)
 	}
@@ -981,7 +982,7 @@ func (c *Client) GetServerProfile(ctx context.Context) (*ServerProfile, error) {
 
 // decryptProfileField decodes base64 and decrypts a profile field.
 // Returns ("", nil) for empty input, or an error if decode/decrypt fails.
-func decryptProfileField(encoded string, cipher *signalservice.ProfileCipher) (string, error) {
+func decryptProfileField(encoded string, cipher *signalcrypto.ProfileCipher) (string, error) {
 	if encoded == "" {
 		return "", nil
 	}
@@ -1033,7 +1034,7 @@ func (c *Client) SetProfile(ctx context.Context, name string, numberSharing *boo
 		// Fetch current name to preserve it
 		resp, err := c.service.GetProfile(ctx, acct.ACI, acct.ProfileKey)
 		if err == nil && resp.Name != "" {
-			cipher, _ := signalservice.NewProfileCipher(acct.ProfileKey)
+			cipher, _ := signalcrypto.NewProfileCipher(acct.ProfileKey)
 			if cipher != nil {
 				currentName, _ := decryptProfileField(resp.Name, cipher)
 				if currentName != "" {

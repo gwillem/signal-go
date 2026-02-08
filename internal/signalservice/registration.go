@@ -12,6 +12,7 @@ import (
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/provisioncrypto"
+	"github.com/gwillem/signal-go/internal/signalcrypto"
 )
 
 // RegistrationResult holds the output of a complete device link + registration.
@@ -108,7 +109,7 @@ func RegisterLinkedDevice(ctx context.Context, apiURL string, data *provisioncry
 	// Derive unidentified access key from profile key (sealed sender).
 	var uakB64 string
 	if len(data.ProfileKey) > 0 {
-		uak, err := DeriveAccessKey(data.ProfileKey)
+		uak, err := signalcrypto.DeriveAccessKey(data.ProfileKey)
 		if err != nil {
 			return nil, fmt.Errorf("registration: derive access key: %w", err)
 		}

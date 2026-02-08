@@ -1,4 +1,4 @@
-package signalservice
+package signalcrypto
 
 import (
 	"bytes"
@@ -264,15 +264,15 @@ func TestGetTargetNameLength(t *testing.T) {
 		name string
 		want int
 	}{
-		{"", namePaddedLength1},
-		{"short", namePaddedLength1},
-		{string(make([]byte, namePaddedLength1)), namePaddedLength1},     // exactly 53 bytes
-		{string(make([]byte, namePaddedLength1+1)), namePaddedLength2},   // 54 bytes -> 257
-		{string(make([]byte, namePaddedLength2)), namePaddedLength2},     // 257 bytes
+		{"", NamePaddedLength1},
+		{"short", NamePaddedLength1},
+		{string(make([]byte, NamePaddedLength1)), NamePaddedLength1},     // exactly 53 bytes
+		{string(make([]byte, NamePaddedLength1+1)), NamePaddedLength2},   // 54 bytes -> 257
+		{string(make([]byte, NamePaddedLength2)), NamePaddedLength2},     // 257 bytes
 	}
 
 	for _, tt := range tests {
-		got := getTargetNameLength(tt.name)
+		got := GetTargetNameLength(tt.name)
 		if got != tt.want {
 			t.Errorf("GetTargetNameLength(%d bytes) = %d, want %d", len(tt.name), got, tt.want)
 		}
@@ -295,7 +295,7 @@ func TestGetTargetAboutLength(t *testing.T) {
 
 	for _, tt := range tests {
 		about := string(make([]byte, tt.aboutLen))
-		got := getTargetAboutLength(about)
+		got := GetTargetAboutLength(about)
 		if got != tt.want {
 			t.Errorf("GetTargetAboutLength(%d bytes) = %d, want %d", tt.aboutLen, got, tt.want)
 		}

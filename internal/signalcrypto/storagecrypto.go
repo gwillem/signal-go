@@ -1,4 +1,4 @@
-package signalservice
+package signalcrypto
 
 import (
 	"crypto/aes"
@@ -8,15 +8,15 @@ import (
 
 const storageIVLength = 12 // AES-GCM nonce length
 
-// decryptStorageManifest decrypts an encrypted storage manifest.
+// DecryptStorageManifest decrypts an encrypted storage manifest.
 // Format: 12-byte IV || ciphertext || 16-byte auth tag
-func decryptStorageManifest(key storageManifestKey, data []byte) ([]byte, error) {
+func DecryptStorageManifest(key StorageManifestKey, data []byte) ([]byte, error) {
 	return decryptStorageData(key[:], data)
 }
 
-// decryptStorageItem decrypts an encrypted storage item.
+// DecryptStorageItem decrypts an encrypted storage item.
 // Format: 12-byte IV || ciphertext || 16-byte auth tag
-func decryptStorageItem(key storageItemKey, data []byte) ([]byte, error) {
+func DecryptStorageItem(key StorageItemKey, data []byte) ([]byte, error) {
 	return decryptStorageData(key[:], data)
 }
 

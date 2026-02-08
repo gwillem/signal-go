@@ -1,4 +1,4 @@
-package signalservice
+package signalcrypto
 
 import (
 	"encoding/hex"

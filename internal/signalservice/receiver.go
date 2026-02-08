@@ -14,16 +14,28 @@ import (
 
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/proto"
+	"github.com/gwillem/signal-go/internal/signalcrypto"
 	"github.com/gwillem/signal-go/internal/signalws"
 	"github.com/gwillem/signal-go/internal/store"
 	pb "google.golang.org/protobuf/proto"
 )
 
-// receiverContext groups the parameters needed by handleEnvelope.
-type receiverContext struct {
-	service     *Service
-	localUUID   string
-	localDevice uint32
+// Receiver handles incoming Signal messages: decryption, routing, contact/group
+// enrichment, and retry receipts. It is created by Service.ReceiveMessages and
+// operates against interfaces to enable testing with mocks.
+type Receiver struct {
+	dataStore   receiverDataStore
+	cryptoStore cryptoStore
+	logger      *log.Logger
+	debugDir    string
+	localACI    string
+	tlsConfig   *tls.Config
+
+	// Callbacks for cross-boundary operations (provided by Service).
+	sendRetryReceipt   func(ctx context.Context, senderACI string, senderDevice uint32, content []byte, msgType uint8, timestamp uint64) error
+	handleRetryReceipt func(ctx context.Context, requesterACI string, requesterDevice uint32) error
+	getProfile         func(ctx context.Context, aci string, profileKey []byte) (*profileResponse, error)
+	fetchGroupDetails  func(ctx context.Context, group *store.Group) error
 }
 
 // Message represents a received Signal message.
@@ -41,7 +53,7 @@ type Message struct {
 	GroupName    string    // group name (if known)
 }
 
-// receiveMessages connects to the authenticated WebSocket and returns an iterator
+// ReceiveMessages connects to the authenticated WebSocket and returns an iterator
 // that yields received text messages. The iterator stops when the context is
 // cancelled or when the caller breaks out of the range loop.
 func (s *Service) ReceiveMessages(ctx context.Context) iter.Seq2[Message, error] {
@@ -68,95 +80,104 @@ func (s *Service) ReceiveMessages(ctx context.Context) iter.Seq2[Message, error]
 		defer conn.Close()
 		logf(s.logger, "connected, waiting for messages")
 
-		for {
-			wsMsg, err := conn.ReadMessage(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					logf(s.logger, "context cancelled, stopping")
-					return
-				}
-				logf(s.logger, "read error: %v", err)
-				if !yield(Message{}, fmt.Errorf("receiver: read: %w", err)) {
-					return
-				}
-				continue
-			}
+		r := &Receiver{
+			dataStore:          s.store,
+			cryptoStore:        s.store,
+			logger:             s.logger,
+			debugDir:           s.debugDir,
+			localACI:           s.localACI,
+			tlsConfig:          s.tlsConfig,
+			sendRetryReceipt:   s.sendRetryReceipt,
+			handleRetryReceipt: s.handleRetryReceipt,
+			getProfile:         s.GetProfile,
+			fetchGroupDetails:  s.FetchGroupDetails,
+		}
+		r.run(ctx, conn, yield)
+	}
+}
 
-			logf(s.logger, "ws message type=%v", wsMsg.GetType())
-
-			// Only process REQUEST messages.
-			if wsMsg.GetType() != proto.WebSocketMessage_REQUEST {
-				if wsMsg.GetType() == proto.WebSocketMessage_RESPONSE {
-					resp := wsMsg.GetResponse()
-					logf(s.logger, "ws response id=%d status=%d message=%s", resp.GetId(), resp.GetStatus(), resp.GetMessage())
-				}
-				continue
-			}
-			req := wsMsg.GetRequest()
-			logf(s.logger, "ws request verb=%s path=%s id=%d bodyLen=%d", req.GetVerb(), req.GetPath(), req.GetId(), len(req.GetBody()))
-
-			if req.GetVerb() != "PUT" || req.GetPath() != "/api/v1/message" {
-				// ACK non-message requests.
-				if req.GetId() != 0 {
-					_ = conn.SendResponse(ctx, req.GetId(), 200, "OK")
-				}
-				continue
-			}
-
-			rc := &receiverContext{
-				service:     s,
-				localUUID:   s.localACI,
-				localDevice: uint32(s.localDeviceID),
-			}
-			msg, err := handleEnvelope(ctx, req.GetBody(), rc)
-			if err != nil {
-				// ACK even on decrypt failure — server won't retry.
-				_ = conn.SendResponse(ctx, req.GetId(), 200, "OK")
-				if !yield(Message{}, fmt.Errorf("receiver: %w", err)) {
-					return
-				}
-				continue
-			}
-
-			// ACK after successful decryption.
-			_ = conn.SendResponse(ctx, req.GetId(), 200, "OK")
-
-			if msg == nil {
-				// Non-text message (typing indicator, receipt, etc.) — skip.
-				continue
-			}
-
-			if !yield(*msg, nil) {
+// run is the main message loop for the Receiver.
+func (r *Receiver) run(ctx context.Context, conn wsConn, yield func(Message, error) bool) {
+	for {
+		wsMsg, err := conn.ReadMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				logf(r.logger, "context cancelled, stopping")
 				return
 			}
+			logf(r.logger, "read error: %v", err)
+			if !yield(Message{}, fmt.Errorf("receiver: read: %w", err)) {
+				return
+			}
+			continue
+		}
+
+		logf(r.logger, "ws message type=%v", wsMsg.GetType())
+
+		// Only process REQUEST messages.
+		if wsMsg.GetType() != proto.WebSocketMessage_REQUEST {
+			if wsMsg.GetType() == proto.WebSocketMessage_RESPONSE {
+				resp := wsMsg.GetResponse()
+				logf(r.logger, "ws response id=%d status=%d message=%s", resp.GetId(), resp.GetStatus(), resp.GetMessage())
+			}
+			continue
+		}
+		req := wsMsg.GetRequest()
+		logf(r.logger, "ws request verb=%s path=%s id=%d bodyLen=%d", req.GetVerb(), req.GetPath(), req.GetId(), len(req.GetBody()))
+
+		if req.GetVerb() != "PUT" || req.GetPath() != "/api/v1/message" {
+			// ACK non-message requests.
+			if req.GetId() != 0 {
+				_ = conn.SendResponse(ctx, req.GetId(), 200, "OK")
+			}
+			continue
+		}
+
+		msg, err := r.handleEnvelope(ctx, req.GetBody())
+		if err != nil {
+			// ACK even on decrypt failure — server won't retry.
+			_ = conn.SendResponse(ctx, req.GetId(), 200, "OK")
+			if !yield(Message{}, fmt.Errorf("receiver: %w", err)) {
+				return
+			}
+			continue
+		}
+
+		// ACK after successful decryption.
+		_ = conn.SendResponse(ctx, req.GetId(), 200, "OK")
+
+		if msg == nil {
+			// Non-text message (typing indicator, receipt, etc.) — skip.
+			continue
+		}
+
+		if !yield(*msg, nil) {
+			return
 		}
 	}
 }
 
 // handleEnvelope parses an Envelope protobuf and decrypts the content.
 // Returns nil, nil for envelopes that don't contain a text message (e.g. delivery receipts).
-func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Message, error) {
-	st := rc.service.store
-	logger := rc.service.logger
-
+func (r *Receiver) handleEnvelope(ctx context.Context, data []byte) (*Message, error) {
 	var env proto.Envelope
 	if err := pb.Unmarshal(data, &env); err != nil {
 		return nil, fmt.Errorf("unmarshal envelope: %w", err)
 	}
 
-	dumpEnvelope(rc.service.debugDir, data, &env, logger)
+	dumpEnvelope(r.debugDir, data, &env, r.logger)
 
 	envType := env.GetType()
-	logf(logger, "envelope type=%v sender=%s device=%d timestamp=%d contentLen=%d destination=%s",
+	logf(r.logger, "envelope type=%v sender=%s device=%d timestamp=%d contentLen=%d destination=%s",
 		envType, env.GetSourceServiceId(), env.GetSourceDevice(), env.GetTimestamp(), len(env.GetContent()), env.GetDestinationServiceId())
 
 	// Use PNI identity if message is addressed to our PNI.
 	// iPhone sends messages to PNI when the contact was discovered via phone number lookup (CDSI).
-	var identityStore libsignal.IdentityKeyStore = st
+	var identityStore libsignal.IdentityKeyStore = r.cryptoStore
 	destServiceID := env.GetDestinationServiceId()
 	if strings.HasPrefix(destServiceID, "PNI:") {
-		logf(logger, "message addressed to PNI, using PNI identity for decryption")
-		identityStore = st.PNI()
+		logf(r.logger, "message addressed to PNI, using PNI identity for decryption")
+		identityStore = r.dataStore.PNI()
 	}
 
 	// Only handle known envelope types.
@@ -164,7 +185,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	case proto.Envelope_CIPHERTEXT, proto.Envelope_PREKEY_BUNDLE, proto.Envelope_UNIDENTIFIED_SENDER, proto.Envelope_PLAINTEXT_CONTENT:
 		// Proceed below.
 	default:
-		logf(logger, "skipping unsupported envelope type=%v", envType)
+		logf(r.logger, "skipping unsupported envelope type=%v", envType)
 		return nil, nil
 	}
 
@@ -178,14 +199,14 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 	// Handle PLAINTEXT_CONTENT (retry receipts).
 	if envType == proto.Envelope_PLAINTEXT_CONTENT {
-		return handlePlaintextContent(ctx, content, senderACI, senderDevice, rc)
+		return r.handlePlaintextContent(ctx, content, senderACI, senderDevice)
 	}
 
 	var plaintext []byte
 
 	switch envType {
 	case proto.Envelope_UNIDENTIFIED_SENDER:
-		pt, aci, dev, msg, err := decryptSealedSender(ctx, content, &env, st, identityStore, logger, rc)
+		pt, aci, dev, msg, err := r.decryptSealedSender(ctx, content, &env, identityStore)
 		if err != nil {
 			return nil, err
 		}
@@ -195,7 +216,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		plaintext, senderACI, senderDevice = pt, aci, dev
 
 	case proto.Envelope_PREKEY_BUNDLE, proto.Envelope_CIPHERTEXT:
-		pt, err := decryptCiphertextOrPreKey(envType, content, senderACI, senderDevice, st, identityStore, logger)
+		pt, err := r.decryptCiphertextOrPreKey(envType, content, senderACI, senderDevice, identityStore)
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +227,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	plaintext = stripPadding(plaintext)
 
 	// Dump received Content for debugging comparison with sent messages.
-	dumpContent(rc.service.debugDir, "recv", senderACI, env.GetTimestamp(), plaintext, logger)
+	dumpContent(r.debugDir, "recv", senderACI, env.GetTimestamp(), plaintext, r.logger)
 
 	// Parse decrypted Content protobuf.
 	var contentProto proto.Content
@@ -215,7 +236,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	}
 
 	// Log what's inside the Content.
-	logf(logger, "content hasDataMessage=%v hasSyncMessage=%v hasTypingMessage=%v hasReceiptMessage=%v hasCallMessage=%v hasSKDM=%v hasDecryptionError=%v",
+	logf(r.logger, "content hasDataMessage=%v hasSyncMessage=%v hasTypingMessage=%v hasReceiptMessage=%v hasCallMessage=%v hasSKDM=%v hasDecryptionError=%v",
 		contentProto.DataMessage != nil, contentProto.SyncMessage != nil,
 		contentProto.TypingMessage != nil, contentProto.ReceiptMessage != nil,
 		contentProto.CallMessage != nil, len(contentProto.SenderKeyDistributionMessage) > 0,
@@ -225,9 +246,9 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	if dem := contentProto.GetDecryptionErrorMessage(); len(dem) > 0 {
 		var errMsg proto.DecryptionErrorMessage
 		if err := pb.Unmarshal(dem, &errMsg); err != nil {
-			logf(logger, "failed to unmarshal DecryptionErrorMessage: %v", err)
+			logf(r.logger, "failed to unmarshal DecryptionErrorMessage: %v", err)
 		} else {
-			logf(logger, "RETRY REQUEST: timestamp=%d deviceId=%d ratchetKeyLen=%d",
+			logf(r.logger, "RETRY REQUEST: timestamp=%d deviceId=%d ratchetKeyLen=%d",
 				errMsg.GetTimestamp(), errMsg.GetDeviceId(), len(errMsg.GetRatchetKey()))
 		}
 	}
@@ -235,9 +256,9 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	// Process sender key distribution message if present.
 	// This must happen before we try to decrypt any sender key messages from this sender.
 	if skdm := contentProto.GetSenderKeyDistributionMessage(); len(skdm) > 0 {
-		if err := processSenderKeyDistribution(senderACI, senderDevice, skdm, st, logger); err != nil {
+		if err := r.processSenderKeyDistribution(senderACI, senderDevice, skdm); err != nil {
 			// Log but don't fail - the sender can resend the distribution message
-			logf(logger, "failed to process sender key distribution: %v", err)
+			logf(r.logger, "failed to process sender key distribution: %v", err)
 		}
 	}
 
@@ -247,7 +268,7 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 		if len(bodyPreview) > 30 {
 			bodyPreview = bodyPreview[:30] + "..."
 		}
-		logf(logger, "RECV DataMessage: timestamp=%d body=%q hasProfileKey=%v hasGroupContext=%v hasQuote=%v hasExpireTimer=%v",
+		logf(r.logger, "RECV DataMessage: timestamp=%d body=%q hasProfileKey=%v hasGroupContext=%v hasQuote=%v hasExpireTimer=%v",
 			dm.GetTimestamp(), bodyPreview, len(dm.ProfileKey) > 0,
 			dm.GetGroupV2() != nil, dm.GetQuote() != nil, dm.ExpireTimer != nil)
 	}
@@ -256,8 +277,8 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	if dm := contentProto.GetDataMessage(); dm != nil && dm.Body != nil {
 		// Store sender's profile key if provided (needed for sealed sender replies).
 		if len(dm.ProfileKey) == 32 {
-			if err := saveContactProfileKey(st, senderACI, dm.ProfileKey, logger); err != nil {
-				logf(logger, "failed to save profile key: %v", err)
+			if err := r.saveContactProfileKey(senderACI, dm.ProfileKey); err != nil {
+				logf(r.logger, "failed to save profile key: %v", err)
 			}
 		}
 
@@ -270,16 +291,16 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 		// Handle group context if present
 		if gv2 := dm.GetGroupV2(); gv2 != nil && len(gv2.GetMasterKey()) == 32 {
-			populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, rc.service, logger)
+			r.populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()))
 		}
 
-		populateContactInfo(ctx, msg, st, rc.service)
+		r.populateContactInfo(ctx, msg)
 		return msg, nil
 	}
 
 	// Handle SyncMessage subtypes.
 	if sm := contentProto.GetSyncMessage(); sm != nil {
-		logf(logger, "SyncMessage: sent=%v contacts=%v request=%v read=%v keys=%v",
+		logf(r.logger, "SyncMessage: sent=%v contacts=%v request=%v read=%v keys=%v",
 			sm.Sent != nil, sm.Contacts != nil, sm.Request != nil, sm.Read != nil, sm.Keys != nil)
 
 		// SyncMessage.Sent: message sent by our other device.
@@ -296,18 +317,18 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 
 				// Handle group context if present
 				if gv2 := dm.GetGroupV2(); gv2 != nil && len(gv2.GetMasterKey()) == 32 {
-					populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()), st, rc.service, logger)
+					r.populateGroupInfo(msg, gv2.GetMasterKey(), int(gv2.GetRevision()))
 				}
 
-				populateContactInfo(ctx, msg, st, rc.service)
+				r.populateContactInfo(ctx, msg)
 				return msg, nil
 			}
 		}
 
 		// SyncMessage.Contacts: contact sync from primary device.
 		if contacts := sm.GetContacts(); contacts != nil {
-			if err := handleContactSync(ctx, contacts, st, rc.service.tlsConfig, logger); err != nil {
-				logf(logger, "contact sync error: %v", err)
+			if err := r.handleContactSync(ctx, contacts); err != nil {
+				logf(r.logger, "contact sync error: %v", err)
 			}
 			return nil, nil
 		}
@@ -316,25 +337,25 @@ func handleEnvelope(ctx context.Context, data []byte, rc *receiverContext) (*Mes
 	// Handle DecryptionErrorMessage (retry receipt) inside Content proto.
 	// Signal-Android sends retry receipts this way (encrypted, inside Content).
 	if demBytes := contentProto.GetDecryptionErrorMessage(); len(demBytes) > 0 {
-		logf(logger, "received DecryptionErrorMessage in Content from=%s device=%d", senderACI, senderDevice)
-		return handleDecryptionErrorBytes(ctx, demBytes, senderACI, senderDevice, rc)
+		logf(r.logger, "received DecryptionErrorMessage in Content from=%s device=%d", senderACI, senderDevice)
+		return r.handleDecryptionErrorBytes(ctx, demBytes, senderACI, senderDevice)
 	}
 
-	logf(logger, "skipping non-text content")
+	logf(r.logger, "skipping non-text content")
 	return nil, nil
 }
 
 // decryptSealedSender decrypts a sealed sender (UNIDENTIFIED_SENDER) envelope.
 // Returns decrypted plaintext, sender ACI, sender device, and optionally a Message
 // if the inner content was plaintext (retry receipt) handled inline.
-func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelope, st *store.Store, identityStore libsignal.IdentityKeyStore, logger *log.Logger, rc *receiverContext) ([]byte, string, uint32, *Message, error) {
-	logf(logger, "decrypting sealed sender message (version byte=0x%02x, len=%d)", content[0], len(content))
+func (r *Receiver) decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelope, identityStore libsignal.IdentityKeyStore) ([]byte, string, uint32, *Message, error) {
+	logf(r.logger, "decrypting sealed sender message (version byte=0x%02x, len=%d)", content[0], len(content))
 
 	// Log identity key fingerprint for debugging sealed sender decryption failures.
 	if identityKey, err := identityStore.GetIdentityKeyPair(); err == nil {
 		if pub, err := identityKey.PublicKey(); err == nil {
 			if data, err := pub.Serialize(); err == nil && len(data) >= 8 {
-				logf(logger, "sealed sender: trying identity key fingerprint=%x", data[:8])
+				logf(r.logger, "sealed sender: trying identity key fingerprint=%x", data[:8])
 			}
 			pub.Destroy()
 		}
@@ -380,7 +401,7 @@ func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelop
 	if err != nil {
 		return nil, "", 0, nil, fmt.Errorf("sealed sender device ID: %w", err)
 	}
-	logf(logger, "sealed sender from=%s device=%d", senderACI, senderDevice)
+	logf(r.logger, "sealed sender from=%s device=%d", senderACI, senderDevice)
 
 	// Step 3: Decrypt inner message (supports Kyber/PQXDH via full store).
 	msgType, err := usmc.MsgType()
@@ -398,47 +419,48 @@ func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelop
 	}
 	defer addr.Destroy()
 
+	st := r.cryptoStore
 	var plaintext []byte
 	switch msgType {
 	case libsignal.CiphertextMessageTypePreKey:
-		logf(logger, "sealed sender: decrypting inner pre-key message")
+		logf(r.logger, "sealed sender: decrypting inner pre-key message")
 		preKeyMsg, err := libsignal.DeserializePreKeySignalMessage(innerContent)
 		if err != nil {
-			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			r.sendRetryReceiptAsync(ctx, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 			return nil, "", 0, nil, fmt.Errorf("sealed sender deserialize pre-key: %w", err)
 		}
 		defer preKeyMsg.Destroy()
 		plaintext, err = libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, identityStore, st, st, st)
 		if err != nil {
-			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			r.sendRetryReceiptAsync(ctx, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt pre-key: %w", err)
 		}
 
 	case libsignal.CiphertextMessageTypeWhisper:
-		logf(logger, "sealed sender: decrypting inner whisper message")
+		logf(r.logger, "sealed sender: decrypting inner whisper message")
 		sigMsg, err := libsignal.DeserializeSignalMessage(innerContent)
 		if err != nil {
-			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			r.sendRetryReceiptAsync(ctx, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 			return nil, "", 0, nil, fmt.Errorf("sealed sender deserialize whisper: %w", err)
 		}
 		defer sigMsg.Destroy()
 		plaintext, err = libsignal.DecryptMessage(sigMsg, addr, st, identityStore)
 		if err != nil {
-			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			r.sendRetryReceiptAsync(ctx, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt whisper: %w", err)
 		}
 
 	case libsignal.CiphertextMessageTypeSenderKey:
-		logf(logger, "sealed sender: decrypting inner sender key message")
+		logf(r.logger, "sealed sender: decrypting inner sender key message")
 		plaintext, err = libsignal.GroupDecryptMessage(innerContent, addr, st)
 		if err != nil {
-			sendRetryReceiptAsync(ctx, rc, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
+			r.sendRetryReceiptAsync(ctx, senderACI, senderDevice, innerContent, msgType, env.GetTimestamp())
 			return nil, "", 0, nil, fmt.Errorf("sealed sender decrypt sender key: %w", err)
 		}
 
 	case libsignal.CiphertextMessageTypePlaintext:
-		logf(logger, "sealed sender: processing plaintext message (retry receipt)")
-		msg, err := handlePlaintextContent(ctx, innerContent, senderACI, senderDevice, rc)
+		logf(r.logger, "sealed sender: processing plaintext message (retry receipt)")
+		msg, err := r.handlePlaintextContent(ctx, innerContent, senderACI, senderDevice)
 		return nil, "", 0, msg, err
 
 	default:
@@ -449,16 +471,18 @@ func decryptSealedSender(ctx context.Context, content []byte, env *proto.Envelop
 }
 
 // decryptCiphertextOrPreKey decrypts a PREKEY_BUNDLE or CIPHERTEXT envelope.
-func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, senderACI string, senderDevice uint32, st *store.Store, identityStore libsignal.IdentityKeyStore, logger *log.Logger) ([]byte, error) {
+func (r *Receiver) decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, senderACI string, senderDevice uint32, identityStore libsignal.IdentityKeyStore) ([]byte, error) {
 	addr, err := libsignal.NewAddress(senderACI, senderDevice)
 	if err != nil {
 		return nil, fmt.Errorf("create address: %w", err)
 	}
 	defer addr.Destroy()
 
+	st := r.cryptoStore
+
 	switch envType {
 	case proto.Envelope_PREKEY_BUNDLE:
-		logf(logger, "decrypting pre-key message")
+		logf(r.logger, "decrypting pre-key message")
 		preKeyMsg, err := libsignal.DeserializePreKeySignalMessage(content)
 		if err != nil {
 			return nil, fmt.Errorf("deserialize pre-key message: %w", err)
@@ -466,19 +490,19 @@ func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, send
 		defer preKeyMsg.Destroy()
 
 		if signedPreKeyID, err := preKeyMsg.SignedPreKeyID(); err == nil {
-			logf(logger, "pre-key message signed_pre_key_id=%d", signedPreKeyID)
+			logf(r.logger, "pre-key message signed_pre_key_id=%d", signedPreKeyID)
 		}
 		if preKeyID, err := preKeyMsg.PreKeyID(); err == nil {
-			logf(logger, "pre-key message pre_key_id=%d (0 means none)", preKeyID)
+			logf(r.logger, "pre-key message pre_key_id=%d (0 means none)", preKeyID)
 		}
 		if version, err := preKeyMsg.Version(); err == nil {
-			logf(logger, "pre-key message version=%d", version)
+			logf(r.logger, "pre-key message version=%d", version)
 		}
 
 		return libsignal.DecryptPreKeyMessage(preKeyMsg, addr, st, identityStore, st, st, st)
 
 	case proto.Envelope_CIPHERTEXT:
-		logf(logger, "decrypting ciphertext message")
+		logf(r.logger, "decrypting ciphertext message")
 		sigMsg, err := libsignal.DeserializeSignalMessage(content)
 		if err != nil {
 			return nil, fmt.Errorf("deserialize signal message: %w", err)
@@ -494,8 +518,8 @@ func decryptCiphertextOrPreKey(envType proto.Envelope_Type, content []byte, send
 
 // handlePlaintextContent processes a PLAINTEXT_CONTENT envelope, which contains
 // a DecryptionErrorMessage (retry receipt) from a peer who couldn't decrypt our message.
-func handlePlaintextContent(ctx context.Context, content []byte, senderACI string, senderDevice uint32, rc *receiverContext) (*Message, error) {
-	logf(rc.service.logger, "handling PLAINTEXT_CONTENT from=%s device=%d", senderACI, senderDevice)
+func (r *Receiver) handlePlaintextContent(ctx context.Context, content []byte, senderACI string, senderDevice uint32) (*Message, error) {
+	logf(r.logger, "handling PLAINTEXT_CONTENT from=%s device=%d", senderACI, senderDevice)
 
 	// Deserialize PlaintextContent to extract the body.
 	pc, err := libsignal.DeserializePlaintextContent(content)
@@ -516,37 +540,37 @@ func handlePlaintextContent(ctx context.Context, content []byte, senderACI strin
 	}
 	defer dem.Destroy()
 
-	return processRetryReceipt(ctx, dem, senderACI, senderDevice, rc)
+	return r.processRetryReceipt(ctx, dem, senderACI, senderDevice)
 }
 
 // handleDecryptionErrorBytes processes a serialized DecryptionErrorMessage
 // received inside a Content proto (field 8).
-func handleDecryptionErrorBytes(ctx context.Context, demBytes []byte, senderACI string, senderDevice uint32, rc *receiverContext) (*Message, error) {
+func (r *Receiver) handleDecryptionErrorBytes(ctx context.Context, demBytes []byte, senderACI string, senderDevice uint32) (*Message, error) {
 	dem, err := libsignal.DeserializeDecryptionErrorMessage(demBytes)
 	if err != nil {
 		return nil, fmt.Errorf("deserialize DEM: %w", err)
 	}
 	defer dem.Destroy()
 
-	return processRetryReceipt(ctx, dem, senderACI, senderDevice, rc)
+	return r.processRetryReceipt(ctx, dem, senderACI, senderDevice)
 }
 
 // processRetryReceipt handles a DecryptionErrorMessage: logs it, checks age,
 // and archives session + sends null message if fresh enough.
-func processRetryReceipt(ctx context.Context, dem *libsignal.DecryptionErrorMessage, senderACI string, senderDevice uint32, rc *receiverContext) (*Message, error) {
+func (r *Receiver) processRetryReceipt(ctx context.Context, dem *libsignal.DecryptionErrorMessage, senderACI string, senderDevice uint32) (*Message, error) {
 	ts, _ := dem.Timestamp()
 	devID, _ := dem.DeviceID()
-	logf(rc.service.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
+	logf(r.logger, "received retry receipt from=%s device=%d originalTimestamp=%d originalDevice=%d", senderACI, senderDevice, ts, devID)
 
 	// Ignore old retry receipts (older than 1 minute) to break retry loops.
 	ageMs := uint64(time.Now().UnixMilli()) - ts
 	if ageMs > 60*1000 {
-		logf(rc.service.logger, "ignoring old retry receipt (age=%dms)", ageMs)
+		logf(r.logger, "ignoring old retry receipt (age=%dms)", ageMs)
 		return nil, nil
 	}
 
-	if err := rc.service.handleRetryReceipt(ctx, senderACI, senderDevice); err != nil {
-		logf(rc.service.logger, "handle retry receipt error: %v", err)
+	if err := r.handleRetryReceipt(ctx, senderACI, senderDevice); err != nil {
+		logf(r.logger, "handle retry receipt error: %v", err)
 	}
 
 	return nil, nil
@@ -554,28 +578,28 @@ func processRetryReceipt(ctx context.Context, dem *libsignal.DecryptionErrorMess
 
 // sendRetryReceiptAsync sends a retry receipt to the sender in a fire-and-forget
 // goroutine. Errors are logged but don't block message processing.
-func sendRetryReceiptAsync(ctx context.Context, rc *receiverContext, senderACI string, senderDevice uint32, innerContent []byte, msgType uint8, timestamp uint64) {
-	logf(rc.service.logger, "sending retry receipt to=%s device=%d timestamp=%d", senderACI, senderDevice, timestamp)
+func (r *Receiver) sendRetryReceiptAsync(ctx context.Context, senderACI string, senderDevice uint32, innerContent []byte, msgType uint8, timestamp uint64) {
+	logf(r.logger, "sending retry receipt to=%s device=%d timestamp=%d", senderACI, senderDevice, timestamp)
 	go func() {
-		if err := rc.service.sendRetryReceipt(ctx, senderACI, senderDevice, innerContent, msgType, timestamp); err != nil {
-			logf(rc.service.logger, "retry receipt send error: %v", err)
+		if err := r.sendRetryReceipt(ctx, senderACI, senderDevice, innerContent, msgType, timestamp); err != nil {
+			logf(r.logger, "retry receipt send error: %v", err)
 		} else {
-			logf(rc.service.logger, "retry receipt sent to=%s device=%d", senderACI, senderDevice)
+			logf(r.logger, "retry receipt sent to=%s device=%d", senderACI, senderDevice)
 		}
 	}()
 }
 
 // handleContactSync downloads the contact attachment, parses the contact stream, and saves contacts.
-func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts, st *store.Store, tlsConf *tls.Config, logger *log.Logger) error {
+func (r *Receiver) handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts) error {
 	blob := contacts.GetBlob()
 	if blob == nil {
 		return fmt.Errorf("contact sync: no attachment blob")
 	}
 
-	logf(logger, "downloading contact sync attachment (cdnId=%d cdnKey=%s cdnNumber=%d size=%d)",
+	logf(r.logger, "downloading contact sync attachment (cdnId=%d cdnKey=%s cdnNumber=%d size=%d)",
 		blob.GetCdnId(), blob.GetCdnKey(), blob.GetCdnNumber(), blob.GetSize())
 
-	data, err := downloadAttachment(ctx, blob, tlsConf)
+	data, err := downloadAttachment(ctx, blob, r.tlsConfig)
 	if err != nil {
 		return fmt.Errorf("contact sync: download: %w", err)
 	}
@@ -598,25 +622,24 @@ func handleContactSync(ctx context.Context, contacts *proto.SyncMessage_Contacts
 		})
 	}
 
-	if err := st.SaveContacts(storeContacts); err != nil {
+	if err := r.dataStore.SaveContacts(storeContacts); err != nil {
 		return fmt.Errorf("contact sync: save: %w", err)
 	}
 
-	logf(logger, "contact sync complete: saved %d contacts", len(storeContacts))
+	logf(r.logger, "contact sync complete: saved %d contacts", len(storeContacts))
 	return nil
 }
 
 // populateContactInfo fills SenderNumber/SenderName/SyncToNumber/SyncToName from the contact store.
 // If a contact has a profile key but no cached name, it fetches the profile from the server.
 // For the local account (sync messages from own devices), falls back to the account table.
-func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, service *Service) {
-	logger := service.logger
-	if c, _ := st.GetContactByACI(msg.Sender); c != nil {
+func (r *Receiver) populateContactInfo(ctx context.Context, msg *Message) {
+	if c, _ := r.dataStore.GetContactByACI(msg.Sender); c != nil {
 		msg.SenderNumber = c.Number
 		msg.SenderName = c.Name
 		// If we have profile key but no name, try fetching from server
 		if msg.SenderName == "" && len(c.ProfileKey) == 32 {
-			name := fetchAndCacheProfileName(ctx, msg.Sender, c.ProfileKey, st, service, logger)
+			name := r.fetchAndCacheProfileName(ctx, msg.Sender, c.ProfileKey)
 			if name != "" {
 				msg.SenderName = name
 			}
@@ -624,23 +647,23 @@ func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, ser
 	}
 	// Fallback for local account: use account table for number and profile key.
 	// Handles both cases: contact not found, or contact found without name/profile key.
-	if msg.Sender == service.localACI && (msg.SenderNumber == "" || msg.SenderName == "") {
-		if acct, _ := st.LoadAccount(); acct != nil {
+	if msg.Sender == r.localACI && (msg.SenderNumber == "" || msg.SenderName == "") {
+		if acct, _ := r.dataStore.LoadAccount(); acct != nil {
 			if msg.SenderNumber == "" {
 				msg.SenderNumber = acct.Number
 			}
 			if msg.SenderName == "" && len(acct.ProfileKey) == 32 {
-				msg.SenderName = fetchAndCacheProfileName(ctx, msg.Sender, acct.ProfileKey, st, service, logger)
+				msg.SenderName = r.fetchAndCacheProfileName(ctx, msg.Sender, acct.ProfileKey)
 			}
 		}
 	}
 	if msg.SyncTo != "" {
-		if c, _ := st.GetContactByACI(msg.SyncTo); c != nil {
+		if c, _ := r.dataStore.GetContactByACI(msg.SyncTo); c != nil {
 			msg.SyncToNumber = c.Number
 			msg.SyncToName = c.Name
 			// If we have profile key but no name, try fetching from server
 			if msg.SyncToName == "" && len(c.ProfileKey) == 32 {
-				name := fetchAndCacheProfileName(ctx, msg.SyncTo, c.ProfileKey, st, service, logger)
+				name := r.fetchAndCacheProfileName(ctx, msg.SyncTo, c.ProfileKey)
 				if name != "" {
 					msg.SyncToName = name
 				}
@@ -651,37 +674,37 @@ func populateContactInfo(ctx context.Context, msg *Message, st *store.Store, ser
 
 // fetchAndCacheProfileName fetches a user's profile from the server, decrypts the name,
 // and caches it in the contact store. Returns the name or empty string on failure.
-func fetchAndCacheProfileName(ctx context.Context, aci string, profileKey []byte, st *store.Store, service *Service, logger *log.Logger) string {
-	logf(logger, "fetching profile for %s", aci)
+func (r *Receiver) fetchAndCacheProfileName(ctx context.Context, aci string, profileKey []byte) string {
+	logf(r.logger, "fetching profile for %s", aci)
 
 	// Fetch profile from server
-	profile, err := service.GetProfile(ctx, aci, profileKey)
+	profile, err := r.getProfile(ctx, aci, profileKey)
 	if err != nil {
-		logf(logger, "failed to fetch profile for %s: %v", aci, err)
+		logf(r.logger, "failed to fetch profile for %s: %v", aci, err)
 		return ""
 	}
 
 	// Decrypt name
 	if profile.Name == "" {
-		logf(logger, "profile for %s has no name field", aci)
+		logf(r.logger, "profile for %s has no name field", aci)
 		return ""
 	}
 
-	cipher, err := NewProfileCipher(profileKey)
+	cipher, err := signalcrypto.NewProfileCipher(profileKey)
 	if err != nil {
-		logf(logger, "failed to create profile cipher: %v", err)
+		logf(r.logger, "failed to create profile cipher: %v", err)
 		return ""
 	}
 
 	nameBytes, err := base64.StdEncoding.DecodeString(profile.Name)
 	if err != nil {
-		logf(logger, "failed to decode profile name: %v", err)
+		logf(r.logger, "failed to decode profile name: %v", err)
 		return ""
 	}
 
 	name, err := cipher.DecryptString(nameBytes)
 	if err != nil {
-		logf(logger, "failed to decrypt profile name: %v", err)
+		logf(r.logger, "failed to decrypt profile name: %v", err)
 		return ""
 	}
 
@@ -689,14 +712,14 @@ func fetchAndCacheProfileName(ctx context.Context, aci string, profileKey []byte
 		return ""
 	}
 
-	logf(logger, "fetched profile name for %s: %q", aci, name)
+	logf(r.logger, "fetched profile name for %s: %q", aci, name)
 
 	// Cache the name in contact store
-	contact, _ := st.GetContactByACI(aci)
+	contact, _ := r.dataStore.GetContactByACI(aci)
 	if contact != nil {
 		contact.Name = name
-		if err := st.SaveContact(contact); err != nil {
-			logf(logger, "failed to cache profile name: %v", err)
+		if err := r.dataStore.SaveContact(contact); err != nil {
+			logf(r.logger, "failed to cache profile name: %v", err)
 		}
 	}
 
@@ -705,9 +728,9 @@ func fetchAndCacheProfileName(ctx context.Context, aci string, profileKey []byte
 
 // saveContactProfileKey stores or updates a contact's profile key.
 // This is needed for sealed sender - we derive the unidentified access key from it.
-func saveContactProfileKey(st *store.Store, aci string, profileKey []byte, logger *log.Logger) error {
+func (r *Receiver) saveContactProfileKey(aci string, profileKey []byte) error {
 	// Get existing contact or create new one
-	contact, err := st.GetContactByACI(aci)
+	contact, err := r.dataStore.GetContactByACI(aci)
 	if err != nil {
 		return err
 	}
@@ -718,12 +741,113 @@ func saveContactProfileKey(st *store.Store, aci string, profileKey []byte, logge
 	// Only update if we don't have a profile key or it changed
 	if len(contact.ProfileKey) == 0 || !bytes.Equal(contact.ProfileKey, profileKey) {
 		contact.ProfileKey = profileKey
-		if err := st.SaveContact(contact); err != nil {
+		if err := r.dataStore.SaveContact(contact); err != nil {
 			return err
 		}
-		logf(logger, "saved profile key for %s", aci)
+		logf(r.logger, "saved profile key for %s", aci)
 	}
 	return nil
+}
+
+// processSenderKeyDistribution processes a sender key distribution message,
+// storing the sender key for later use in decrypting group messages.
+func (r *Receiver) processSenderKeyDistribution(senderACI string, senderDevice uint32, skdmBytes []byte) error {
+	logf(r.logger, "processing sender key distribution from=%s device=%d len=%d", senderACI, senderDevice, len(skdmBytes))
+
+	// Deserialize the distribution message
+	skdm, err := libsignal.DeserializeSenderKeyDistributionMessage(skdmBytes)
+	if err != nil {
+		return fmt.Errorf("deserialize SKDM: %w", err)
+	}
+	defer skdm.Destroy()
+
+	// Create the sender address
+	addr, err := libsignal.NewAddress(senderACI, senderDevice)
+	if err != nil {
+		return fmt.Errorf("create address: %w", err)
+	}
+	defer addr.Destroy()
+
+	// Process the distribution message - this stores the sender key in the store
+	if err := libsignal.ProcessSenderKeyDistributionMessage(addr, skdm, r.cryptoStore); err != nil {
+		return fmt.Errorf("process SKDM: %w", err)
+	}
+
+	logf(r.logger, "stored sender key from=%s device=%d", senderACI, senderDevice)
+	return nil
+}
+
+// populateGroupInfo extracts group info from a master key and populates the message.
+// It also stores/updates the group in the database for future reference.
+func (r *Receiver) populateGroupInfo(msg *Message, masterKeyBytes []byte, revision int) {
+	if len(masterKeyBytes) != 32 {
+		return
+	}
+
+	// Convert to GroupMasterKey
+	var masterKey libsignal.GroupMasterKey
+	copy(masterKey[:], masterKeyBytes)
+
+	// Derive group identifier
+	groupID, err := libsignal.GroupIdentifierFromMasterKey(masterKey)
+	if err != nil {
+		logf(r.logger, "failed to derive group identifier: %v", err)
+		return
+	}
+
+	msg.GroupID = groupID.String()
+	logf(r.logger, "group message groupID=%s revision=%d", msg.GroupID, revision)
+
+	// Check if we have this group stored
+	existing, err := r.dataStore.GetGroup(msg.GroupID)
+	if err != nil {
+		logf(r.logger, "failed to get group: %v", err)
+	}
+
+	if existing != nil {
+		// Use cached name
+		msg.GroupName = existing.Name
+		// Update revision if newer
+		if revision > existing.Revision {
+			existing.Revision = revision
+			if err := r.dataStore.SaveGroup(existing); err != nil {
+				logf(r.logger, "failed to update group revision: %v", err)
+			}
+		}
+		// Fetch name if not yet known
+		if existing.Name == "" {
+			r.fetchGroupName(existing)
+			msg.GroupName = existing.Name
+		}
+	} else {
+		// Store new group
+		newGroup := &store.Group{
+			GroupID:   msg.GroupID,
+			MasterKey: masterKeyBytes,
+			Revision:  revision,
+		}
+		if err := r.dataStore.SaveGroup(newGroup); err != nil {
+			logf(r.logger, "failed to save group: %v", err)
+		} else {
+			logf(r.logger, "stored new group groupID=%s", msg.GroupID)
+			r.fetchGroupName(newGroup)
+			msg.GroupName = newGroup.Name
+		}
+	}
+}
+
+// fetchGroupName fetches the group name from the Groups V2 API and updates the group in the store.
+func (r *Receiver) fetchGroupName(group *store.Group) {
+	if err := r.fetchGroupDetails(context.Background(), group); err != nil {
+		logf(r.logger, "failed to fetch group name for %s: %v", group.GroupID, err)
+		return
+	}
+	if group.Name != "" {
+		logf(r.logger, "fetched group name for %s: %q", group.GroupID, group.Name)
+		if err := r.dataStore.SaveGroup(group); err != nil {
+			logf(r.logger, "failed to save group name: %v", err)
+		}
+	}
 }
 
 // logf logs a formatted message if the logger is non-nil.
@@ -755,105 +879,4 @@ func buildWebSocketHeaders(auth BasicAuth) http.Header {
 	h.Set("X-Signal-Agent", "signal-go")
 	h.Set("X-Signal-Receive-Stories", "false")
 	return h
-}
-
-// processSenderKeyDistribution processes a sender key distribution message,
-// storing the sender key for later use in decrypting group messages.
-func processSenderKeyDistribution(senderACI string, senderDevice uint32, skdmBytes []byte, st *store.Store, logger *log.Logger) error {
-	logf(logger, "processing sender key distribution from=%s device=%d len=%d", senderACI, senderDevice, len(skdmBytes))
-
-	// Deserialize the distribution message
-	skdm, err := libsignal.DeserializeSenderKeyDistributionMessage(skdmBytes)
-	if err != nil {
-		return fmt.Errorf("deserialize SKDM: %w", err)
-	}
-	defer skdm.Destroy()
-
-	// Create the sender address
-	addr, err := libsignal.NewAddress(senderACI, senderDevice)
-	if err != nil {
-		return fmt.Errorf("create address: %w", err)
-	}
-	defer addr.Destroy()
-
-	// Process the distribution message - this stores the sender key in the store
-	if err := libsignal.ProcessSenderKeyDistributionMessage(addr, skdm, st); err != nil {
-		return fmt.Errorf("process SKDM: %w", err)
-	}
-
-	logf(logger, "stored sender key from=%s device=%d", senderACI, senderDevice)
-	return nil
-}
-
-// populateGroupInfo extracts group info from a master key and populates the message.
-// It also stores/updates the group in the database for future reference.
-func populateGroupInfo(msg *Message, masterKeyBytes []byte, revision int, st *store.Store, svc *Service, logger *log.Logger) {
-	if len(masterKeyBytes) != 32 {
-		return
-	}
-
-	// Convert to GroupMasterKey
-	var masterKey libsignal.GroupMasterKey
-	copy(masterKey[:], masterKeyBytes)
-
-	// Derive group identifier
-	groupID, err := libsignal.GroupIdentifierFromMasterKey(masterKey)
-	if err != nil {
-		logf(logger, "failed to derive group identifier: %v", err)
-		return
-	}
-
-	msg.GroupID = groupID.String()
-	logf(logger, "group message groupID=%s revision=%d", msg.GroupID, revision)
-
-	// Check if we have this group stored
-	existing, err := st.GetGroup(msg.GroupID)
-	if err != nil {
-		logf(logger, "failed to get group: %v", err)
-	}
-
-	if existing != nil {
-		// Use cached name
-		msg.GroupName = existing.Name
-		// Update revision if newer
-		if revision > existing.Revision {
-			existing.Revision = revision
-			if err := st.SaveGroup(existing); err != nil {
-				logf(logger, "failed to update group revision: %v", err)
-			}
-		}
-		// Fetch name if not yet known
-		if existing.Name == "" {
-			fetchGroupName(existing, svc, st, logger)
-			msg.GroupName = existing.Name
-		}
-	} else {
-		// Store new group
-		newGroup := &store.Group{
-			GroupID:   msg.GroupID,
-			MasterKey: masterKeyBytes,
-			Revision:  revision,
-		}
-		if err := st.SaveGroup(newGroup); err != nil {
-			logf(logger, "failed to save group: %v", err)
-		} else {
-			logf(logger, "stored new group groupID=%s", msg.GroupID)
-			fetchGroupName(newGroup, svc, st, logger)
-			msg.GroupName = newGroup.Name
-		}
-	}
-}
-
-// fetchGroupName fetches the group name from the Groups V2 API and updates the group in the store.
-func fetchGroupName(group *store.Group, svc *Service, st *store.Store, logger *log.Logger) {
-	if err := svc.FetchGroupDetails(context.Background(), group); err != nil {
-		logf(logger, "failed to fetch group name for %s: %v", group.GroupID, err)
-		return
-	}
-	if group.Name != "" {
-		logf(logger, "fetched group name for %s: %q", group.GroupID, group.Name)
-		if err := st.SaveGroup(group); err != nil {
-			logf(logger, "failed to save group name: %v", err)
-		}
-	}
 }

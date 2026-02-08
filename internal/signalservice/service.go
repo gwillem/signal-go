@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gwillem/signal-go/internal/libsignal"
+	"github.com/gwillem/signal-go/internal/signalcrypto"
 	"github.com/gwillem/signal-go/internal/store"
 )
 
@@ -376,7 +377,7 @@ func (s *Service) GetProfile(ctx context.Context, aci string, profileKey []byte)
 
 // SetProfile updates the user's profile on the server.
 func (s *Service) SetProfile(ctx context.Context, aci string, profileKey []byte, opts *ProfileOptions) error {
-	cipher, err := NewProfileCipher(profileKey)
+	cipher, err := signalcrypto.NewProfileCipher(profileKey)
 	if err != nil {
 		return fmt.Errorf("create profile cipher: %w", err)
 	}
@@ -385,12 +386,12 @@ func (s *Service) SetProfile(ctx context.Context, aci string, profileKey []byte,
 	if opts != nil && opts.Name != nil {
 		name = *opts.Name
 	}
-	encryptedName, err := cipher.EncryptString(name, getTargetNameLength(name))
+	encryptedName, err := cipher.EncryptString(name, signalcrypto.GetTargetNameLength(name))
 	if err != nil {
 		return fmt.Errorf("encrypt name: %w", err)
 	}
 
-	encryptedAbout, err := cipher.EncryptString("", getTargetAboutLength(""))
+	encryptedAbout, err := cipher.EncryptString("", signalcrypto.GetTargetAboutLength(""))
 	if err != nil {
 		return fmt.Errorf("encrypt about: %w", err)
 	}
