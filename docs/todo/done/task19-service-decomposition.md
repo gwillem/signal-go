@@ -1,6 +1,6 @@
 # Task 19: Decompose Service God Object
 
-## Status: IN PROGRESS (Phases 1-5 complete, Phase 6 next)
+## Status: COMPLETE
 
 ## Completed
 
@@ -16,8 +16,6 @@
 
 Crypto operations need all 6 libsignal store interfaces simultaneously, but Go business logic only calls a few data methods. Solution: hold `cryptoStore` as an opaque passthrough for FFI calls, and `receiverDataStore` (7 methods) / `senderDataStore` (6 methods) / `groupSenderDataStore` (10 methods) for business logic. `*store.Store` satisfies all, but tests can mock each independently.
 
-## Remaining Phases
+## Phase 6: Decided not to implement
 
-### Phase 6: Slim Service to coordinator
-
-Service becomes thin facade delegating to Receiver/Sender/GroupSender.
+Service at ~544 lines is already a thin coordinator. The remaining code is HTTP transport methods (naturally tied to Transport + auth), thin one-liner delegations, and subsystems already in separate files. Further decomposition would add callback wiring and interface boilerplate without meaningful benefit.
