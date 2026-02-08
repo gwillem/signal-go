@@ -38,6 +38,7 @@ err = client.SyncContacts(ctx)
 ## Non-goals (for now)
 
 - Attachments (beyond contact sync blobs), reactions, read receipts, typing indicators
+  - **Not downloading attachments is safe.** Attachments are stored on Signal's CDN (`cdn{2,3}.signal.org`), separate from the message queue. Messages are ACKed immediately after decryption, which clears the queue. Undownloaded attachments auto-expire from CDN after ~30 days. There is no server-side tracking of whether a client fetched an attachment.
 - Group v2 management (create, invite, admin)
 - Profile updates
 - Stories, calls, stickers
