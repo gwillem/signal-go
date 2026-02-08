@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gwillem/signal-go/internal/libsignal"
@@ -50,6 +51,12 @@ type Client struct {
 	registrationID    int
 	pniRegistrationID int
 	service           *signalservice.Service
+
+	// CDSI (Contact Discovery Service) — lazy-initialized on first phone number lookup.
+	cdsiOnce sync.Once
+	asyncCtx *libsignal.TokioAsyncContext
+	connMgr  *libsignal.ConnectionManager
+	cdsiErr  error // cached init error
 }
 
 // initService creates the Service after credentials are known (called from Link/Load).
@@ -395,8 +402,16 @@ func (c *Client) Load() error {
 	return nil
 }
 
-// Close closes the client's database connection.
+// Close closes the client's database connection and frees CDSI resources.
 func (c *Client) Close() error {
+	if c.connMgr != nil {
+		c.connMgr.Destroy()
+		c.connMgr = nil
+	}
+	if c.asyncCtx != nil {
+		c.asyncCtx.Destroy()
+		c.asyncCtx = nil
+	}
 	if c.store != nil {
 		return c.store.Close()
 	}
@@ -468,10 +483,10 @@ func (c *Client) GetIdentityKey(theirUUID string) ([]byte, error) {
 // Send sends a text message to the given recipient.
 // Recipient can be an ACI UUID (e.g., "550e8400-e29b-41d4-a716-446655440000")
 // or an E.164 phone number (e.g., "+31612345678").
-// For phone numbers, the recipient must exist in the local contact store
-// (call SyncContacts first).
+// For phone numbers, the local contact store is checked first; if not found,
+// CDSI (Contact Discovery Service) is used to resolve the number.
 func (c *Client) Send(ctx context.Context, recipient string, text string) error {
-	aci, err := c.resolveRecipient(recipient)
+	aci, err := c.resolveRecipient(ctx, recipient)
 	if err != nil {
 		return err
 	}
@@ -483,7 +498,7 @@ func (c *Client) Send(ctx context.Context, recipient string, text string) error 
 // initiated the conversation by sending to your PNI.
 // Recipient can be an ACI UUID or E.164 phone number.
 func (c *Client) SendWithPNI(ctx context.Context, recipient string, text string) error {
-	aci, err := c.resolveRecipient(recipient)
+	aci, err := c.resolveRecipient(ctx, recipient)
 	if err != nil {
 		return err
 	}
@@ -498,7 +513,7 @@ func (c *Client) SendSealed(ctx context.Context, recipient string, text string) 
 	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-	aci, err := c.resolveRecipient(recipient)
+	aci, err := c.resolveRecipient(ctx, recipient)
 	if err != nil {
 		return err
 	}
@@ -515,24 +530,66 @@ func (c *Client) SendGroup(ctx context.Context, groupID string, text string) err
 	return c.service.SendGroupMessage(ctx, groupID, text)
 }
 
-// resolveRecipient resolves a recipient string to an ACI UUID.
-// Accepts either a UUID directly or an E.164 phone number (looked up in contacts).
-func (c *Client) resolveRecipient(recipient string) (string, error) {
+// resolveRecipient resolves a recipient string to a service ID.
+// Accepts a UUID (ACI), a PNI-prefixed UUID ("PNI:uuid"), or an E.164 phone number.
+// For phone numbers, first checks the local contact store, then falls back to CDSI lookup.
+func (c *Client) resolveRecipient(ctx context.Context, recipient string) (string, error) {
 	switch {
-	case isUUID(recipient):
+	case isUUID(recipient), isPNIServiceID(recipient):
 		return recipient, nil
 	case isE164(recipient):
 		if c.store == nil {
 			return "", fmt.Errorf("client: not linked (call Link or Load first)")
 		}
-		aci := c.store.LookupACI(recipient)
-		if aci == "" {
-			return "", fmt.Errorf("client: unknown phone number %s (call SyncContacts first)", recipient)
+		// Try local contact store first.
+		if aci := c.store.LookupACI(recipient); aci != "" {
+			return aci, nil
 		}
-		return aci, nil
+		// Fall back to CDSI lookup.
+		return c.cdsiLookup(ctx, recipient)
 	default:
 		return "", fmt.Errorf("client: invalid recipient format %q (expected UUID or E.164 phone number)", recipient)
 	}
+}
+
+// ensureCDSI lazily initializes the tokio runtime and connection manager for CDSI lookups.
+func (c *Client) ensureCDSI() error {
+	c.cdsiOnce.Do(func() {
+		logf(c.logger, "initializing CDSI runtime")
+		c.asyncCtx, c.cdsiErr = libsignal.NewTokioAsyncContext()
+		if c.cdsiErr != nil {
+			c.cdsiErr = fmt.Errorf("client: init tokio: %w", c.cdsiErr)
+			return
+		}
+		c.connMgr, c.cdsiErr = libsignal.NewConnectionManager(libsignal.EnvironmentProduction, "signal-go")
+		if c.cdsiErr != nil {
+			c.asyncCtx.Destroy()
+			c.asyncCtx = nil
+			c.cdsiErr = fmt.Errorf("client: init connection manager: %w", c.cdsiErr)
+		}
+	})
+	return c.cdsiErr
+}
+
+// cdsiLookup resolves a single E.164 phone number to a service ID via CDSI.
+// Returns ACI if the account is discoverable, PNI otherwise.
+func (c *Client) cdsiLookup(ctx context.Context, number string) (string, error) {
+	if c.service == nil {
+		return "", fmt.Errorf("client: not linked (call Link or Load first)")
+	}
+	if err := c.ensureCDSI(); err != nil {
+		return "", err
+	}
+	logf(c.logger, "cdsi: resolving %s", number)
+	resolved, err := c.service.LookupNumbers(ctx, []string{number}, c.asyncCtx, c.connMgr)
+	if err != nil {
+		return "", fmt.Errorf("client: cdsi lookup %s: %w", number, err)
+	}
+	serviceID, ok := resolved[number]
+	if !ok {
+		return "", fmt.Errorf("client: phone number %s not found on Signal", number)
+	}
+	return serviceID, nil
 }
 
 // isE164 returns true if s looks like an E.164 phone number (+country code + number).
@@ -552,6 +609,11 @@ func isE164(s string) bool {
 func isUUID(s string) bool {
 	_, err := uuid.Parse(s)
 	return err == nil
+}
+
+// isPNIServiceID returns true if s is a PNI-prefixed service ID (e.g. "PNI:uuid").
+func isPNIServiceID(s string) bool {
+	return strings.HasPrefix(s, "PNI:") && isUUID(s[4:])
 }
 
 func (c *Client) sendInternal(ctx context.Context, recipient string, text string, usePNI bool) error {

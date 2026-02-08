@@ -861,6 +861,12 @@ func TestSend_UnknownPhoneNumber(t *testing.T) {
 	s.Close()
 
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// CDSI auth endpoint — return mock credentials so the lookup proceeds.
+		if r.URL.Path == "/v2/directory/auth" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"username":"test","password":"test"}`))
+			return
+		}
 		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		w.WriteHeader(404)
 	}))
@@ -877,12 +883,14 @@ func TestSend_UnknownPhoneNumber(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// With CDSI enabled, an unknown number triggers a CDSI lookup.
+	// The lookup will fail because we can't connect to a real CDSI server in tests.
 	err = client.Send(context.Background(), "+31699999999", "Hello?")
 	if err == nil {
 		t.Fatal("expected error for unknown number")
 	}
-	if !strings.Contains(err.Error(), "unknown phone number") {
-		t.Errorf("unexpected error: %v", err)
+	if !strings.Contains(err.Error(), "cdsi") {
+		t.Errorf("expected CDSI-related error, got: %v", err)
 	}
 }
 

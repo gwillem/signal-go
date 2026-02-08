@@ -196,5 +196,9 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/store/contact.go`              | Contact CRUD: SaveContact, GetContactByACI, SaveContacts (bulk upsert)                             |
 | `internal/store/group.go`                | Group CRUD: SaveGroup, GetGroup, GetAllGroups                                                      |
 | `cmd/sgnl/groups.go`                     | CLI: list groups, sync from Storage Service, fetch details from Groups V2 API                      |
+| `internal/libsignal/net.go`              | TokioAsyncContext, ConnectionManager: async runtime + network connection wrappers                   |
+| `internal/libsignal/bridge_async.c`      | C bridge functions for CDSI async completion callbacks                                              |
+| `internal/libsignal/cdsi.go`             | LookupRequest, CDSILookup: CDSI phone number lookup with async FFI bridge                          |
 | `internal/libsignal/authcredential.go`   | ServerPublicParams: zkgroup auth credential presentation for Groups V2 API                         |
+| `internal/signalservice/cdsi.go`         | CDSI auth endpoint + LookupNumbers orchestration: phone number → ACI resolution                    |
 | `internal/signalservice/groupsv2.go`     | Groups V2 API client: fetch group details (name, members) using zkgroup auth                       |

@@ -279,6 +279,39 @@ Borrowed C pointers in callbacks (e.g. session records, public keys passed by li
 
 Store wrappers (`wrapSessionStore()` etc.) register Go interfaces in the handle map via `savePointer()` and return a cleanup function. Callers must defer cleanup to avoid leaking handles. In-memory stores must `Destroy()` old records before overwriting map entries.
 
+### Async FFI bridge (CDSI)
+
+libsignal's CDSI client uses async Rust (tokio). The C FFI exposes this via **promise structs**: the caller fills in a `complete` callback and a `context` pointer, then calls the async function. Rust spawns the work on a tokio runtime and invokes the callback when done.
+
+Bridging this to Go has two CGO-specific constraints:
+
+1. **Promise structs can't live on the Go stack.** They contain a Go pointer (the context handle from `savePointer`). CGO's pointer checker rejects Go pointers inside Go-stack-allocated C structs. Solution: C inline functions construct the promise AND call the FFI function entirely on the C side — the promise never exists in Go memory.
+
+2. **Go pointers must bypass CGO's pointer check.** The context handle is passed as `uintptr_t` (integer, not pointer), then cast back to `const void*` on the C side. This is safe because the handle wrapper is pinned via `runtime.Pinner`.
+
+The Go side uses a buffered channel (size 1) per async operation:
+
+```
+Go                          C/Rust
+─────────────────────────── ──────────────────────────
+ch := make(chan result, 1)
+ctx := savePointer(ch)
+                         ──→ construct promise{callback, ctx}
+                             signal_cdsi_lookup_new(&promise, ...)
+                             Rust spawns async work on tokio
+select {                     ...
+case r := <-ch:              callback fires → //export Go func
+                               restorePointer(ctx) → ch
+                               deletePointer(ctx)
+                               ch <- result
+  return r
+case <-time.After(30s):      (late callback still cleans up)
+  return timeout error
+}
+```
+
+**Cleanup ownership:** the `//export` callback always calls `deletePointer`, not the Go receive side. This way a late-arriving callback (after Go timed out) still frees its handle instead of leaking.
+
 ### Provisioning envelope crypto
 
 Provisioning message decryption is application-level crypto, not part of libsignal FFI:

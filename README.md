@@ -9,6 +9,7 @@ Go library for [Signal](https://signal.org) messenger with CGO bindings for the 
 | Sending & receiving 1:1 messages                | :white_check_mark: |
 | Group messaging (sender keys, sealed sender v2) | :white_check_mark: |
 | Sealed sender                                   | :white_check_mark: |
+| Phone number lookup (CDSI)                      | :white_check_mark: |
 | Contact & group sync                            | :white_check_mark: |
 | Profile management                              | :white_check_mark: |
 | Attachments                                     |                    |
@@ -44,8 +45,8 @@ func main() {
 	}
 	fmt.Println("Linked to", client.Number())
 
-	// 2. Send a message
-	err = client.Send(ctx, "recipient-aci-uuid", "Hello from signal-go!")
+	// 2. Send a message (by UUID or phone number)
+	err = client.Send(ctx, "+31612345678", "Hello from signal-go!")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -63,11 +64,8 @@ func main() {
 
 ## Quick start
 
-Requires Go 1.25+.
-
 ```bash
 make deps-download              # downloads pre-compiled libsignal binaries (~200MB)
-make test                       # runs tests with correct CGO flags
 go run ./cmd/sgnl link          # link as secondary device (scan QR with phone)
 go run ./cmd/sgnl receive       # start receiving messages
 ```
