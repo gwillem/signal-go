@@ -2,9 +2,21 @@
 
 Go library for [Signal](https://signal.org) messenger with CGO bindings for the official [libsignal](https://github.com/signalapp/libsignal).
 
-Supported: device linking (secondary device via QR), device registration (primary via SMS/voice), sending and receiving 1:1 messages, group messaging (sender keys, sealed sender v2, multi-recipient encrypt), sealed sender, contact and group sync, profile management, attachment downloading.
-
-Not yet supported: media/attachment sending, voice/video calls, stories, payments, message editing/deletion, read receipts, typing indicators.
+| Feature | Status |
+|---|---|
+| Device linking (secondary device via QR) | :white_check_mark: |
+| Device registration (primary via SMS/voice) | :white_check_mark: |
+| Sending & receiving 1:1 messages | :white_check_mark: |
+| Group messaging (sender keys, sealed sender v2) | :white_check_mark: |
+| Sealed sender | :white_check_mark: |
+| Contact & group sync | :white_check_mark: |
+| Profile management | :white_check_mark: |
+| Attachment downloading | :white_check_mark: |
+| Attachment sending | :construction: |
+| Typing indicators & read receipts | :construction: |
+| Message editing & deletion | :construction: |
+| Voice/video calls | :construction: |
+| Stories | :construction: |
 
 ## Example
 
@@ -55,40 +67,13 @@ func main() {
 Requires Go 1.25+.
 
 ```bash
-make deps-download   # downloads pre-compiled libsignal binaries (~200MB)
-make test            # runs tests with correct CGO flags
+make deps-download              # downloads pre-compiled libsignal binaries (~200MB)
+make test                       # runs tests with correct CGO flags
+go run ./cmd/sgnl link          # link as secondary device (scan QR with phone)
+go run ./cmd/sgnl receive       # start receiving messages
 ```
 
 See [docs/building.md](docs/building.md) for building libsignal from source and cross-compilation.
-
-## Architecture
-
-```
-client.go                — public API (Client, Link, Send, Receive, Load, Close)
-cmd/sig                  — CLI tool (sig link, sig send, sig receive)
-internal/signalservice   — provisioning, registration, send, receive orchestration
-internal/signalws        — protobuf-framed WebSocket layer with keep-alive
-internal/provisioncrypto — provisioning envelope crypto (HKDF, AES-CBC, HMAC)
-internal/libsignal       — CGO bindings to libsignal Rust FFI
-internal/proto           — protobuf definitions (provisioning, websocket, service)
-internal/store           — SQLite persistent storage (sessions, keys, account)
-```
-
-## Roadmap
-
-- [x] CGO bindings — key generation, session establishment, encrypt/decrypt
-- [x] Device provisioning — link as secondary device via QR code
-- [x] Device registration — primary device via SMS/voice verification
-- [x] Message sending — 1:1 encrypted message delivery
-- [x] Message receiving — authenticated WebSocket, decrypt incoming
-- [x] Sealed sender — unidentified sender for 1:1 and group messages
-- [x] Group messaging — sender keys, sealed sender v2, multi-recipient encrypt
-- [x] Contact and group sync — Storage Service, Groups V2 API
-- [x] Profile management — get/set name, phone number sharing
-- [x] Persistent storage — SQLite-backed key/session stores
-- [ ] Attachment sending — encrypt and upload media
-- [ ] Typing indicators, read receipts
-- [ ] Message editing and deletion
 
 ## Notes
 
