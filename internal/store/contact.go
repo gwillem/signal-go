@@ -41,6 +41,31 @@ func (s *Store) GetContactByACI(aci string) (*Contact, error) {
 	return &c, nil
 }
 
+// GetContactByNumber returns the contact with the given E.164 phone number.
+// Returns nil, nil if not found.
+func (s *Store) GetContactByNumber(number string) (*Contact, error) {
+	var c Contact
+	err := s.db.QueryRow(
+		"SELECT aci, number, name, profile_key FROM contact WHERE number = ?", number,
+	).Scan(&c.ACI, &c.Number, &c.Name, &c.ProfileKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: get contact by number: %w", err)
+	}
+	return &c, nil
+}
+
+// LookupACI returns the ACI for the given E.164 phone number, or empty string if not found.
+func (s *Store) LookupACI(number string) string {
+	c, err := s.GetContactByNumber(number)
+	if err != nil || c == nil {
+		return ""
+	}
+	return c.ACI
+}
+
 // SaveContacts upserts multiple contacts in a single transaction.
 func (s *Store) SaveContacts(contacts []*Contact) error {
 	if len(contacts) == 0 {

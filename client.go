@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/gwillem/signal-go/internal/libsignal"
 	"github.com/gwillem/signal-go/internal/provisioncrypto"
 	"github.com/gwillem/signal-go/internal/signalservice"
@@ -424,27 +425,44 @@ func (c *Client) GetIdentityKey(theirUUID string) ([]byte, error) {
 	return pub.Serialize()
 }
 
-// Send sends a text message to the given recipient (ACI UUID).
-// Use SendWithPNI for recipients who discovered you via phone number lookup.
+// Send sends a text message to the given recipient.
+// Recipient can be an ACI UUID (e.g., "550e8400-e29b-41d4-a716-446655440000")
+// or an E.164 phone number (e.g., "+31612345678").
+// For phone numbers, the recipient must exist in the local contact store
+// (call SyncContacts first).
 func (c *Client) Send(ctx context.Context, recipient string, text string) error {
-	return c.sendInternal(ctx, recipient, text, false)
+	aci, err := c.resolveRecipient(recipient)
+	if err != nil {
+		return err
+	}
+	return c.sendInternal(ctx, aci, text, false)
 }
 
 // SendWithPNI sends a text message using PNI identity for encryption.
 // Use this when the recipient discovered you via phone number (CDSI) and
 // initiated the conversation by sending to your PNI.
+// Recipient can be an ACI UUID or E.164 phone number.
 func (c *Client) SendWithPNI(ctx context.Context, recipient string, text string) error {
-	return c.sendInternal(ctx, recipient, text, true)
+	aci, err := c.resolveRecipient(recipient)
+	if err != nil {
+		return err
+	}
+	return c.sendInternal(ctx, aci, text, true)
 }
 
 // SendSealed sends a text message using sealed sender (UNIDENTIFIED_SENDER).
 // This hides the sender's identity from the Signal server.
 // Requires the recipient's profile key to be stored (for deriving unidentified access key).
+// Recipient can be an ACI UUID or E.164 phone number.
 func (c *Client) SendSealed(ctx context.Context, recipient string, text string) error {
 	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
-	return c.service.SendSealedSenderMessage(ctx, recipient, text)
+	aci, err := c.resolveRecipient(recipient)
+	if err != nil {
+		return err
+	}
+	return c.service.SendSealedSenderMessage(ctx, aci, text)
 }
 
 // SendGroup sends a text message to a group.
@@ -455,6 +473,45 @@ func (c *Client) SendGroup(ctx context.Context, groupID string, text string) err
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
 	return c.service.SendGroupMessage(ctx, groupID, text)
+}
+
+// resolveRecipient resolves a recipient string to an ACI UUID.
+// Accepts either a UUID directly or an E.164 phone number (looked up in contacts).
+func (c *Client) resolveRecipient(recipient string) (string, error) {
+	switch {
+	case isUUID(recipient):
+		return recipient, nil
+	case isE164(recipient):
+		if c.store == nil {
+			return "", fmt.Errorf("client: not linked (call Link or Load first)")
+		}
+		aci := c.store.LookupACI(recipient)
+		if aci == "" {
+			return "", fmt.Errorf("client: unknown phone number %s (call SyncContacts first)", recipient)
+		}
+		return aci, nil
+	default:
+		return "", fmt.Errorf("client: invalid recipient format %q (expected UUID or E.164 phone number)", recipient)
+	}
+}
+
+// isE164 returns true if s looks like an E.164 phone number (+country code + number).
+func isE164(s string) bool {
+	if len(s) < 8 || s[0] != '+' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isUUID returns true if s is a valid UUID.
+func isUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
 }
 
 func (c *Client) sendInternal(ctx context.Context, recipient string, text string, usePNI bool) error {
@@ -492,6 +549,15 @@ func (c *Client) SyncContacts(ctx context.Context) error {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
 	return c.service.RequestContactSync(ctx)
+}
+
+// LookupACI returns the ACI UUID for the given E.164 phone number from the local
+// contact store. Returns empty string if not found.
+func (c *Client) LookupACI(number string) string {
+	if c.store == nil {
+		return ""
+	}
+	return c.store.LookupACI(number)
 }
 
 // LookupNumber returns the phone number for the given ACI UUID from the local

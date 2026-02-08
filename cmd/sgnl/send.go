@@ -11,7 +11,7 @@ type sendCommand struct {
 	PNI    bool `long:"pni" description:"Use PNI identity (for recipients who discovered you via phone number)"`
 	Sealed bool `long:"sealed" description:"Use sealed sender (UNIDENTIFIED_SENDER) to hide sender from server"`
 	Args   struct {
-		Recipient string `positional-arg-name:"recipient" required:"true" description:"Recipient ACI UUID"`
+		Recipient string `positional-arg-name:"recipient" required:"true" description:"ACI UUID or E.164 phone number (+31612345678)"`
 		Message   string `positional-arg-name:"message" required:"true" description:"Text message to send"`
 	} `positional-args:"true" required:"true"`
 }

@@ -176,6 +176,12 @@ func runMigrations(db *sql.DB) error {
 		return fmt.Errorf("create sender_key_shared table: %w", err)
 	}
 
+	// Migration: Add index on contact.number for reverse phone number lookups
+	_, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_contact_number ON contact(number)")
+	if err != nil {
+		return fmt.Errorf("create idx_contact_number: %w", err)
+	}
+
 	return nil
 }
 

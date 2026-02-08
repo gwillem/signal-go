@@ -1,6 +1,6 @@
 # Phase 7: Support Phone Numbers as Send Recipients
 
-## Status: Planned
+## Status: Done
 
 ## Problem
 

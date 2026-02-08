@@ -116,3 +116,74 @@ func TestSaveContacts_Empty(t *testing.T) {
 	}
 }
 
+func TestGetContactByNumber_Found(t *testing.T) {
+	s := testStore(t)
+
+	s.SaveContact(&Contact{ACI: "abc-123", Number: "+15551234567", Name: "Alice"})
+
+	got, err := s.GetContactByNumber("+15551234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected contact, got nil")
+	}
+	if got.ACI != "abc-123" {
+		t.Errorf("ACI = %q, want %q", got.ACI, "abc-123")
+	}
+	if got.Name != "Alice" {
+		t.Errorf("Name = %q, want %q", got.Name, "Alice")
+	}
+}
+
+func TestGetContactByNumber_NotFound(t *testing.T) {
+	s := testStore(t)
+
+	got, err := s.GetContactByNumber("+15550000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil, got %+v", got)
+	}
+}
+
+func TestGetContactByNumber_MultipleContacts(t *testing.T) {
+	s := testStore(t)
+
+	s.SaveContact(&Contact{ACI: "aaa", Number: "+1111", Name: "One"})
+	s.SaveContact(&Contact{ACI: "bbb", Number: "+2222", Name: "Two"})
+	s.SaveContact(&Contact{ACI: "ccc", Number: "+3333", Name: "Three"})
+
+	got, err := s.GetContactByNumber("+2222")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected contact, got nil")
+	}
+	if got.ACI != "bbb" {
+		t.Errorf("ACI = %q, want %q", got.ACI, "bbb")
+	}
+}
+
+func TestLookupACI_Found(t *testing.T) {
+	s := testStore(t)
+
+	s.SaveContact(&Contact{ACI: "abc-123", Number: "+15551234567", Name: "Alice"})
+
+	aci := s.LookupACI("+15551234567")
+	if aci != "abc-123" {
+		t.Errorf("LookupACI = %q, want %q", aci, "abc-123")
+	}
+}
+
+func TestLookupACI_NotFound(t *testing.T) {
+	s := testStore(t)
+
+	aci := s.LookupACI("+15550000000")
+	if aci != "" {
+		t.Errorf("LookupACI = %q, want empty", aci)
+	}
+}
+

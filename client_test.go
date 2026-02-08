@@ -497,12 +497,14 @@ func TestClientSend(t *testing.T) {
 
 	enc := base64.RawStdEncoding.EncodeToString
 
+	bobACI := "550e8400-e29b-41d4-a716-446655440000"
+
 	var messageSent bool
 
 	// Mock server.
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/bob-aci/1":
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/"+bobACI+"/1":
 			json.NewEncoder(w).Encode(signalservice.PreKeyResponse{
 				IdentityKey: enc(bobPubBytes),
 				Devices: []signalservice.PreKeyDeviceInfo{
@@ -527,7 +529,7 @@ func TestClientSend(t *testing.T) {
 				},
 			})
 
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/bob-aci":
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/"+bobACI:
 			messageSent = true
 			w.WriteHeader(http.StatusOK)
 
@@ -586,12 +588,415 @@ func TestClientSend(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := client.Send(context.Background(), "bob-aci", "Hello from client!"); err != nil {
+	if err := client.Send(context.Background(), bobACI, "Hello from client!"); err != nil {
 		t.Fatal(err)
 	}
 
 	if !messageSent {
 		t.Fatal("expected message to be sent")
+	}
+}
+
+func TestIsE164(t *testing.T) {
+	valid := []string{"+15551234567", "+31612345678", "+4591448910", "+1234567"}
+	for _, s := range valid {
+		if !isE164(s) {
+			t.Errorf("isE164(%q) = false, want true", s)
+		}
+	}
+
+	invalid := []string{"", "+", "+123", "15551234567", "+1555abc4567", "hello", "+123-456-7890", "550e8400-e29b-41d4-a716-446655440000"}
+	for _, s := range invalid {
+		if isE164(s) {
+			t.Errorf("isE164(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestIsUUID(t *testing.T) {
+	valid := []string{"550e8400-e29b-41d4-a716-446655440000", "25e3d605-ee4a-4f48-b24e-a12afa2cb328", "ABCDEF01-2345-6789-ABCD-EF0123456789"}
+	for _, s := range valid {
+		if !isUUID(s) {
+			t.Errorf("isUUID(%q) = false, want true", s)
+		}
+	}
+
+	invalid := []string{"", "not-a-uuid", "550e8400-e29b-41d4-a716-44665544000", "+15551234567", "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"}
+	for _, s := range invalid {
+		if isUUID(s) {
+			t.Errorf("isUUID(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestSend_ResolvePhoneNumber(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	// Generate recipient (Bob) keys.
+	bobPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobPriv.Destroy()
+
+	bobPub, err := bobPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobPub.Destroy()
+
+	bobPubBytes, err := bobPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bobSPKPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobSPKPriv.Destroy()
+
+	bobSPKPub, err := bobSPKPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobSPKPub.Destroy()
+
+	bobSPKPubBytes, err := bobSPKPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bobSPKSig, err := bobPriv.Sign(bobSPKPubBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bobPreKeyPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobPreKeyPriv.Destroy()
+
+	bobPreKeyPub, err := bobPreKeyPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobPreKeyPub.Destroy()
+
+	bobPreKeyPubBytes, err := bobPreKeyPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bobKyberKP, err := libsignal.GenerateKyberKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobKyberKP.Destroy()
+
+	bobKyberPub, err := bobKyberKP.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobKyberPub.Destroy()
+
+	bobKyberPubBytes, err := bobKyberPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bobKyberSig, err := bobPriv.Sign(bobKyberPubBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enc := base64.RawStdEncoding.EncodeToString
+
+	var messageSent bool
+	var sentToPath string
+
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v2/keys/"):
+			json.NewEncoder(w).Encode(signalservice.PreKeyResponse{
+				IdentityKey: enc(bobPubBytes),
+				Devices: []signalservice.PreKeyDeviceInfo{
+					{
+						DeviceID:       1,
+						RegistrationID: 42,
+						SignedPreKey: &signalservice.SignedPreKeyEntity{
+							KeyID:     1,
+							PublicKey: enc(bobSPKPubBytes),
+							Signature: enc(bobSPKSig),
+						},
+						PreKey: &signalservice.PreKeyEntity{
+							KeyID:     100,
+							PublicKey: enc(bobPreKeyPubBytes),
+						},
+						PqPreKey: &signalservice.KyberPreKeyEntity{
+							KeyID:     200,
+							PublicKey: enc(bobKyberPubBytes),
+							Signature: enc(bobKyberSig),
+						},
+					},
+				},
+			})
+
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/messages/"):
+			messageSent = true
+			sentToPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer apiSrv.Close()
+
+	alicePriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := alicePriv.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePub, err := alicePriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubBytes, err := alicePub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePriv.Destroy()
+	alicePub.Destroy()
+
+	// Write account + contact to DB.
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SaveAccount(&store.Account{
+		Number:                "+15551234567",
+		ACI:                   "alice-aci",
+		PNI:                   "alice-pni",
+		Password:              "password",
+		DeviceID:              2,
+		RegistrationID:        1,
+		ACIIdentityKeyPrivate: privBytes,
+		ACIIdentityKeyPublic:  pubBytes,
+	})
+	// Save Bob as a contact with phone number
+	s.SaveContact(&store.Contact{
+		ACI:    "bob-aci",
+		Number: "+31612345678",
+		Name:   "Bob",
+	})
+	s.Close()
+
+	client := NewClient(
+		WithDBPath(dbPath),
+		WithAPIURL(apiSrv.URL),
+		WithTLSConfig(nil),
+	)
+	defer client.Close()
+
+	if err := client.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send by phone number - should resolve to bob-aci
+	if err := client.Send(context.Background(), "+31612345678", "Hello Bob!"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !messageSent {
+		t.Fatal("expected message to be sent")
+	}
+	if sentToPath != "/v1/messages/bob-aci" {
+		t.Errorf("sent to %q, want /v1/messages/bob-aci", sentToPath)
+	}
+}
+
+func TestSend_UnknownPhoneNumber(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	alicePriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := alicePriv.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePub, err := alicePriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubBytes, err := alicePub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePriv.Destroy()
+	alicePub.Destroy()
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SaveAccount(&store.Account{
+		Number:                "+15551234567",
+		ACI:                   "alice-aci",
+		Password:              "password",
+		DeviceID:              2,
+		RegistrationID:        1,
+		ACIIdentityKeyPrivate: privBytes,
+		ACIIdentityKeyPublic:  pubBytes,
+	})
+	s.Close()
+
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(404)
+	}))
+	defer apiSrv.Close()
+
+	client := NewClient(
+		WithDBPath(dbPath),
+		WithAPIURL(apiSrv.URL),
+		WithTLSConfig(nil),
+	)
+	defer client.Close()
+
+	if err := client.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = client.Send(context.Background(), "+31699999999", "Hello?")
+	if err == nil {
+		t.Fatal("expected error for unknown number")
+	}
+	if !strings.Contains(err.Error(), "unknown phone number") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSend_InvalidFormat(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	alicePriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := alicePriv.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePub, err := alicePriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubBytes, err := alicePub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePriv.Destroy()
+	alicePub.Destroy()
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SaveAccount(&store.Account{
+		Number:                "+15551234567",
+		ACI:                   "alice-aci",
+		Password:              "password",
+		DeviceID:              2,
+		RegistrationID:        1,
+		ACIIdentityKeyPrivate: privBytes,
+		ACIIdentityKeyPublic:  pubBytes,
+	})
+	s.Close()
+
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(404)
+	}))
+	defer apiSrv.Close()
+
+	client := NewClient(
+		WithDBPath(dbPath),
+		WithAPIURL(apiSrv.URL),
+		WithTLSConfig(nil),
+	)
+	defer client.Close()
+
+	if err := client.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = client.Send(context.Background(), "not-valid", "Hello?")
+	if err == nil {
+		t.Fatal("expected error for invalid format")
+	}
+	if !strings.Contains(err.Error(), "invalid recipient format") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLookupACI_Client(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	alicePriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := alicePriv.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePub, err := alicePriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubBytes, err := alicePub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	alicePriv.Destroy()
+	alicePub.Destroy()
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SaveAccount(&store.Account{
+		Number:                "+15551234567",
+		ACI:                   "alice-aci",
+		Password:              "password",
+		DeviceID:              2,
+		RegistrationID:        1,
+		ACIIdentityKeyPrivate: privBytes,
+		ACIIdentityKeyPublic:  pubBytes,
+	})
+	s.SaveContact(&store.Contact{ACI: "bob-aci", Number: "+31612345678", Name: "Bob"})
+	s.Close()
+
+	client := NewClient(WithDBPath(dbPath))
+	defer client.Close()
+
+	if err := client.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	if aci := client.LookupACI("+31612345678"); aci != "bob-aci" {
+		t.Errorf("LookupACI = %q, want %q", aci, "bob-aci")
+	}
+	if aci := client.LookupACI("+99999999999"); aci != "" {
+		t.Errorf("LookupACI = %q, want empty", aci)
 	}
 }
 
