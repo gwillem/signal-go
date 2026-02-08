@@ -1,6 +1,6 @@
 # Task 21: Auto-sync contacts and groups after Link/Register
 
-## Status: Planned
+## Status: Done
 
 ## Problem
 

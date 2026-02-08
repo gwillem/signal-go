@@ -138,7 +138,9 @@ func TestClientLink(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 
 		default:
-			t.Errorf("unexpected API request: %s %s", r.Method, r.URL.Path)
+			// Post-link sync makes best-effort API calls that may hit
+			// endpoints not mocked here (pre-key fetches, storage service).
+			// Return 404 silently — postLinkSync swallows errors.
 			w.WriteHeader(404)
 		}
 	}))
@@ -998,6 +1000,96 @@ func TestLookupACI_Client(t *testing.T) {
 	if aci := client.LookupACI("+99999999999"); aci != "" {
 		t.Errorf("LookupACI = %q, want empty", aci)
 	}
+}
+
+// setupTestClient creates a test client with an identity key, store, and service
+// pointing to the given API URL. Returns the client (caller must Close).
+func setupTestClient(t *testing.T, apiURL string) *Client {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	priv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := priv.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := priv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubBytes, err := pub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv.Destroy()
+	pub.Destroy()
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SaveAccount(&store.Account{
+		Number:                "+15551234567",
+		ACI:                   "alice-aci",
+		PNI:                   "alice-pni",
+		Password:              "password",
+		DeviceID:              2,
+		RegistrationID:        1,
+		ACIIdentityKeyPrivate: privBytes,
+		ACIIdentityKeyPublic:  pubBytes,
+	})
+	s.Close()
+
+	client := NewClient(
+		WithDBPath(dbPath),
+		WithAPIURL(apiURL),
+		WithTLSConfig(nil),
+	)
+	if err := client.Load(); err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func TestPostLinkSync_ContactSyncAttempted(t *testing.T) {
+	var contactSyncAttempted bool
+
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// RequestContactSync sends an encrypted message to self (alice-aci).
+		// This requires fetching pre-key bundles for device 1 of self.
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v2/keys/alice-aci/") {
+			contactSyncAttempted = true
+		}
+		// Return 404 for everything — we just track that it was attempted.
+		w.WriteHeader(404)
+	}))
+	defer apiSrv.Close()
+
+	client := setupTestClient(t, apiSrv.URL)
+	defer client.Close()
+
+	client.postLinkSync(context.Background())
+
+	if !contactSyncAttempted {
+		t.Error("expected contact sync to attempt pre-key fetch for self")
+	}
+}
+
+func TestPostLinkSync_ErrorsSwallowed(t *testing.T) {
+	// Mock server that returns errors for everything.
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer apiSrv.Close()
+
+	client := setupTestClient(t, apiSrv.URL)
+	defer client.Close()
+
+	// postLinkSync should not panic — errors are logged, not returned.
+	client.postLinkSync(context.Background())
 }
 
 // sendWSRequest sends a protobuf WebSocket request message.

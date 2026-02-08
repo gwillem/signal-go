@@ -68,6 +68,26 @@ func (c *Client) initService() {
 	})
 }
 
+// logf logs a message if the logger is non-nil.
+func logf(logger *log.Logger, format string, args ...any) {
+	if logger != nil {
+		logger.Printf(format, args...)
+	}
+}
+
+// postLinkSync triggers contact and group sync after linking or registration.
+// Errors are logged but not returned — sync can be retried manually.
+func (c *Client) postLinkSync(ctx context.Context) {
+	if err := c.service.RequestContactSync(ctx); err != nil {
+		logf(c.logger, "post-link contact sync request failed: %v", err)
+	}
+	if n, err := c.service.SyncGroupsFromStorage(ctx); err != nil {
+		logf(c.logger, "post-link group sync failed: %v", err)
+	} else {
+		logf(c.logger, "post-link group sync: %d groups", n)
+	}
+}
+
 // auth returns the BasicAuth credentials for API requests.
 // Used by functions not yet migrated to Service.
 func (c *Client) auth() signalservice.BasicAuth {
@@ -227,7 +247,11 @@ func (c *Client) Link(ctx context.Context, onQR func(uri string)) error {
 		return fmt.Errorf("client: set identity: %w", err)
 	}
 
-	return c.saveAccount()
+	if err := c.saveAccount(); err != nil {
+		return err
+	}
+	c.postLinkSync(ctx)
+	return nil
 }
 
 // Register registers a new Signal account as a primary device.
@@ -292,6 +316,7 @@ func (c *Client) Register(
 		return fmt.Errorf("client: save account: %w", err)
 	}
 	c.initService()
+	c.postLinkSync(ctx)
 	return nil
 }
 
