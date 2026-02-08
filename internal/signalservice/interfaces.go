@@ -53,6 +53,20 @@ type senderCryptoStore interface {
 	libsignal.IdentityKeyStore
 }
 
+// groupSenderDataStore is the data store interface needed by GroupSender.
+type groupSenderDataStore interface {
+	LoadAccount() (*store.Account, error)
+	GetGroup(string) (*store.Group, error)
+	SaveGroup(*store.Group) error
+	GetDevices(string) ([]int, error)
+	SetDevices(string, []int) error
+	GetContactByACI(string) (*store.Contact, error)
+	SaveContact(*store.Contact) error
+	GetSenderKeySharedWith([16]byte) ([]string, error)
+	MarkSenderKeySharedWith([16]byte, []string) error
+	ArchiveSession(string, uint32) error
+}
+
 // contactLookup provides contact lookup by ACI.
 type contactLookup interface {
 	GetContactByACI(string) (*store.Contact, error)

@@ -21,6 +21,7 @@ type Service struct {
 	transport     *Transport
 	store         *store.Store
 	sender        *Sender
+	groupSender   *GroupSender
 	auth          BasicAuth
 	localACI      string
 	localDeviceID int
@@ -70,6 +71,26 @@ func NewService(cfg ServiceConfig) *Service {
 	s.sender.sendHTTPMessage = s.SendMessage
 	s.sender.sendSealedHTTPMsg = s.SendSealedMessage
 	s.sender.getSenderCertificate = s.GetSenderCertificate
+
+	s.groupSender = &GroupSender{
+		dataStore:     cfg.Store,
+		cryptoStore:   cfg.Store,
+		logger:        cfg.Logger,
+		localACI:      cfg.LocalACI,
+		localDeviceID: cfg.LocalDeviceID,
+	}
+	// Wire GroupSender callbacks.
+	s.groupSender.getPreKeys = s.GetPreKeys
+	s.groupSender.getSenderCertificate = s.GetSenderCertificate
+	s.groupSender.sendSealedHTTPMsg = s.SendSealedMessage
+	s.groupSender.sendMultiRecipientHTTPMsg = s.SendMultiRecipientMessage
+	s.groupSender.fetchGroupDetails = s.FetchGroupDetails
+	s.groupSender.sendEncryptedMessage = s.sender.sendEncryptedMessage
+	s.groupSender.sendSealedEncrypted = s.sender.sendSealedEncrypted
+	s.groupSender.sendEncryptedMessageWithTimestamp = s.sender.sendEncryptedMessageWithTimestamp
+	s.groupSender.initialDevices = s.sender.initialDevices
+	s.groupSender.withDeviceRetry = s.sender.withDeviceRetry
+
 	return s
 }
 
@@ -476,6 +497,11 @@ func (s *Service) SendTextMessage(ctx context.Context, recipient, text string) e
 	return s.sender.sendTextMessage(ctx, recipient, text)
 }
 
+// SendGroupMessage sends a text message to a group.
+func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text string) error {
+	return s.groupSender.sendGroupMessage(ctx, groupID, text)
+}
+
 // SendSealedSenderMessage sends a text message using sealed sender.
 func (s *Service) SendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
 	return s.sender.sendSealedSenderMessage(ctx, recipient, text)
@@ -487,28 +513,10 @@ func (s *Service) SendTextMessageWithIdentity(ctx context.Context, recipient, te
 	return s.sender.sendTextMessageWithIdentity(ctx, recipient, text, identityStore)
 }
 
-// --- Sender proxy methods for code that still lives on Service (groupsender, contactsync) ---
+// --- Sender proxy methods for code that still lives on Service (contactsync) ---
 
 func (s *Service) sendEncryptedMessage(ctx context.Context, recipient string, contentBytes []byte) error {
 	return s.sender.sendEncryptedMessage(ctx, recipient, contentBytes)
-}
-
-func (s *Service) sendEncryptedMessageWithTimestamp(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
-	return s.sender.sendEncryptedMessageWithTimestamp(ctx, recipient, contentBytes, timestamp)
-}
-
-func (s *Service) sendSealedEncrypted(ctx context.Context, recipient string,
-	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
-) error {
-	return s.sender.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
-}
-
-func (s *Service) initialDevices(recipient string, sendingToSelf bool) ([]int, int) {
-	return s.sender.initialDevices(recipient, sendingToSelf)
-}
-
-func (s *Service) withDeviceRetry(recipient string, deviceIDs []int, skipDevice int, tryFn func([]int) error) error {
-	return s.sender.withDeviceRetry(recipient, deviceIDs, skipDevice, tryFn)
 }
 
 // sendRetryReceipt delegates to sender (used as callback for Receiver).

@@ -3,13 +3,8 @@ package signalservice
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -19,27 +14,69 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-// newSenderTestService creates a Service for sender tests.
-func newSenderTestService(t *testing.T, st *store.Store, apiURL string, auth BasicAuth) *Service {
+// newTestSender creates a Sender backed by the given store for both
+// data and crypto operations. Callbacks must be set by the caller.
+func newTestSender(t *testing.T, st *store.Store, localACI string, localDeviceID int) *Sender {
 	t.Helper()
-	// Parse localACI and localDeviceID from auth.Username (format: "aci.deviceId")
-	parts := strings.SplitN(auth.Username, ".", 2)
-	localACI := parts[0]
-	localDeviceID := 1
-	if len(parts) == 2 {
-		_, _ = fmt.Sscanf(parts[1], "%d", &localDeviceID)
+	return &Sender{
+		dataStore:     st,
+		cryptoStore:   st,
+		localACI:      localACI,
+		localDeviceID: localDeviceID,
 	}
-	return NewService(ServiceConfig{
-		APIURL:        apiURL,
-		Store:         st,
-		Auth:          auth,
-		LocalACI:      localACI,
-		LocalDeviceID: localDeviceID,
-	})
+}
+
+// makeTestPreKeys generates fresh pre-keys signed by identityPriv,
+// returning a PreKeyResponse ready for session establishment.
+func makeTestPreKeys(t *testing.T, identityPriv *libsignal.PrivateKey, deviceID, registrationID int) PreKeyResponse {
+	t.Helper()
+
+	identityPub, err := identityPriv.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identityPub.Destroy()
+	identityPubBytes, err := identityPub.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enc := base64.RawStdEncoding.EncodeToString
+
+	spk, _ := libsignal.GeneratePrivateKey()
+	defer spk.Destroy()
+	spkPub, _ := spk.PublicKey()
+	defer spkPub.Destroy()
+	spkPubBytes, _ := spkPub.Serialize()
+	spkSig, _ := identityPriv.Sign(spkPubBytes)
+
+	kyberKP, _ := libsignal.GenerateKyberKeyPair()
+	defer kyberKP.Destroy()
+	kyberPub, _ := kyberKP.PublicKey()
+	defer kyberPub.Destroy()
+	kyberPubBytes, _ := kyberPub.Serialize()
+	kyberSig, _ := identityPriv.Sign(kyberPubBytes)
+
+	pk, _ := libsignal.GeneratePrivateKey()
+	defer pk.Destroy()
+	pkPub, _ := pk.PublicKey()
+	defer pkPub.Destroy()
+	pkPubBytes, _ := pkPub.Serialize()
+
+	return PreKeyResponse{
+		IdentityKey: enc(identityPubBytes),
+		Devices: []PreKeyDeviceInfo{{
+			DeviceID:       deviceID,
+			RegistrationID: registrationID,
+			SignedPreKey:    &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
+			PreKey:         &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
+			PqPreKey:       &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
+		}},
+	}
 }
 
 func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
-	// Set up Bob (recipient) with keys.
+	// Set up Bob (recipient) with keys — needed for decryption verification.
 	bobIdentityPriv, err := libsignal.GeneratePrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -123,49 +160,19 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 
 	enc := base64.RawStdEncoding.EncodeToString
 
-	// Track what the mock server receives.
+	preKeyResp := PreKeyResponse{
+		IdentityKey: enc(bobIdentityPubBytes),
+		Devices: []PreKeyDeviceInfo{{
+			DeviceID:       1,
+			RegistrationID: 42,
+			SignedPreKey:    &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(bobSPKPubBytes), Signature: enc(bobSPKSig)},
+			PreKey:         &PreKeyEntity{KeyID: 100, PublicKey: enc(bobPreKeyPubBytes)},
+			PqPreKey:       &KyberPreKeyEntity{KeyID: 200, PublicKey: enc(bobKyberPubBytes), Signature: enc(bobKyberSig)},
+		}},
+	}
+
+	// Track what the sender sends.
 	var receivedMsg *outgoingMessageList
-
-	// Mock server: serves pre-keys on GET and accepts messages on PUT.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/bob-aci/1":
-			json.NewEncoder(w).Encode(PreKeyResponse{
-				IdentityKey: enc(bobIdentityPubBytes),
-				Devices: []PreKeyDeviceInfo{
-					{
-						DeviceID:       1,
-						RegistrationID: 42,
-						SignedPreKey: &SignedPreKeyEntity{
-							KeyID:     1,
-							PublicKey: enc(bobSPKPubBytes),
-							Signature: enc(bobSPKSig),
-						},
-						PreKey: &PreKeyEntity{
-							KeyID:     100,
-							PublicKey: enc(bobPreKeyPubBytes),
-						},
-						PqPreKey: &KyberPreKeyEntity{
-							KeyID:     200,
-							PublicKey: enc(bobKyberPubBytes),
-							Signature: enc(bobKyberSig),
-						},
-					},
-				},
-			})
-
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/bob-aci":
-			body, _ := io.ReadAll(r.Body)
-			receivedMsg = new(outgoingMessageList)
-			json.Unmarshal(body, receivedMsg)
-			w.WriteHeader(http.StatusOK)
-
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
 
 	// Set up Alice (sender) with SQLite store.
 	dbPath := filepath.Join(t.TempDir(), "alice.db")
@@ -184,18 +191,24 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
+	snd := newTestSender(t, st, "alice-aci", 2)
+	snd.getPreKeys = func(_ context.Context, _ string, _ int) (*PreKeyResponse, error) {
+		return &preKeyResp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, msg *outgoingMessageList) error {
+		receivedMsg = msg
+		return nil
+	}
 
 	// Send a message — this should fetch pre-keys, establish session, encrypt, and send.
-	svc := newSenderTestService(t, st, srv.URL, auth)
-	err = svc.SendTextMessage(context.Background(), "bob-aci", "Hello Bob!")
+	err = snd.sendTextMessage(context.Background(), "bob-aci", "Hello Bob!")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify the message was sent.
 	if receivedMsg == nil {
-		t.Fatal("expected message to be sent to server")
+		t.Fatal("expected message to be sent")
 	}
 	if receivedMsg.Destination != "bob-aci" {
 		t.Errorf("destination: got %q", receivedMsg.Destination)
@@ -295,25 +308,7 @@ func TestSendTextMessageWithPreKeyFetch(t *testing.T) {
 }
 
 func TestSendTextMessageWithExistingSession(t *testing.T) {
-	// Set up both parties.
-	alicePriv, err := libsignal.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bobPriv, err := libsignal.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bobPriv.Destroy()
-
-	bobPub, err := bobPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bobPub.Destroy()
-
-	// Set up Alice's store with an established session.
+	// Set up Alice's store.
 	dbPath := filepath.Join(t.TempDir(), "alice.db")
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -321,67 +316,23 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	}
 	defer st.Close()
 
+	alicePriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer alicePriv.Destroy()
 	if err := st.SetIdentity(alicePriv, 1); err != nil {
 		t.Fatal(err)
 	}
 
-	// Establish session via pre-key bundle.
-	bobSPKPriv, err := libsignal.GeneratePrivateKey()
+	// Establish session via pre-key bundle using makeTestPreKeys + buildPreKeyBundle.
+	bobPriv, err := libsignal.GeneratePrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer bobSPKPriv.Destroy()
+	defer bobPriv.Destroy()
 
-	bobSPKPub, err := bobSPKPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bobSPKPub.Destroy()
-
-	bobSPKPubBytes, err := bobSPKPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bobSPKSig, err := bobPriv.Sign(bobSPKPubBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bobPreKeyPriv, err := libsignal.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bobPreKeyPriv.Destroy()
-
-	bobPreKeyPub, err := bobPreKeyPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bobPreKeyPub.Destroy()
-
-	kyberKP, err := libsignal.GenerateKyberKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer kyberKP.Destroy()
-
-	kyberPub, err := kyberKP.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer kyberPub.Destroy()
-
-	kyberPubBytes, err := kyberPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	kyberSig, err := bobPriv.Sign(kyberPubBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	preKeyResp := makeTestPreKeys(t, bobPriv, 1, 42)
 
 	bobAddr, err := libsignal.NewAddress("bob-aci", 1)
 	if err != nil {
@@ -389,13 +340,7 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 	}
 	defer bobAddr.Destroy()
 
-	bundle, err := libsignal.NewPreKeyBundle(
-		42, 1,
-		1, bobPreKeyPub,
-		1, bobSPKPub, bobSPKSig,
-		bobPub,
-		1, kyberPub, kyberSig,
-	)
+	bundle, err := buildPreKeyBundle(preKeyResp.IdentityKey, preKeyResp.Devices[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,34 +350,21 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Mock server — should NOT get a GET /v2/keys request since session exists.
-	// The registration ID is stored inside the session record by ProcessPreKeyBundle.
+	// Should NOT fetch pre-keys since session exists.
 	preKeysFetched := false
 	var receivedMsg *outgoingMessageList
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet:
-			preKeysFetched = true
-			w.WriteHeader(404)
+	snd := newTestSender(t, st, "alice-aci", 2)
+	snd.getPreKeys = func(_ context.Context, _ string, _ int) (*PreKeyResponse, error) {
+		preKeysFetched = true
+		return nil, fmt.Errorf("should not fetch pre-keys")
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, msg *outgoingMessageList) error {
+		receivedMsg = msg
+		return nil
+	}
 
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/bob-aci":
-			body, _ := io.ReadAll(r.Body)
-			receivedMsg = new(outgoingMessageList)
-			json.Unmarshal(body, receivedMsg)
-			w.WriteHeader(http.StatusOK)
-
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
-
-	auth := BasicAuth{Username: "alice-aci.2", Password: "password"}
-	svc := newSenderTestService(t, st, srv.URL, auth)
-
-	err = svc.SendTextMessage(context.Background(), "bob-aci", "Hello again!")
+	err = snd.sendTextMessage(context.Background(), "bob-aci", "Hello again!")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,73 +386,12 @@ func TestSendTextMessageWithExistingSession(t *testing.T) {
 
 // TestSendSessionReuse verifies that after a successful send,
 // subsequent sends reuse the session and don't fetch pre-keys again.
-// The registration ID is stored in the session record itself.
 func TestSendSessionReuse(t *testing.T) {
 	recipPriv, err := libsignal.GeneratePrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer recipPriv.Destroy()
-	recipPub, err := recipPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recipPub.Destroy()
-	recipPubBytes, err := recipPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	enc := base64.RawStdEncoding.EncodeToString
-
-	makePreKeys := func(deviceID int) PreKeyResponse {
-		spk, _ := libsignal.GeneratePrivateKey()
-		defer spk.Destroy()
-		spkPub, _ := spk.PublicKey()
-		defer spkPub.Destroy()
-		spkPubBytes, _ := spkPub.Serialize()
-		spkSig, _ := recipPriv.Sign(spkPubBytes)
-
-		kyberKP, _ := libsignal.GenerateKyberKeyPair()
-		defer kyberKP.Destroy()
-		kyberPub, _ := kyberKP.PublicKey()
-		defer kyberPub.Destroy()
-		kyberPubBytes, _ := kyberPub.Serialize()
-		kyberSig, _ := recipPriv.Sign(kyberPubBytes)
-
-		pk, _ := libsignal.GeneratePrivateKey()
-		defer pk.Destroy()
-		pkPub, _ := pk.PublicKey()
-		defer pkPub.Destroy()
-		pkPubBytes, _ := pkPub.Serialize()
-
-		return PreKeyResponse{
-			IdentityKey: enc(recipPubBytes),
-			Devices: []PreKeyDeviceInfo{{
-				DeviceID: deviceID, RegistrationID: 42,
-				SignedPreKey: &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
-				PreKey:       &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
-				PqPreKey:     &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
-			}},
-		}
-	}
-
-	getPreKeysCount := 0
-	putCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/recip-aci/1":
-			getPreKeysCount++
-			json.NewEncoder(w).Encode(makePreKeys(1))
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/recip-aci":
-			putCount++
-			w.WriteHeader(http.StatusOK)
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
@@ -538,11 +409,22 @@ func TestSendSessionReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
-	svc := newSenderTestService(t, st, srv.URL, auth)
+	getPreKeysCount := 0
+	putCount := 0
+
+	snd := newTestSender(t, st, "my-aci", 1)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		getPreKeysCount++
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 42)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, _ *outgoingMessageList) error {
+		putCount++
+		return nil
+	}
 
 	// First send: should fetch pre-keys to establish session.
-	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello1")
+	err = snd.sendTextMessage(context.Background(), "recip-aci", "hello1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +436,7 @@ func TestSendSessionReuse(t *testing.T) {
 	}
 
 	// Second send: should NOT fetch pre-keys (session exists with registration ID).
-	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello2")
+	err = snd.sendTextMessage(context.Background(), "recip-aci", "hello2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,151 +455,11 @@ func TestSendSessionReuse(t *testing.T) {
 // On retry, the session for device 1 must be re-established (archived after 409)
 // because the server never processed the original PreKey message.
 func TestSendToSelf409ThenRetry(t *testing.T) {
-	var putCount int
-	var getPreKeysCount int
-
-	// Generate recipient keys for device 1.
 	recipPriv, err := libsignal.GeneratePrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer recipPriv.Destroy()
-	recipPub, err := recipPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recipPub.Destroy()
-	recipPubBytes, err := recipPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	spkPriv, err := libsignal.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer spkPriv.Destroy()
-	spkPub, err := spkPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer spkPub.Destroy()
-	spkPubBytes, err := spkPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	spkSig, err := recipPriv.Sign(spkPubBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	preKeyPriv, err := libsignal.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer preKeyPriv.Destroy()
-	preKeyPub, err := preKeyPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer preKeyPub.Destroy()
-	preKeyPubBytes, err := preKeyPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	kyberKP, err := libsignal.GenerateKyberKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer kyberKP.Destroy()
-	kyberPub, err := kyberKP.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer kyberPub.Destroy()
-	kyberPubBytes, err := kyberPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	kyberSig, err := recipPriv.Sign(kyberPubBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	enc := base64.RawStdEncoding.EncodeToString
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/my-aci/1":
-			getPreKeysCount++
-			json.NewEncoder(w).Encode(PreKeyResponse{
-				IdentityKey: enc(recipPubBytes),
-				Devices: []PreKeyDeviceInfo{
-					{
-						DeviceID:       1,
-						RegistrationID: 1,
-						SignedPreKey: &SignedPreKeyEntity{
-							KeyID:     1,
-							PublicKey: enc(spkPubBytes),
-							Signature: enc(spkSig),
-						},
-						PreKey: &PreKeyEntity{
-							KeyID:     1,
-							PublicKey: enc(preKeyPubBytes),
-						},
-						PqPreKey: &KyberPreKeyEntity{
-							KeyID:     1,
-							PublicKey: enc(kyberPubBytes),
-							Signature: enc(kyberSig),
-						},
-					},
-				},
-			})
-
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/my-aci":
-			putCount++
-
-			body, _ := io.ReadAll(r.Body)
-			var msg outgoingMessageList
-			json.Unmarshal(body, &msg)
-
-			// Device 2 (our device) must never appear.
-			for _, m := range msg.Messages {
-				if m.DestinationDeviceID == 2 {
-					t.Errorf("PUT #%d: should not send to own device 2", putCount)
-				}
-			}
-
-			if putCount == 1 {
-				// First PUT: server says device 2 is missing.
-				// Since device 2 is our own device, it should be skipped.
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(mismatchedDevicesError{
-					MissingDevices: []int{2},
-				})
-				return
-			}
-
-			// Second PUT: the retry must send a PreKey message (not a
-			// regular SignalMessage) because the 409 means the server
-			// never processed the first attempt's PreKey message.
-			if len(msg.Messages) == 1 {
-				if msg.Messages[0].Type != proto.Envelope_PREKEY_BUNDLE {
-					t.Errorf("PUT #%d: expected PreKey message (type %d), got type %d",
-						putCount, proto.Envelope_PREKEY_BUNDLE, msg.Messages[0].Type)
-				}
-			}
-
-			w.WriteHeader(http.StatusOK)
-
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
@@ -735,10 +477,42 @@ func TestSendToSelf409ThenRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
-	svc := newSenderTestService(t, st, srv.URL, auth)
+	var putCount, getPreKeysCount int
 
-	err = svc.SendTextMessage(context.Background(), "my-aci", "sync")
+	snd := newTestSender(t, st, "my-aci", 2)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		getPreKeysCount++
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 1)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, msg *outgoingMessageList) error {
+		putCount++
+
+		// Device 2 (our device) must never appear.
+		for _, m := range msg.Messages {
+			if m.DestinationDeviceID == 2 {
+				t.Errorf("PUT #%d: should not send to own device 2", putCount)
+			}
+		}
+
+		if putCount == 1 {
+			// First PUT: server says device 2 is missing.
+			// Since device 2 is our own device, it should be skipped.
+			return &mismatchedDevicesError{MissingDevices: []int{2}}
+		}
+
+		// Second PUT: the retry must send a PreKey message (not a
+		// regular SignalMessage) because the 409 means the server
+		// never processed the first attempt's PreKey message.
+		if len(msg.Messages) == 1 && msg.Messages[0].Type != proto.Envelope_PREKEY_BUNDLE {
+			t.Errorf("PUT #%d: expected PreKey message (type %d), got type %d",
+				putCount, proto.Envelope_PREKEY_BUNDLE, msg.Messages[0].Type)
+		}
+
+		return nil
+	}
+
+	err = snd.sendTextMessage(context.Background(), "my-aci", "sync")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,8 +521,7 @@ func TestSendToSelf409ThenRetry(t *testing.T) {
 		t.Errorf("expected at least 2 PUT attempts, got %d", putCount)
 	}
 	// After the 409 rejection, the session must be archived so that the retry
-	// re-fetches pre-keys. The server never processed the first PreKey message,
-	// so sending a non-PreKey message with the advanced session would fail (410).
+	// re-fetches pre-keys.
 	if getPreKeysCount < 2 {
 		t.Errorf("expected pre-keys to be re-fetched after 409, got %d fetches", getPreKeysCount)
 	}
@@ -762,74 +535,6 @@ func TestSend410ThenRetrySucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer recipPriv.Destroy()
-	recipPub, err := recipPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recipPub.Destroy()
-	recipPubBytes, err := recipPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	enc := base64.RawStdEncoding.EncodeToString
-	getPreKeysCount := 0
-
-	makePreKeys := func(deviceID int) PreKeyResponse {
-		spk, _ := libsignal.GeneratePrivateKey()
-		defer spk.Destroy()
-		spkPub, _ := spk.PublicKey()
-		defer spkPub.Destroy()
-		spkPubBytes, _ := spkPub.Serialize()
-		spkSig, _ := recipPriv.Sign(spkPubBytes)
-
-		kyberKP, _ := libsignal.GenerateKyberKeyPair()
-		defer kyberKP.Destroy()
-		kyberPub, _ := kyberKP.PublicKey()
-		defer kyberPub.Destroy()
-		kyberPubBytes, _ := kyberPub.Serialize()
-		kyberSig, _ := recipPriv.Sign(kyberPubBytes)
-
-		pk, _ := libsignal.GeneratePrivateKey()
-		defer pk.Destroy()
-		pkPub, _ := pk.PublicKey()
-		defer pkPub.Destroy()
-		pkPubBytes, _ := pkPub.Serialize()
-
-		return PreKeyResponse{
-			IdentityKey: enc(recipPubBytes),
-			Devices: []PreKeyDeviceInfo{{
-				DeviceID: deviceID, RegistrationID: 1,
-				SignedPreKey: &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
-				PreKey:       &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
-				PqPreKey:     &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
-			}},
-		}
-	}
-
-	putCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/recip-aci/1":
-			getPreKeysCount++
-			json.NewEncoder(w).Encode(makePreKeys(1))
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/recip-aci":
-			putCount++
-			if putCount == 1 {
-				// First PUT: 410 stale device 1.
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusGone)
-				json.NewEncoder(w).Encode(map[string]any{"staleDevices": []int{1}})
-				return
-			}
-			// Second PUT: accept.
-			w.WriteHeader(http.StatusOK)
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
@@ -847,10 +552,26 @@ func TestSend410ThenRetrySucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	auth := BasicAuth{Username: "my-aci.2", Password: "pass"}
-	svc := newSenderTestService(t, st, srv.URL, auth)
+	getPreKeysCount := 0
+	putCount := 0
 
-	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello")
+	snd := newTestSender(t, st, "my-aci", 2)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		getPreKeysCount++
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 1)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, _ *outgoingMessageList) error {
+		putCount++
+		if putCount == 1 {
+			// First PUT: 410 stale device 1.
+			return &staleDevicesError{StaleDevices: []int{1}}
+		}
+		// Second PUT: accept.
+		return nil
+	}
+
+	err = snd.sendTextMessage(context.Background(), "recip-aci", "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,7 +585,6 @@ func TestSend410ThenRetrySucceeds(t *testing.T) {
 
 // TestSend410OnlyArchivesSessions verifies Signal-Android behavior:
 // 410 (stale devices) only archives sessions, does NOT remove devices from the list.
-// This matches Signal-Android's SignalServiceMessageSender.java behavior.
 //
 // Scenario:
 // 1. PUT → 410 stale=[1] → archive session for device 1, retry
@@ -877,115 +597,6 @@ func TestSend410OnlyArchivesSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer recipPriv.Destroy()
-	recipPub, err := recipPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recipPub.Destroy()
-	recipPubBytes, err := recipPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	enc := base64.RawStdEncoding.EncodeToString
-
-	makePreKeys := func(deviceID int) PreKeyResponse {
-		spk, _ := libsignal.GeneratePrivateKey()
-		defer spk.Destroy()
-		spkPub, _ := spk.PublicKey()
-		defer spkPub.Destroy()
-		spkPubBytes, _ := spkPub.Serialize()
-		spkSig, _ := recipPriv.Sign(spkPubBytes)
-
-		kyberKP, _ := libsignal.GenerateKyberKeyPair()
-		defer kyberKP.Destroy()
-		kyberPub, _ := kyberKP.PublicKey()
-		defer kyberPub.Destroy()
-		kyberPubBytes, _ := kyberPub.Serialize()
-		kyberSig, _ := recipPriv.Sign(kyberPubBytes)
-
-		pk, _ := libsignal.GeneratePrivateKey()
-		defer pk.Destroy()
-		pkPub, _ := pk.PublicKey()
-		defer pkPub.Destroy()
-		pkPubBytes, _ := pkPub.Serialize()
-
-		return PreKeyResponse{
-			IdentityKey: enc(recipPubBytes),
-			Devices: []PreKeyDeviceInfo{{
-				DeviceID: deviceID, RegistrationID: 1,
-				SignedPreKey: &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
-				PreKey:       &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
-				PqPreKey:     &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
-			}},
-		}
-	}
-
-	putCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/self-aci/1":
-			json.NewEncoder(w).Encode(makePreKeys(1))
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/self-aci/2":
-			json.NewEncoder(w).Encode(makePreKeys(2))
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/self-aci":
-			putCount++
-			body, _ := io.ReadAll(r.Body)
-			var msg outgoingMessageList
-			json.Unmarshal(body, &msg)
-
-			switch putCount {
-			case 1:
-				// 410: stale session for device 1 from previous run.
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusGone)
-				json.NewEncoder(w).Encode(map[string]any{"staleDevices": []int{1}})
-			case 2:
-				// 409: server says device 2 is missing.
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(mismatchedDevicesError{MissingDevices: []int{2}})
-			case 3:
-				// Verify device 2 was added after 409.
-				hasDevice2 := false
-				for _, m := range msg.Messages {
-					if m.DestinationDeviceID == 2 {
-						hasDevice2 = true
-					}
-				}
-				if !hasDevice2 {
-					t.Errorf("PUT #3: expected device 2 after 409 missing")
-				}
-				// 410: device 2's session is stale.
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusGone)
-				json.NewEncoder(w).Encode(map[string]any{"staleDevices": []int{2}})
-			case 4:
-				// Signal-Android behavior: 410 only archives sessions, doesn't remove devices.
-				// Device 2 should still be in the list with a fresh session.
-				hasDevice2 := false
-				for _, m := range msg.Messages {
-					if m.DestinationDeviceID == 2 {
-						hasDevice2 = true
-					}
-				}
-				if !hasDevice2 {
-					t.Errorf("PUT #4: device 2 should still be present (410 only archives, doesn't remove)")
-				}
-				if len(msg.Messages) != 2 {
-					t.Errorf("PUT #4: expected 2 messages (devices 1 and 2), got %d", len(msg.Messages))
-				}
-				w.WriteHeader(http.StatusOK)
-			default:
-				t.Errorf("unexpected PUT #%d", putCount)
-				w.WriteHeader(http.StatusOK)
-			}
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
@@ -1003,11 +614,58 @@ func TestSend410OnlyArchivesSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Device 4 = our device (like the production user).
-	auth := BasicAuth{Username: "self-aci.4", Password: "pass"}
-	svc := newSenderTestService(t, st, srv.URL, auth)
+	putCount := 0
 
-	err = svc.SendTextMessage(context.Background(), "self-aci", "sync")
+	snd := newTestSender(t, st, "self-aci", 4)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 1)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, msg *outgoingMessageList) error {
+		putCount++
+		switch putCount {
+		case 1:
+			// 410: stale session for device 1 from previous run.
+			return &staleDevicesError{StaleDevices: []int{1}}
+		case 2:
+			// 409: server says device 2 is missing.
+			return &mismatchedDevicesError{MissingDevices: []int{2}}
+		case 3:
+			// Verify device 2 was added after 409.
+			hasDevice2 := false
+			for _, m := range msg.Messages {
+				if m.DestinationDeviceID == 2 {
+					hasDevice2 = true
+				}
+			}
+			if !hasDevice2 {
+				t.Errorf("PUT #3: expected device 2 after 409 missing")
+			}
+			// 410: device 2's session is stale.
+			return &staleDevicesError{StaleDevices: []int{2}}
+		case 4:
+			// Signal-Android behavior: 410 only archives sessions, doesn't remove devices.
+			// Device 2 should still be in the list with a fresh session.
+			hasDevice2 := false
+			for _, m := range msg.Messages {
+				if m.DestinationDeviceID == 2 {
+					hasDevice2 = true
+				}
+			}
+			if !hasDevice2 {
+				t.Errorf("PUT #4: device 2 should still be present (410 only archives, doesn't remove)")
+			}
+			if len(msg.Messages) != 2 {
+				t.Errorf("PUT #4: expected 2 messages (devices 1 and 2), got %d", len(msg.Messages))
+			}
+			return nil
+		default:
+			t.Errorf("unexpected PUT #%d", putCount)
+			return nil
+		}
+	}
+
+	err = snd.sendTextMessage(context.Background(), "self-aci", "sync")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1025,74 +683,6 @@ func TestSend409PersistsDefaultDevice1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer recipPriv.Destroy()
-	recipPub, err := recipPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recipPub.Destroy()
-	recipPubBytes, err := recipPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	enc := base64.RawStdEncoding.EncodeToString
-
-	makePreKeys := func(deviceID int) PreKeyResponse {
-		spk, _ := libsignal.GeneratePrivateKey()
-		defer spk.Destroy()
-		spkPub, _ := spk.PublicKey()
-		defer spkPub.Destroy()
-		spkPubBytes, _ := spkPub.Serialize()
-		spkSig, _ := recipPriv.Sign(spkPubBytes)
-
-		kyberKP, _ := libsignal.GenerateKyberKeyPair()
-		defer kyberKP.Destroy()
-		kyberPub, _ := kyberKP.PublicKey()
-		defer kyberPub.Destroy()
-		kyberPubBytes, _ := kyberPub.Serialize()
-		kyberSig, _ := recipPriv.Sign(kyberPubBytes)
-
-		pk, _ := libsignal.GeneratePrivateKey()
-		defer pk.Destroy()
-		pkPub, _ := pk.PublicKey()
-		defer pkPub.Destroy()
-		pkPubBytes, _ := pkPub.Serialize()
-
-		return PreKeyResponse{
-			IdentityKey: enc(recipPubBytes),
-			Devices: []PreKeyDeviceInfo{{
-				DeviceID: deviceID, RegistrationID: 1,
-				SignedPreKey: &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
-				PreKey:       &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
-				PqPreKey:     &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
-			}},
-		}
-	}
-
-	putCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/recip-aci/1":
-			json.NewEncoder(w).Encode(makePreKeys(1))
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/recip-aci/2":
-			json.NewEncoder(w).Encode(makePreKeys(2))
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/recip-aci":
-			putCount++
-			if putCount == 1 {
-				// First PUT: 409 missing device 2.
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(mismatchedDevicesError{MissingDevices: []int{2}})
-				return
-			}
-			// Second PUT: accept.
-			w.WriteHeader(http.StatusOK)
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
@@ -1116,10 +706,24 @@ func TestSend409PersistsDefaultDevice1(t *testing.T) {
 		t.Fatalf("expected empty cache, got %v", devices)
 	}
 
-	auth := BasicAuth{Username: "my-aci.1", Password: "pass"}
-	svc := newSenderTestService(t, st, srv.URL, auth)
+	putCount := 0
 
-	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello")
+	snd := newTestSender(t, st, "my-aci", 1)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 1)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, _ *outgoingMessageList) error {
+		putCount++
+		if putCount == 1 {
+			// First PUT: 409 missing device 2.
+			return &mismatchedDevicesError{MissingDevices: []int{2}}
+		}
+		// Second PUT: accept.
+		return nil
+	}
+
+	err = snd.sendTextMessage(context.Background(), "recip-aci", "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1159,94 +763,6 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer recipPriv.Destroy()
-	recipPub, err := recipPriv.PublicKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recipPub.Destroy()
-	recipPubBytes, err := recipPub.Serialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	enc := base64.RawStdEncoding.EncodeToString
-
-	makePreKeys := func(deviceID int) PreKeyResponse {
-		spk, _ := libsignal.GeneratePrivateKey()
-		defer spk.Destroy()
-		spkPub, _ := spk.PublicKey()
-		defer spkPub.Destroy()
-		spkPubBytes, _ := spkPub.Serialize()
-		spkSig, _ := recipPriv.Sign(spkPubBytes)
-
-		kyberKP, _ := libsignal.GenerateKyberKeyPair()
-		defer kyberKP.Destroy()
-		kyberPub, _ := kyberKP.PublicKey()
-		defer kyberPub.Destroy()
-		kyberPubBytes, _ := kyberPub.Serialize()
-		kyberSig, _ := recipPriv.Sign(kyberPubBytes)
-
-		pk, _ := libsignal.GeneratePrivateKey()
-		defer pk.Destroy()
-		pkPub, _ := pk.PublicKey()
-		defer pkPub.Destroy()
-		pkPubBytes, _ := pkPub.Serialize()
-
-		return PreKeyResponse{
-			IdentityKey: enc(recipPubBytes),
-			Devices: []PreKeyDeviceInfo{{
-				DeviceID: deviceID, RegistrationID: 1,
-				SignedPreKey: &SignedPreKeyEntity{KeyID: 1, PublicKey: enc(spkPubBytes), Signature: enc(spkSig)},
-				PreKey:       &PreKeyEntity{KeyID: 1, PublicKey: enc(pkPubBytes)},
-				PqPreKey:     &KyberPreKeyEntity{KeyID: 1, PublicKey: enc(kyberPubBytes), Signature: enc(kyberSig)},
-			}},
-		}
-	}
-
-	putCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/recip-aci/1":
-			json.NewEncoder(w).Encode(makePreKeys(1))
-		case r.Method == http.MethodGet && r.URL.Path == "/v2/keys/recip-aci/2":
-			json.NewEncoder(w).Encode(makePreKeys(2))
-		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/recip-aci":
-			putCount++
-			body, _ := io.ReadAll(r.Body)
-			var msg outgoingMessageList
-			json.Unmarshal(body, &msg)
-
-			switch putCount {
-			case 1:
-				// Verify both devices are being sent to.
-				if len(msg.Messages) != 2 {
-					t.Errorf("PUT #1: expected 2 messages, got %d", len(msg.Messages))
-				}
-				// 409: device 2 is no longer registered (extra).
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(mismatchedDevicesError{ExtraDevices: []int{2}})
-			case 2:
-				// Verify device 2 was removed after 409 extra.
-				for _, m := range msg.Messages {
-					if m.DestinationDeviceID == 2 {
-						t.Errorf("PUT #2: device 2 should have been removed after 409 extra")
-					}
-				}
-				if len(msg.Messages) != 1 {
-					t.Errorf("PUT #2: expected 1 message, got %d", len(msg.Messages))
-				}
-				w.WriteHeader(http.StatusOK)
-			default:
-				t.Errorf("unexpected PUT #%d", putCount)
-				w.WriteHeader(http.StatusOK)
-			}
-		default:
-			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	st, err := store.Open(dbPath)
@@ -1267,10 +783,41 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 	// Pre-populate device cache with devices 1 and 2.
 	_ = st.SetDevices("recip-aci", []int{1, 2})
 
-	auth := BasicAuth{Username: "my-aci.4", Password: "pass"}
-	svc := newSenderTestService(t, st, srv.URL, auth)
+	putCount := 0
 
-	err = svc.SendTextMessage(context.Background(), "recip-aci", "hello")
+	snd := newTestSender(t, st, "my-aci", 4)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 1)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, msg *outgoingMessageList) error {
+		putCount++
+		switch putCount {
+		case 1:
+			// Verify both devices are being sent to.
+			if len(msg.Messages) != 2 {
+				t.Errorf("PUT #1: expected 2 messages, got %d", len(msg.Messages))
+			}
+			// 409: device 2 is no longer registered (extra).
+			return &mismatchedDevicesError{ExtraDevices: []int{2}}
+		case 2:
+			// Verify device 2 was removed after 409 extra.
+			for _, m := range msg.Messages {
+				if m.DestinationDeviceID == 2 {
+					t.Errorf("PUT #2: device 2 should have been removed after 409 extra")
+				}
+			}
+			if len(msg.Messages) != 1 {
+				t.Errorf("PUT #2: expected 1 message, got %d", len(msg.Messages))
+			}
+			return nil
+		default:
+			t.Errorf("unexpected PUT #%d", putCount)
+			return nil
+		}
+	}
+
+	err = snd.sendTextMessage(context.Background(), "recip-aci", "hello")
 	if err != nil {
 		t.Fatal(err)
 	}

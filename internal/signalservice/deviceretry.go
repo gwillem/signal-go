@@ -1,7 +1,6 @@
 package signalservice
 
 import (
-	"context"
 	"errors"
 	"slices"
 )
@@ -89,60 +88,3 @@ func (snd *Sender) withDeviceRetry(recipient string, deviceIDs []int, skipDevice
 	)
 }
 
-// withGroupDeviceRetry runs tryFn, retrying on group-level 409/410 errors.
-// Unlike withDeviceRetry which handles one recipient, this handles errors
-// containing device mismatches for MULTIPLE recipients simultaneously.
-// It archives/fetches sessions for each affected recipient and retries.
-func (s *Service) withGroupDeviceRetry(ctx context.Context, tryFn func() error) error {
-	return retryOnDeviceError(
-		tryFn,
-		func(err error) error {
-			var groupStaleErr *groupStaleDevicesError
-			var groupMismatchErr *groupMismatchedDevicesError
-
-			switch {
-			case errors.As(err, &groupStaleErr):
-				logf(s.logger, "group retry: 410 stale for %d recipients", len(groupStaleErr.Entries))
-				for _, entry := range groupStaleErr.Entries {
-					for _, deviceID := range entry.Devices.StaleDevices {
-						_ = s.store.ArchiveSession(entry.UUID, uint32(deviceID))
-					}
-				}
-			case errors.As(err, &groupMismatchErr):
-				logf(s.logger, "group retry: 409 mismatch for %d recipients", len(groupMismatchErr.Entries))
-				for _, entry := range groupMismatchErr.Entries {
-					logf(s.logger, "group retry: %s missing=%v extra=%v",
-						entry.UUID[:8], entry.Devices.MissingDevices, entry.Devices.ExtraDevices)
-
-					for _, deviceID := range entry.Devices.ExtraDevices {
-						_ = s.store.ArchiveSession(entry.UUID, uint32(deviceID))
-					}
-
-					for _, deviceID := range entry.Devices.MissingDevices {
-						if _, fetchErr := s.GetPreKeys(ctx, entry.UUID, deviceID); fetchErr != nil {
-							logf(s.logger, "group retry: failed to fetch prekeys for %s.%d: %v",
-								entry.UUID[:8], deviceID, fetchErr)
-						}
-					}
-
-					currentDevices, _ := s.store.GetDevices(entry.UUID)
-					if len(currentDevices) == 0 {
-						currentDevices = []int{1}
-					}
-					for _, deviceID := range entry.Devices.ExtraDevices {
-						currentDevices = slices.DeleteFunc(currentDevices, func(id int) bool { return id == deviceID })
-					}
-					for _, deviceID := range entry.Devices.MissingDevices {
-						if !slices.Contains(currentDevices, deviceID) {
-							currentDevices = append(currentDevices, deviceID)
-						}
-					}
-					_ = s.store.SetDevices(entry.UUID, currentDevices)
-				}
-			default:
-				return err
-			}
-			return nil
-		},
-	)
-}

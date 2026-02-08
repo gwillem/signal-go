@@ -174,7 +174,7 @@ When adding new functions that need logging, accept `logger *log.Logger` as a pa
 | `internal/signalservice/httptypes.go`    | JSON request/response types for all endpoints                                                      |
 | `internal/signalservice/registration.go` | RegisterLinkedDevice orchestration                                                                 |
 | `internal/signalservice/sender.go`       | SendTextMessage, padMessage: session establishment + transport padding + encryption + delivery     |
-| `internal/signalservice/groupsender.go`  | SendGroupMessage: sender key distribution + group encryption + sealed sender delivery              |
+| `internal/signalservice/groupsender.go`  | GroupSender: sender key distribution + group encryption + sealed sender delivery                   |
 | `internal/signalservice/deviceretry.go`  | withDeviceRetry: centralized 409/410 device mismatch retry loop for all send paths                |
 | `internal/signalservice/retryreceipt.go` | SendRetryReceipt, HandleRetryReceipt: DecryptionErrorMessage retry flow                            |
 | `internal/signalservice/dump.go`         | dumpEnvelope: raw envelope debug dump to file, LoadDump for test replay                            |
