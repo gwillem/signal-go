@@ -2,7 +2,6 @@
 package signal
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -544,47 +543,6 @@ func (c *Client) FetchGroupDetails(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("client: not linked (call Link or Load first)")
 	}
 	return c.service.FetchAllGroupDetails(ctx)
-}
-
-// VerifyIdentityKey checks if the server has the same identity key as locally stored.
-// Returns (serverKey, localKey, match, error).
-func (c *Client) VerifyIdentityKey(ctx context.Context) (serverKey, localKey []byte, match bool, err error) {
-	if c.store == nil {
-		return nil, nil, false, fmt.Errorf("client: not linked (call Link or Load first)")
-	}
-
-	// Get local identity key
-	acct, err := c.store.LoadAccount()
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("client: load account: %w", err)
-	}
-	if acct == nil {
-		return nil, nil, false, fmt.Errorf("client: no account found")
-	}
-	localKey = acct.ACIIdentityKeyPublic
-
-	// Query server for our pre-keys (includes identity key)
-	preKeys, err := c.service.GetPreKeys(ctx, c.aci, c.deviceID)
-	if err != nil {
-		return nil, localKey, false, fmt.Errorf("client: get pre-keys from server: %w", err)
-	}
-
-	serverKey, err = base64.StdEncoding.DecodeString(preKeys.IdentityKey)
-	if err != nil {
-		return nil, localKey, false, fmt.Errorf("client: decode server identity key: %w", err)
-	}
-
-	match = bytes.Equal(serverKey, localKey)
-	return serverKey, localKey, match, nil
-}
-
-// GetDeviceIdentityKey fetches the identity key for a specific device from the server.
-func (c *Client) GetDeviceIdentityKey(ctx context.Context, deviceID int) (string, error) {
-	preKeys, err := c.service.GetPreKeys(ctx, c.aci, deviceID)
-	if err != nil {
-		return "", err
-	}
-	return preKeys.IdentityKey, nil
 }
 
 // DeviceInfo is the public type for device information.
