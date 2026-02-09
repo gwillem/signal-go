@@ -397,11 +397,9 @@ This requires libsignal's `zkgroup` module for zero-knowledge proofs. signal-go 
 
 ## Reference sources
 
-| Source | Location | What to learn |
+| Source | Location | Reference doc |
 |---|---|---|
-| Signal-Android libsignal-service | `../Signal-Android/lib/libsignal-service/` | Official service layer (canonical) |
-| Signal-Android protobuf | `../Signal-Android/lib/libsignal-service/src/main/protowire/` | Message formats |
-| libsignal Rust FFI | `build/libsignal/rust/bridge/ffi/` | C FFI source, cbindgen config (git submodule) |
+| Signal-Android libsignal-service | `../Signal-Android/lib/libsignal-service/` | [`docs/signal-android.md`](signal-android.md) — service layer index |
+| libsignal Rust FFI | `build/libsignal/rust/bridge/ffi/` | [`docs/libsignal.md`](libsignal.md) — FFI architecture index |
 | Generated C header | `internal/libsignal/lib/libsignal-ffi.h` | Actual FFI function signatures |
-| libsignalgo (archived) | `../libsignalgo/` | CGO callback patterns (reference only) |
 | signalbot | `../signalbot/internal/signal/` | Current use case, target API shape |

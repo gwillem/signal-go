@@ -39,12 +39,14 @@ Before implementing any protocol behavior, **always check Signal-Android first**
 
 ### Key locations:
 
-- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/websocket/` — WebSocket connection (OkHttpWebSocketConnection, LibSignalChatConnection)
-- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/websocket/` — SignalWebSocket, message batching
+See `docs/signal-android.md` for a comprehensive index of Signal-Android's service layer, including message sending/receiving flows, HTTP endpoints, sealed sender, groups, retry handling, and more.
+
+Quick reference for the most commonly consulted paths:
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/internal/push/` — PushServiceSocket (REST API calls, 409/410 error throwing)
-- `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/` — High-level service APIs
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/SignalServiceMessageSender.java` — Message sending, 409/410 retry handling (handleMismatchedDevices, handleStaleDevices)
 - `lib/libsignal-service/src/main/java/org/whispersystems/signalservice/api/crypto/` — Encryption, registration ID retrieval
+
+For libsignal Rust FFI architecture, see `docs/libsignal.md`.
 
 ### Anti-patterns to avoid
 

@@ -69,7 +69,7 @@ proto:
 	protoc --go_out=. --go_opt=paths=source_relative internal/proto/Provisioning.proto internal/proto/WebSocketResources.proto internal/proto/DeviceName.proto internal/proto/SignalService.proto
 
 test:
-	CGO_LDFLAGS_ALLOW='-Wl,-w' CGO_LDFLAGS='-Wl,-w' go test ./... -timeout 10s
+	go test ./... -timeout 10s
 
 clean:
 	rm -rf $(LIB_DIR)/darwin-arm64 $(LIB_DIR)/linux-amd64 $(HEADER)
