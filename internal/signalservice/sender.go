@@ -82,28 +82,58 @@ func (snd *Sender) sendTextMessage(ctx context.Context, recipient string, text s
 
 	dumpContent(snd.debugDir, "send", recipient, timestamp, contentBytes, snd.logger)
 
-	return snd.sendEncryptedMessage(ctx, recipient, contentBytes)
+	return snd.sendWithSealedFallback(ctx, recipient, contentBytes, timestamp)
 }
 
-// sendTextMessageWithIdentity sends a text message using the given identity store
-// for encryption. Use this when a non-default identity (e.g. PNI) is needed.
-func (snd *Sender) sendTextMessageWithIdentity(ctx context.Context, recipient, text string, identityStore libsignal.IdentityKeyStore) error {
-	timestamp := uint64(time.Now().UnixMilli())
-
-	contentBytes, err := snd.buildDataMessageContent(text, timestamp)
-	if err != nil {
-		return err
+// sendWithSealedFallback attempts sealed sender first, falling back to unsealed.
+// Fallback chain: sealed with derived key → 401 → sealed with unrestricted key → 401 → unsealed.
+// The timestamp must match the DataMessage timestamp inside contentBytes — Signal clients
+// reject messages where the envelope timestamp differs from the DataMessage timestamp.
+// Matches Signal-Android's SealedSenderAccess.switchToFallback behavior.
+func (snd *Sender) sendWithSealedFallback(ctx context.Context, recipient string, contentBytes []byte, timestamp uint64) error {
+	// Skip sealed sender for send-to-self or when no certificate callback is available.
+	if recipient == snd.localACI || snd.getSenderCertificate == nil {
+		return snd.sendEncryptedMessageWithTimestamp(ctx, recipient, contentBytes, timestamp)
 	}
 
-	dumpContent(snd.debugDir, "send", recipient, timestamp, contentBytes, snd.logger)
-
-	deviceIDs, skipDevice, err := snd.prepareSendDevices(recipient, nil)
+	senderCertBytes, err := snd.getSenderCertificate(ctx)
 	if err != nil {
-		return err
+		logf(snd.logger, "sealed sender: cert unavailable, falling back to unsealed: %v", err)
+		return snd.sendEncryptedMessageWithTimestamp(ctx, recipient, contentBytes, timestamp)
 	}
-	return snd.withDeviceRetry(recipient, deviceIDs, skipDevice, func(devices []int) error {
-		return snd.encryptAndSendWithIdentity(ctx, recipient, contentBytes, devices, timestamp, identityStore)
-	})
+
+	senderCert, err := libsignal.DeserializeSenderCertificate(senderCertBytes)
+	if err != nil {
+		logf(snd.logger, "sealed sender: cert deserialize failed, falling back to unsealed: %v", err)
+		return snd.sendEncryptedMessageWithTimestamp(ctx, recipient, contentBytes, timestamp)
+	}
+	defer senderCert.Destroy()
+
+	accessKey, isDerived := resolveAccessKey(snd.dataStore, recipient)
+
+	// Attempt 1: sealed sender with resolved access key.
+	logf(snd.logger, "sealed sender: attempting with %s key", map[bool]string{true: "derived", false: "unrestricted"}[isDerived])
+	err = snd.sendSealedEncryptedWithTimestamp(ctx, recipient, contentBytes, senderCert, accessKey, timestamp)
+	if err == nil {
+		return nil
+	}
+
+	// On 401 with derived key → try unrestricted key.
+	if isAccessKeyRejected(err) && isDerived {
+		logf(snd.logger, "sealed sender: derived key rejected, retrying with unrestricted key")
+		err = snd.sendSealedEncryptedWithTimestamp(ctx, recipient, contentBytes, senderCert, unrestrictedKey[:], timestamp)
+		if err == nil {
+			return nil
+		}
+	}
+
+	// On 401 → fall back to unsealed.
+	if isAccessKeyRejected(err) {
+		logf(snd.logger, "sealed sender: access key rejected, falling back to unsealed")
+		return snd.sendEncryptedMessageWithTimestamp(ctx, recipient, contentBytes, timestamp)
+	}
+
+	return err
 }
 
 // createPniSignatureMessage creates a PniSignatureMessage that proves our ACI and PNI
@@ -161,66 +191,40 @@ func (snd *Sender) createPniSignatureMessage(acct *store.Account) (*proto.PniSig
 	}, nil
 }
 
-// sendSealedSenderMessage sends a text message using sealed sender (UNIDENTIFIED_SENDER).
-// This hides the sender's identity from the server. Requires:
-// - Recipient has a profile key stored (for deriving unidentified access key)
-// - Recipient allows unidentified senders
-func (snd *Sender) sendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
-	timestamp := uint64(time.Now().UnixMilli())
-
-	contentBytes, err := snd.buildDataMessageContent(text, timestamp)
-	if err != nil {
-		return err
-	}
-
-	// Step 1: Get sender certificate from server
-	senderCertBytes, err := snd.getSenderCertificate(ctx)
-	if err != nil {
-		return fmt.Errorf("sealed sender: get sender certificate: %w", err)
-	}
-
-	senderCert, err := libsignal.DeserializeSenderCertificate(senderCertBytes)
-	if err != nil {
-		return fmt.Errorf("sealed sender: deserialize sender certificate: %w", err)
-	}
-	defer senderCert.Destroy()
-
-	logf(snd.logger, "sealed sender: got sender certificate")
-
-	// Step 2: Get recipient's profile key to derive the access key
-	// Step 3: Derive unidentified access key from recipient's profile key.
-	accessKey, err := deriveAccessKeyForRecipient(snd.dataStore, recipient)
-	if err != nil {
-		return fmt.Errorf("sealed sender: %w", err)
-	}
-
-	logf(snd.logger, "sealed sender: derived access key from profile key")
-
-	// Step 4: Encrypt and send using sealed sender
-	return snd.sendSealedEncrypted(ctx, recipient, contentBytes, senderCert, accessKey)
-}
-
 // sendSealedEncrypted encrypts content with sealed sender and sends it.
 // Handles 409 (device mismatch) and 410 (stale sessions) with retry.
 func (snd *Sender) sendSealedEncrypted(ctx context.Context, recipient string,
 	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
 ) error {
+	return snd.sendSealedEncryptedWithTimestamp(ctx, recipient, contentBytes, senderCert, accessKey, 0)
+}
+
+// sendSealedEncryptedWithTimestamp is like sendSealedEncrypted but uses an explicit
+// envelope timestamp. When ts is 0, a fresh timestamp is generated.
+// The envelope timestamp must match the DataMessage timestamp or Signal clients reject the message.
+func (snd *Sender) sendSealedEncryptedWithTimestamp(ctx context.Context, recipient string,
+	contentBytes []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
+	ts uint64,
+) error {
 	paddedContent := padMessage(contentBytes)
+
+	if ts == 0 {
+		ts = uint64(time.Now().UnixMilli())
+	}
 
 	deviceIDs, _ := snd.initialDevices(recipient, false)
 
 	return snd.withDeviceRetry(recipient, deviceIDs, 0, func(devices []int) error {
-		return snd.trySendSealed(ctx, recipient, paddedContent, senderCert, accessKey, devices)
+		return snd.trySendSealed(ctx, recipient, paddedContent, senderCert, accessKey, devices, ts)
 	})
 }
 
 // trySendSealed encrypts and sends sealed sender messages to the given devices.
 func (snd *Sender) trySendSealed(ctx context.Context, recipient string,
 	paddedContent []byte, senderCert *libsignal.SenderCertificate, accessKey []byte,
-	deviceIDs []int,
+	deviceIDs []int, timestamp uint64,
 ) error {
 	now := time.Now()
-	timestamp := uint64(now.UnixMilli())
 
 	var messages []outgoingMessage
 

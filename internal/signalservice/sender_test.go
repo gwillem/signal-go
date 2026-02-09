@@ -3,6 +3,7 @@ package signalservice
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -829,5 +830,113 @@ func TestSend409ExtraDevicesRemoved(t *testing.T) {
 	devices, _ := st.GetDevices("recip-aci")
 	if len(devices) != 1 || devices[0] != 1 {
 		t.Errorf("expected device cache [1], got %v", devices)
+	}
+}
+
+// TestSendUnifiedSealedFallbackOnCertError verifies that when the sender certificate
+// is unavailable, the unified send path falls back to unsealed delivery.
+func TestSendUnifiedSealedFallbackOnCertError(t *testing.T) {
+	recipPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recipPriv.Destroy()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	myPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	var unsealedSent bool
+
+	snd := newTestSender(t, st, "my-aci", 1)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 42)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, _ *outgoingMessageList) error {
+		unsealedSent = true
+		return nil
+	}
+	// Certificate callback returns an error — should trigger fallback.
+	snd.getSenderCertificate = func(_ context.Context) ([]byte, error) {
+		return nil, errors.New("certificate unavailable")
+	}
+
+	err = snd.sendTextMessage(context.Background(), "recip-aci", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !unsealedSent {
+		t.Error("expected fallback to unsealed send when cert is unavailable")
+	}
+}
+
+// TestSendUnifiedSkipsSealedForSelf verifies that send-to-self always uses
+// unsealed delivery, skipping the sealed sender path entirely.
+func TestSendUnifiedSkipsSealedForSelf(t *testing.T) {
+	recipPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recipPriv.Destroy()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	myPriv, err := libsignal.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer myPriv.Destroy()
+	if err := st.SetIdentity(myPriv, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	var unsealedSent bool
+	sealedCertCalled := false
+
+	snd := newTestSender(t, st, "my-aci", 2)
+	snd.getPreKeys = func(_ context.Context, _ string, deviceID int) (*PreKeyResponse, error) {
+		resp := makeTestPreKeys(t, recipPriv, deviceID, 1)
+		return &resp, nil
+	}
+	snd.sendHTTPMessage = func(_ context.Context, _ string, _ *outgoingMessageList) error {
+		unsealedSent = true
+		return nil
+	}
+	// Certificate callback should NOT be called for self-send.
+	snd.getSenderCertificate = func(_ context.Context) ([]byte, error) {
+		sealedCertCalled = true
+		return nil, errors.New("should not be called")
+	}
+
+	// Send to self (recipient == localACI).
+	err = snd.sendTextMessage(context.Background(), "my-aci", "sync message")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sealedCertCalled {
+		t.Error("should not attempt sealed sender for self-send")
+	}
+	if !unsealedSent {
+		t.Error("expected unsealed send for self-send")
 	}
 }

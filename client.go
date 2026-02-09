@@ -482,35 +482,12 @@ func (c *Client) GetIdentityKey(theirUUID string) ([]byte, error) {
 }
 
 // Send sends a text message to the given recipient.
-// Recipient can be an ACI UUID (e.g., "550e8400-e29b-41d4-a716-446655440000")
-// or an E.164 phone number (e.g., "+31612345678").
+// Recipient can be an ACI UUID (e.g., "550e8400-e29b-41d4-a716-446655440000"),
+// an E.164 phone number (e.g., "+31612345678"), or a group ID (64 hex chars).
 // For phone numbers, the local contact store is checked first; if not found,
 // CDSI (Contact Discovery Service) is used to resolve the number.
+// Automatically attempts sealed sender first with fallback to unsealed.
 func (c *Client) Send(ctx context.Context, recipient string, text string) error {
-	aci, err := c.resolveRecipient(ctx, recipient)
-	if err != nil {
-		return err
-	}
-	return c.sendInternal(ctx, aci, text, false)
-}
-
-// SendWithPNI sends a text message using PNI identity for encryption.
-// Use this when the recipient discovered you via phone number (CDSI) and
-// initiated the conversation by sending to your PNI.
-// Recipient can be an ACI UUID or E.164 phone number.
-func (c *Client) SendWithPNI(ctx context.Context, recipient string, text string) error {
-	aci, err := c.resolveRecipient(ctx, recipient)
-	if err != nil {
-		return err
-	}
-	return c.sendInternal(ctx, aci, text, true)
-}
-
-// SendSealed sends a text message using sealed sender (UNIDENTIFIED_SENDER).
-// This hides the sender's identity from the Signal server.
-// Requires the recipient's profile key to be stored (for deriving unidentified access key).
-// Recipient can be an ACI UUID or E.164 phone number.
-func (c *Client) SendSealed(ctx context.Context, recipient string, text string) error {
 	if c.service == nil {
 		return fmt.Errorf("client: not linked (call Link or Load first)")
 	}
@@ -518,7 +495,7 @@ func (c *Client) SendSealed(ctx context.Context, recipient string, text string) 
 	if err != nil {
 		return err
 	}
-	return c.service.SendSealedSenderMessage(ctx, aci, text)
+	return c.service.SendTextMessage(ctx, aci, text)
 }
 
 // SendGroup sends a text message to a group.
@@ -615,16 +592,6 @@ func isUUID(s string) bool {
 // isPNIServiceID returns true if s is a PNI-prefixed service ID (e.g. "PNI:uuid").
 func isPNIServiceID(s string) bool {
 	return strings.HasPrefix(s, "PNI:") && isUUID(s[4:])
-}
-
-func (c *Client) sendInternal(ctx context.Context, recipient string, text string, usePNI bool) error {
-	if c.service == nil {
-		return fmt.Errorf("client: not linked (call Link or Load first)")
-	}
-	if usePNI {
-		return c.service.SendTextMessageWithIdentity(ctx, recipient, text, c.store.PNI())
-	}
-	return c.service.SendTextMessage(ctx, recipient, text)
 }
 
 // Receive returns an iterator that yields incoming text messages.

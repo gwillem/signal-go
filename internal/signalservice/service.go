@@ -249,7 +249,7 @@ func (s *Service) SendSealedMessage(ctx context.Context, destination string, msg
 		}
 		return &stale
 	case http.StatusUnauthorized: // 401
-		return fmt.Errorf("sealed sender: access key rejected (401): recipient may have sealed sender disabled")
+		return &accessKeyRejectedError{}
 	default:
 		return fmt.Errorf("send sealed message: status %d: %s", status, respBody)
 	}
@@ -502,16 +502,6 @@ func (s *Service) SendGroupMessage(ctx context.Context, groupID string, text str
 	return s.groupSender.sendGroupMessage(ctx, groupID, text)
 }
 
-// SendSealedSenderMessage sends a text message using sealed sender.
-func (s *Service) SendSealedSenderMessage(ctx context.Context, recipient string, text string) error {
-	return s.sender.sendSealedSenderMessage(ctx, recipient, text)
-}
-
-// SendTextMessageWithIdentity sends a text message using the given identity store
-// for encryption. Use this when a non-default identity (e.g. PNI) is needed.
-func (s *Service) SendTextMessageWithIdentity(ctx context.Context, recipient, text string, identityStore libsignal.IdentityKeyStore) error {
-	return s.sender.sendTextMessageWithIdentity(ctx, recipient, text, identityStore)
-}
 
 // --- Sender proxy methods for code that still lives on Service (contactsync) ---
 

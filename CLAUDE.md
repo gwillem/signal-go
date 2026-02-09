@@ -57,6 +57,7 @@ These mistakes have caused bugs in the past:
 - **Assuming server behavior** — If unsure what the server expects, grep Signal-Android for the endpoint or error code.
 - **Skipping message formatting steps** — Signal uses transport-level padding (`PushTransportDetails.getPaddedMessageBody()`) before encryption. Missing this causes decryption failures even though the protocol-level crypto succeeds.
 - **Duplicating 409/410 retry logic** — All send paths must handle device mismatch (409) and stale sessions (410). Use `withDeviceRetry` in `deviceretry.go` instead of writing a new retry loop. Missing retry handling caused SKDM delivery failures to multi-device recipients.
+- **Creating separate timestamps for DataMessage and envelope** — Signal Desktop validates `DataMessage.timestamp == envelope.timestamp` and **silently drops** the message if they differ. Every send path must thread the single timestamp created in `buildDataMessageContent` all the way through to the envelope. Never call `time.Now()` a second time for the envelope. Use `sendEncryptedMessageWithTimestamp` / `sendSealedEncryptedWithTimestamp` — never the timestamp-less variants for user-facing messages. This bug has occurred twice (task 14 for group sync, task 22 for 1:1 sealed sender).
 
 ## Prerequisites
 

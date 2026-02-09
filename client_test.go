@@ -531,6 +531,10 @@ func TestClientSend(t *testing.T) {
 				},
 			})
 
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/certificate/delivery":
+			// Sender certificate unavailable — sealed sender will fall back to unsealed.
+			w.WriteHeader(http.StatusUnauthorized)
+
 		case r.Method == http.MethodPut && r.URL.Path == "/v1/messages/"+bobACI:
 			messageSent = true
 			w.WriteHeader(http.StatusOK)
@@ -744,6 +748,10 @@ func TestSend_ResolvePhoneNumber(t *testing.T) {
 					},
 				},
 			})
+
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/certificate/delivery":
+			// Sender certificate unavailable — sealed sender will fall back to unsealed.
+			w.WriteHeader(http.StatusUnauthorized)
 
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/messages/"):
 			messageSent = true
