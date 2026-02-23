@@ -1,5 +1,5 @@
 LIBSIGNAL_SRC     := build/libsignal
-LIBSIGNAL_VERSION := v0.87.0
+LIBSIGNAL_VERSION := v0.87.4
 LIBSIGNAL_BIN_URL := https://github.com/gwillem/libsignal-bin/releases/download/$(LIBSIGNAL_VERSION)
 LIB_DIR           := internal/libsignal/lib
 HEADER        := $(LIB_DIR)/libsignal-ffi.h

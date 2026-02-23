@@ -64,7 +64,7 @@ These mistakes have caused bugs in the past:
 - Go 1.25+
 - Rust nightly toolchain (`rustup install nightly`)
 - cbindgen (`cargo install cbindgen`)
-- libsignal source is included as a git submodule at `build/libsignal/` (pinned to v0.87.0)
+- libsignal source is included as a git submodule at `build/libsignal/` (pinned to v0.87.4)
 
 ## Building
 
