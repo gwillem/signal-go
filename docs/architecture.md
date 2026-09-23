@@ -143,7 +143,7 @@ signal-go/
 ├── build/libsignal/                  # Git submodule (signalapp/libsignal, pinned v0.87.0)
 ├── Makefile                        # Build libsignal Rust → .a + .h
 ├── LICENSE                         # AGPL-3.0
-├── CLAUDE.md                       # Development instructions
+├── AGENTS.md                       # Development instructions
 ├── client.go                       # Public API — Client, Link, Load, Send, Receive, SyncContacts
 ├── internal/
 │   ├── libsignal/                  # CGO bindings — COMPLETE (Task 01)
